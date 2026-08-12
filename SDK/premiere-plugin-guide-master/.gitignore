@@ -1,0 +1,8 @@
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+.cursor
+.vscode/
+__pycache__/
+site/
+venv/

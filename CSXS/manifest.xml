@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.prfx.palette" ExtensionBundleVersion="1.0.0" ExtensionBundleName="PR FX Palette" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="com.prfx.palette.settings" Version="1.0.0"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="PPRO" Version="14.0"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="9.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.prfx.palette.settings">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./client/index.html</MainPath>
+          <ScriptPath>./jsx/host.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+          <StartOnEvents>
+            <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
+          </StartOnEvents>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>PR FX Palette Settings</Menu>
+          <Geometry>
+            <Size>
+              <Width>360</Width>
+              <Height>460</Height>
+            </Size>
+            <MinSize>
+              <Width>300</Width>
+              <Height>360</Height>
+            </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

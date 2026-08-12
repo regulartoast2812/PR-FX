@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR FX Palette Settings</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="settings-shell" aria-labelledby="settings-title">
+    <header>
+      <p class="eyebrow">PR FX PALETTE / SETTINGS</p>
+      <h1 id="settings-title">Settings</h1>
+    </header>
+
+    <section class="card">
+      <label for="shortcut">Open FX palette</label>
+      <div class="shortcut-row">
+        <input id="shortcut" type="text" autocomplete="off" spellcheck="false" aria-describedby="shortcut-help">
+        <button id="reset-shortcut" class="secondary" type="button">Reset</button>
+      </div>
+      <p id="shortcut-help" class="help">Click the field, then press a key combination. Default: Ctrl + Space.</p>
+    </section>
+
+    <section class="card">
+      <label for="default-duration">Default transition duration</label>
+      <div class="duration-control">
+        <input id="default-duration" type="number" min="1" max="300" step="1" value="30">
+        <span>frames</span>
+      </div>
+    </section>
+
+    <footer>
+      <button id="open-palette" class="primary" type="button">Open FX palette</button>
+      <span id="status" role="status" aria-live="polite"></span>
+    </footer>
+  </main>
+
+  <div id="palette" class="palette is-hidden" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+    <div class="palette-backdrop" data-close-palette></div>
+    <div class="palette-dialog">
+      <div class="palette-topline">
+        <span id="palette-title">FX PALETTE</span>
+        <kbd id="shortcut-badge">Ctrl + Space</kbd>
+      </div>
+      <input id="command-search" type="search" placeholder="Search effects and transitions…" autocomplete="off" aria-label="Search effects and transitions">
+      <div id="command-list" class="command-list" role="listbox" aria-label="Available commands"></div>
+      <div class="palette-footer"><span>↑↓ navigate</span><span>↵ apply</span><span>Esc close</span></div>
+    </div>
+  </div>
+
+  <script src="CSInterface.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
