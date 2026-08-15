@@ -18,35 +18,70 @@ internal static class Program
 internal sealed class ShortcutContext : ApplicationContext
 {
     private const int WmHotKey = 0x0312;
-    private const int HotKeyId = 1;
+    private const int PaletteHotKeyId = 1;
     private const uint ModAlt = 0x0001, ModControl = 0x0002, ModShift = 0x0004, ModWin = 0x0008;
     private readonly ListenerWindow window = new();
-    private readonly Settings settings;
+    private Settings settings;
     private readonly ListenerBridge bridge;
     private readonly PaletteForm palette;
+    private readonly Dictionary<int, Command> mappedCommands = [];
+    private readonly HashSet<int> registeredHotKeyIds = [];
+    private readonly SynchronizationContext uiContext;
     private IntPtr premiereWindow;
 
     public ShortcutContext()
     {
         window.CreateHandle(new CreateParams());
+        uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         settings = Settings.Load();
-        bridge = new ListenerBridge();
+        bridge = new ListenerBridge(ReloadSettings);
         palette = new PaletteForm(settings, bridge.Enqueue, ReturnToPremiere);
-        RegisterShortcut();
+        RegisterShortcuts();
         window.WndProcOverride = WndProc;
     }
 
-    private void RegisterShortcut()
+    private void RegisterShortcuts()
     {
-        if (!Native.RegisterHotKey(window.Handle, HotKeyId, ModifierKeys(settings.Shortcut), VirtualKey(settings.Shortcut.Code)))
+        foreach (var id in registeredHotKeyIds) Native.UnregisterHotKey(window.Handle, id);
+        registeredHotKeyIds.Clear();
+        mappedCommands.Clear();
+
+        RegisterShortcut(PaletteHotKeyId, settings.Shortcut, null);
+        var nextId = PaletteHotKeyId + 1;
+        foreach (var binding in settings.Bindings ?? [])
         {
-            MessageBox.Show($"{settings.Shortcut.Display()} is unavailable. Choose another shortcut in PR FX Palette Settings, then restart this listener.", "PR FX Shortcut Listener", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            RegisterShortcut(nextId++, binding.Shortcut, binding.Command);
+        }
+    }
+
+    private void RegisterShortcut(int id, Shortcut shortcut, Command? command)
+    {
+        if (Native.RegisterHotKey(window.Handle, id, ModifierKeys(shortcut), VirtualKey(shortcut.Code)))
+        {
+            registeredHotKeyIds.Add(id);
+            if (command is not null) mappedCommands[id] = command;
+        }
+        else if (id == PaletteHotKeyId)
+        {
+            MessageBox.Show($"{shortcut.Display()} is unavailable. Choose another shortcut in PR FX Palette Settings.", "PR FX Shortcut Listener", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
     private void WndProc(ref Message message)
     {
-        if (message.Msg == WmHotKey && IsPremiereForeground(out premiereWindow)) palette.Open();
+        if (message.Msg != WmHotKey || !IsPremiereForeground(out premiereWindow)) return;
+        var id = message.WParam.ToInt32();
+        if (id == PaletteHotKeyId) palette.Open();
+        else if (mappedCommands.TryGetValue(id, out var command)) bridge.Enqueue(command with { TransitionFrames = settings.TransitionFrames });
+    }
+
+    private void ReloadSettings()
+    {
+        uiContext.Post(_ =>
+        {
+            settings = Settings.Load();
+            RegisterShortcuts();
+        }, null);
     }
 
     private void ReturnToPremiere()
@@ -56,7 +91,7 @@ internal sealed class ShortcutContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
-        Native.UnregisterHotKey(window.Handle, HotKeyId);
+        foreach (var id in registeredHotKeyIds) Native.UnregisterHotKey(window.Handle, id);
         bridge.Dispose();
         window.DestroyHandle();
         base.ExitThreadCore();
@@ -173,9 +208,11 @@ internal sealed class ListenerBridge : IDisposable
     private readonly HttpListener listener = new();
     private readonly object gate = new();
     private Command? pending;
+    private readonly Action reloadSettings;
 
-    public ListenerBridge()
+    public ListenerBridge(Action reloadSettings)
     {
+        this.reloadSettings = reloadSettings;
         listener.Prefixes.Add("http://127.0.0.1:27389/");
         listener.Start();
         _ = Task.Run(ListenAsync);
@@ -204,6 +241,13 @@ internal sealed class ListenerBridge : IDisposable
                     context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
                     context.Response.ContentLength64 = bytes.Length;
                     await context.Response.OutputStream.WriteAsync(bytes);
+                    context.Response.Close();
+                }
+                else if (context.Request.HttpMethod == "POST" && context.Request.Url?.AbsolutePath == "/reload-settings")
+                {
+                    reloadSettings();
+                    context.Response.StatusCode = 200;
+                    context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
                     context.Response.Close();
                 }
                 else { context.Response.StatusCode = 404; context.Response.Close(); }
@@ -236,9 +280,10 @@ internal record Shortcut(string Code, bool Ctrl, bool Alt, bool Shift, bool Meta
 {
     public string Display() => string.Join(" + ", new[] { Ctrl ? "Ctrl" : null, Alt ? "Alt" : null, Shift ? "Shift" : null, Meta ? "Win" : null, Code == "Space" ? "Space" : Code.Replace("Key", "").Replace("Digit", "") }.Where(value => value is not null));
 }
-internal record Settings(Shortcut Shortcut, int TransitionFrames)
+internal record Binding(Shortcut Shortcut, Command Command);
+internal record Settings(Shortcut Shortcut, int TransitionFrames, IReadOnlyList<Binding>? Bindings = null)
 {
-    private static readonly Settings Defaults = new(new Shortcut("Space", true, false, false, false), 30);
+    private static readonly Settings Defaults = new(new Shortcut("Space", true, false, false, false), 30, []);
     public static Settings Load()
     {
         try
@@ -249,7 +294,7 @@ internal record Settings(Shortcut Shortcut, int TransitionFrames)
         catch { return Defaults; }
     }
 }
-internal record Command(string Type, string Name, int TransitionFrames = 30);
+internal record Command(string Type, string Name, int TransitionFrames = 30, string? Id = null);
 
 internal static partial class Native
 {

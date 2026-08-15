@@ -16,5 +16,10 @@
     }
   };
 
+  CSInterface.prototype.getSystemPath = function (pathType) {
+    if (!global.__adobe_cep__ || !global.__adobe_cep__.getSystemPath) return '';
+    return global.__adobe_cep__.getSystemPath(pathType);
+  };
+
   global.CSInterface = CSInterface;
 }(window));

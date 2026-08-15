@@ -1,0 +1,43 @@
+# Operating-system and editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local Adobe SDK copies (download separately; do not commit vendor SDKs)
+/SDK/
+
+# macOS builds and Xcode state
+/native/build/
+/native/control-surface/build/
+/native/windows/build/
+*.app/
+*.dSYM/
+*.xcarchive/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Windows builds and Visual Studio state
+/native/windows/bin/
+/native/windows/obj/
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+
+# Local runtime state, logs, and signing material
+*.log
+*.p12
+*.mobileprovision
+settings.local.json
+/native/com.prfx.shortcut-listener.plist
+/native/.DS_Store
+/native/control-surface/.DS_Store
+
+# Local reference tool; PR FX never imports or ships it.
+/untitled folder/

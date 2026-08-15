@@ -13,27 +13,62 @@
       <h1 id="settings-title">Settings</h1>
     </header>
 
-    <section class="card">
-      <label for="shortcut">Open FX palette</label>
-      <div class="shortcut-row">
-        <input id="shortcut" type="text" autocomplete="off" spellcheck="false" aria-describedby="shortcut-help">
-        <button id="reset-shortcut" class="secondary" type="button">Reset</button>
+    <nav class="settings-tabs" role="tablist"><button class="settings-tab is-active" data-view="commands" role="tab">Commands</button><button class="settings-tab" data-view="general" role="tab">General</button><button class="settings-tab" data-view="sync" role="tab">Sync</button></nav>
+
+    <section id="commands-view" class="settings-view">
+      <div class="commands-layout">
+        <div class="commands-browser">
+          <div class="browser-toolbar"><input id="command-manager-search" type="search" placeholder="Search commands…" autocomplete="off"><span id="command-count" class="command-count"></span></div>
+          <div class="manager-filters" aria-label="Command filters">
+            <label class="filter-select" for="command-type-filter"><span>Type</span><select id="command-type-filter"><option value="all">All types</option><option value="effect">Effects</option><option value="transition">Transitions</option><option value="audio-transition">Audio transitions</option><option value="custom">Functions</option></select></label>
+            <div class="filter-segmented" role="group" aria-label="Shortcut assignment"><button class="is-active" type="button" data-assignment-filter="all" aria-pressed="true">All</button><button type="button" data-assignment-filter="assigned" aria-pressed="false">Assigned</button><button type="button" data-assignment-filter="unassigned" aria-pressed="false">Unassigned</button></div>
+          </div>
+          <div class="command-columns"><span>Command</span><span>Type</span><span>Shortcut</span></div>
+          <div id="command-manager-list" class="command-manager-list" role="listbox"></div>
+        </div>
+        <aside class="command-editor">
+          <p class="eyebrow">SELECTED COMMAND</p>
+          <div class="editor-heading"><h2 id="manager-command-name">Select a command</h2><span id="manager-type-badge" class="type-badge">—</span></div>
+          <p id="manager-command-type" class="editor-copy">Choose an item from the list to assign a Timeline shortcut.</p>
+          <div class="shortcut-capture"><label for="manager-shortcut">Shortcut</label><input id="manager-shortcut" type="text" placeholder="Press a key combination" autocomplete="off" spellcheck="false" disabled></div>
+          <div class="editor-actions"><button id="perform-manager-command" class="secondary" type="button" disabled>Perform</button><button id="save-manager-shortcut" class="primary" type="button" disabled>Save shortcut</button><button id="remove-manager-shortcut" class="secondary" type="button" disabled>Remove</button></div>
+          <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
+          <p class="editor-note">Shortcuts work while the Timeline has focus.</p>
+        </aside>
       </div>
-      <p id="shortcut-help" class="help">Click the field, then press a key combination. Default: Ctrl + Space.</p>
     </section>
 
-    <section class="card">
-      <label for="default-duration">Default transition duration</label>
-      <div class="duration-control">
-        <input id="default-duration" type="number" min="1" max="300" step="1" value="30">
-        <span>frames</span>
-      </div>
+    <section id="general-view" class="settings-view is-hidden">
+      <section class="card">
+        <label for="shortcut">Open FX palette</label><div class="shortcut-row"><input id="shortcut" type="text" autocomplete="off" spellcheck="false" aria-describedby="shortcut-help"><button id="reset-shortcut" class="secondary" type="button">Reset</button></div>
+        <p id="shortcut-help" class="help">Click the field, then press a key combination. Default: Ctrl + Space.</p>
+      </section>
+      <section class="card"><label for="default-duration">Default transition duration</label><div class="duration-control"><input id="default-duration" type="number" min="1" max="300" step="1" value="30"><span>frames</span></div></section>
+      <section class="card">
+        <span class="card-title">Stagger timing</span>
+        <div class="stagger-controls">
+          <label for="stagger-frames"><span>Interval</span><span class="number-with-unit"><input id="stagger-frames" type="number" min="0" max="9999" step="1" value="5"><small>frames</small></span></label>
+          <label for="stagger-group"><span>Group size</span><input id="stagger-group" type="number" min="1" max="999" step="1" value="1"></label>
+        </div>
+        <p class="help">Ascending starts with lower-numbered tracks; Descending starts with higher-numbered tracks.</p>
+      </section>
+      <section class="card bridge-card" aria-live="polite"><div class="bridge-heading"><span>Bridge status</span><span id="bridge-state" class="bridge-state is-checking"><i></i>Checking…</span></div><p id="bridge-detail" class="help">Checking the native Timeline shortcut listener.</p><div class="bridge-actions"><button id="force-reconnect" class="secondary" type="button">Force reconnect</button><span id="catalog-health">Catalog not checked</span></div></section>
+      <footer><button id="open-palette" class="primary" type="button">Open FX palette</button><span id="status" role="status" aria-live="polite"></span></footer>
     </section>
 
-    <footer>
-      <button id="open-palette" class="primary" type="button">Open FX palette</button>
-      <span id="status" role="status" aria-live="polite"></span>
-    </footer>
+    <section id="sync-view" class="settings-view is-hidden">
+      <section class="sync-intro">
+        <p class="eyebrow">FOLDER SYNC</p>
+        <h2>Watched media folders</h2>
+        <p id="sync-project-note">This list belongs only to the active project. Each dropped folder becomes a same-named top-level Project bin; new media imports there, changed media refreshes, and deleted source files stay offline.</p>
+      </section>
+      <div id="folder-drop-zone" class="folder-drop-zone" tabindex="0" role="button" aria-label="Add media folder">
+        <strong>Drop folders here</strong><span>or choose a folder</span><button id="choose-sync-folder" class="secondary" type="button">Choose folder</button>
+      </div>
+      <input id="sync-folder-input" type="file" webkitdirectory directory multiple class="visually-hidden" aria-hidden="true">
+      <div id="sync-folder-list" class="sync-folder-list" aria-live="polite"></div>
+      <footer><button id="sync-all-folders" class="primary" type="button">Sync now</button><span id="sync-status" role="status" aria-live="polite"></span></footer>
+    </section>
   </main>
 
   <div id="palette" class="palette is-hidden" role="dialog" aria-modal="true" aria-labelledby="palette-title">
@@ -45,7 +80,19 @@
       </div>
       <input id="command-search" type="search" placeholder="Search effects and transitions…" autocomplete="off" aria-label="Search effects and transitions">
       <div id="command-list" class="command-list" role="listbox" aria-label="Available commands"></div>
-      <div class="palette-footer"><span>↑↓ navigate</span><span>↵ apply</span><span>Esc close</span></div>
+      <div class="palette-footer"><span>↑↓ navigate</span><span>↵ apply + close</span><span>⇧↵ apply + keep open</span><span>Esc close</span></div>
+    </div>
+  </div>
+
+  <div id="track-queue-dialog" class="track-queue-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="track-queue-title">
+    <div class="track-queue-backdrop" data-close-track-queue></div>
+    <div class="track-queue-card">
+      <p class="eyebrow">MEDIA ENCODER</p>
+      <h2 id="track-queue-title">Queue track cuts</h2>
+      <p>Queue one full-composite export for every clip range on the chosen track.</p>
+      <label for="track-queue-select">Track</label>
+      <select id="track-queue-select"></select>
+      <div class="track-queue-actions"><button type="button" class="secondary" data-close-track-queue>Cancel</button><button id="queue-track-cuts-confirm" type="button" class="primary">Queue cuts</button></div>
     </div>
   </div>
 
