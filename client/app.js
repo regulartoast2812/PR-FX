@@ -4,7 +4,7 @@
   var STORAGE_KEY = 'prfx.palette.settings.v1';
   var CATALOG_STORAGE_KEY = 'prfx.palette.catalog.v1';
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260815-arrange-timing-2';
+  var PRFX_HOST_BUILD = '20260816-stagger-prompt-1';
   var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, bindings: [], folderSyncsByProject: {} };
   var commands = [
     { type: 'custom', id: 'undo-last-palette-action', name: 'Undo Last PR FX Effect Apply' },
@@ -15,6 +15,9 @@
     { type: 'custom', id: 'move-selected-clips-down', name: 'Move Selected Clips Down Individually', moveMode: 'individual' },
     { type: 'custom', id: 'pull-group-in', name: 'Pull Group In to Playhead' },
     { type: 'custom', id: 'pull-group-out', name: 'Pull Group Out to Playhead' },
+    { type: 'custom', id: 'dump-qe-api', name: 'Diagnostic: Dump QE + DOM API' },
+    { type: 'custom', id: 'snap-tracks-in', name: 'Snap Track Blocks In to Playhead' },
+    { type: 'custom', id: 'snap-tracks-out', name: 'Snap Track Blocks Out to Playhead' },
     { type: 'custom', id: 'stagger-ascending', name: 'Stagger Ascending' },
     { type: 'custom', id: 'stagger-descending', name: 'Stagger Descending' },
     { type: 'effect', name: 'Gaussian Blur' }, { type: 'effect', name: 'Lumetri Color' },
@@ -45,6 +48,7 @@
   var shortcutBadge = document.getElementById('shortcut-badge');
   var pendingTransitionCommand = null;
   var pendingMoveCommand = null;
+  var pendingStaggerCommand = null;
   var catalogSearchValue = '';
   var TRANSITION_PLACEMENTS = [
     { type: 'transition-placement', id: 'both', name: 'Both In + Out on each selected clip' },
@@ -586,6 +590,16 @@
       return;
     }
     if (event.type !== 'keydown') return;
+    var candidate = shortcutFromEvent(event);
+    if (!candidate) {
+      setStatus('Use Space, a letter, or a number with modifiers.', true);
+      return;
+    }
+    // Modifier-less keys are allowed: the listener only arms shortcuts while the
+    // Timeline panel is the active panel, so a bare key cannot reach a rename or
+    // search field elsewhere in Premiere. It has no margin if panel detection
+    // regresses though, so say so. Shift does not count: Shift+W still types a W.
+    var bareKey = !candidate.ctrl && !candidate.alt && !candidate.meta;
     var shortcut = captureShortcut(event, target);
     if (!shortcut) {
       setStatus('Use Space, a letter, or a number with modifiers.', true);
@@ -597,13 +611,31 @@
       setStatus('Palette shortcut saved.');
       shortcutInput.blur();
     } else {
-      setStatus('Shortcut captured. Click Save shortcut.');
+      setStatus(bareKey
+        ? 'Shortcut captured. Click Save shortcut. Plain keys work only while the Timeline is the active panel.'
+        : 'Shortcut captured. Click Save shortcut.');
     }
     heldCaptureModifiers = { ctrl: false, alt: false, shift: false, meta: false };
+  }
+  // Offers the typed frame count first, then common steps, so the prompt works
+  // whether you type an exact number or just pick one.
+  function staggerFrameOptions() {
+    var typed = Math.round(Number(search.value));
+    var options = [], seen = {};
+    function push(frames, label) {
+      if (!(frames >= 0) || frames > 9999 || seen[frames]) return;
+      seen[frames] = true;
+      options.push({ type: 'stagger-frames', id: String(frames), name: label || (frames + ' frame' + (frames === 1 ? '' : 's') + ' per step') });
+    }
+    if (search.value !== '' && typed >= 0) push(typed);
+    push(Math.max(0, Math.round(Number(settings.staggerFrames) || 5)), null);
+    [2, 3, 5, 10, 15, 20, 30].forEach(function (frames) { push(frames); });
+    return options;
   }
   function filteredCommands() {
     if (pendingTransitionCommand) return TRANSITION_PLACEMENTS;
     if (pendingMoveCommand) return MOVE_MODES;
+    if (pendingStaggerCommand) return staggerFrameOptions();
     var query = search.value.toLowerCase().trim();
     return commands.filter(function (command) { return !query || (command.name + ' ' + command.type).toLowerCase().indexOf(query) !== -1; });
   }
@@ -611,7 +643,7 @@
     var available = filteredCommands();
     activeIndex = Math.max(0, Math.min(activeIndex, available.length - 1));
     list.innerHTML = available.length ? available.map(function (command, i) {
-      var kind = command.type === 'custom' || command.type === 'move-mode' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
+      var kind = command.type === 'custom' || command.type === 'move-mode' || command.type === 'stagger-frames' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
       return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind">' + kind + '</span></button>';
     }).join('') : '<p class="muted">No matching command.</p>';
   }
@@ -620,6 +652,7 @@
   function closePalette() { hideApplyMenu(); palette.classList.add('is-hidden'); }
   function isTransition(command) { return command && (command.type === 'transition' || command.type === 'audio-transition'); }
   function isMoveCommand(command) { return command && command.type === 'custom' && (command.id === 'move-selected-clips-up' || command.id === 'move-selected-clips-down'); }
+  function isStaggerCommand(command) { return command && command.type === 'custom' && (command.id === 'stagger-ascending' || command.id === 'stagger-descending'); }
   function openTransitionMenu(command) {
     pendingTransitionCommand = command;
     catalogSearchValue = search.value;
@@ -642,9 +675,21 @@
     renderCommands();
     window.setTimeout(function () { search.focus(); }, 0);
   }
+  function openStaggerMenu(command) {
+    pendingStaggerCommand = command;
+    catalogSearchValue = search.value;
+    paletteTitle.textContent = command.name.toUpperCase();
+    shortcutBadge.textContent = 'FUNCTION';
+    search.value = '';
+    search.placeholder = 'Frames per step • default ' + (Number(settings.staggerFrames) || 5);
+    activeIndex = 0;
+    renderCommands();
+    window.setTimeout(function () { search.focus(); }, 0);
+  }
   function hideApplyMenu() {
     pendingTransitionCommand = null;
     pendingMoveCommand = null;
+    pendingStaggerCommand = null;
     paletteTitle.textContent = 'FX PALETTE';
     shortcutBadge.textContent = displayShortcut(settings.shortcut);
     search.value = catalogSearchValue;
@@ -658,6 +703,7 @@
     if (!command) return;
     if (isTransition(command) && !command.transitionPlacement) { openTransitionMenu(command); return; }
     if (isMoveCommand(command) && !command.moveMode) { openMoveMenu(command); return; }
+    if (isStaggerCommand(command) && command.staggerFrames === undefined) { openStaggerMenu(command); return; }
     var settled = false;
     var watchdog;
     function finish(result) {
@@ -668,7 +714,7 @@
       if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); return; }
       setStatus(result || 'Applied ' + command.name + '.');
       if (keepPaletteOpen) {
-        if (pendingTransitionCommand || pendingMoveCommand) { hideApplyMenu(); renderCommands(); }
+        if (pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand) { hideApplyMenu(); renderCommands(); }
         window.setTimeout(function () { search.focus(); }, 0);
       } else closePalette();
     }
@@ -764,6 +810,10 @@
       apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: target.dataset.id || 'both', transitionFrames: transitionFramesValue() }));
       return;
     }
+    if (pendingStaggerCommand && target.dataset.type === 'stagger-frames') {
+      apply(Object.assign({}, pendingStaggerCommand, { staggerFrames: Number(target.dataset.id) }));
+      return;
+    }
     if (pendingMoveCommand && target.dataset.type === 'move-mode') {
       apply(Object.assign({}, pendingMoveCommand, { moveMode: target.dataset.id || 'group' }));
       return;
@@ -774,7 +824,7 @@
   document.addEventListener('keydown', function (event) {
     if (matchesShortcut(event) && document.activeElement !== shortcutInput) { event.preventDefault(); openPalette(); return; }
     if (palette.classList.contains('is-hidden')) return;
-    if (event.key === 'Escape') { if (pendingTransitionCommand || pendingMoveCommand) { hideApplyMenu(); renderCommands(); search.focus(); } else closePalette(); return; }
+    if (event.key === 'Escape') { if (pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand) { hideApplyMenu(); renderCommands(); search.focus(); } else closePalette(); return; }
     var available = filteredCommands();
     if (event.key === 'ArrowDown') { event.preventDefault(); activeIndex = Math.min(activeIndex + 1, available.length - 1); renderCommands(); }
     if (event.key === 'ArrowUp') { event.preventDefault(); activeIndex = Math.max(activeIndex - 1, 0); renderCommands(); }
@@ -782,6 +832,7 @@
       event.preventDefault();
       if (pendingTransitionCommand) apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: available[activeIndex] && available[activeIndex].id || 'both', transitionFrames: transitionFramesValue() }), event.shiftKey);
       else if (pendingMoveCommand) apply(Object.assign({}, pendingMoveCommand, { moveMode: available[activeIndex] && available[activeIndex].id || 'group' }), event.shiftKey);
+      else if (pendingStaggerCommand) apply(Object.assign({}, pendingStaggerCommand, { staggerFrames: Number(available[activeIndex] && available[activeIndex].id) }), event.shiftKey);
       else apply(available[activeIndex], event.shiftKey);
     }
   });

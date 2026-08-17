@@ -51,6 +51,8 @@ private let prfxFunctionCommands = [
     Command(type: "custom", name: "Move Selected Clips Down", transitionFrames: 30, id: "move-selected-clips-down"),
     Command(type: "custom", name: "Pull Group In to Playhead", transitionFrames: 30, id: "pull-group-in"),
     Command(type: "custom", name: "Pull Group Out to Playhead", transitionFrames: 30, id: "pull-group-out"),
+    Command(type: "custom", name: "Snap Track Blocks In to Playhead", transitionFrames: 30, id: "snap-tracks-in"),
+    Command(type: "custom", name: "Snap Track Blocks Out to Playhead", transitionFrames: 30, id: "snap-tracks-out"),
     Command(type: "custom", name: "Stagger Ascending", transitionFrames: 30, id: "stagger-ascending"),
     Command(type: "custom", name: "Stagger Descending", transitionFrames: 30, id: "stagger-descending")
 ]
@@ -60,7 +62,51 @@ private struct Binding: Codable {
     let command: Command
 }
 
-private func listenerLog(_ message: String) {
+// How much of the shortcut set may be armed right now.
+//
+// `full` means the Timeline was positively identified as the active panel, so
+// even a modifier-less key is safe. `modifierOnly` means Premiere is frontmost
+// and no text field has focus, but the Timeline could not be located — most
+// likely a localized Premiere, an Adobe rename of the control descriptions the
+// lookup depends on, or a workspace without a Timeline. Keys carrying a
+// modifier remain safe there because typing never produces them, so the tool
+// degrades instead of falling silent.
+private enum ShortcutScope {
+    case none(String)
+    case modifierOnly(String)
+    case full(String)
+
+    var reason: String {
+        switch self {
+        case .none(let reason), .modifierOnly(let reason), .full(let reason): return reason
+        }
+    }
+
+    var armsAnything: Bool {
+        if case .none = self { return false }
+        return true
+    }
+
+    // Kept distinct from `reason` so registration can tell a scope *change*
+    // from a mere reason change and re-register only when the arming set moves.
+    var rank: Int {
+        switch self {
+        case .none: return 0
+        case .modifierOnly: return 1
+        case .full: return 2
+        }
+    }
+
+    func arms(_ shortcut: Shortcut) -> Bool {
+        switch self {
+        case .none: return false
+        case .full: return true
+        case .modifierOnly: return shortcut.ctrl || shortcut.alt || shortcut.meta
+        }
+    }
+}
+
+func listenerLog(_ message: String) {
     let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/PR FX Shortcut Listener.log")
     let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
@@ -77,8 +123,16 @@ private func listenerLog(_ message: String) {
     }
 }
 
-private final class ShortcutListener: NSObject {
-    private let settingsURL: URL
+// AXObserver callbacks are C function pointers, so the listener is passed
+// through the refcon rather than captured.
+private let shortcutListenerFocusChanged: AXObserverCallback = { _, _, _, context in
+    guard let context else { return }
+    let listener = Unmanaged<ShortcutListener>.fromOpaque(context).takeUnretainedValue()
+    DispatchQueue.main.async { listener.focusChangedFromObserver() }
+}
+
+final class ShortcutListener: NSObject {
+    let settingsURL: URL
     private let catalogURL: URL
     private var settings: Settings
     private var hotKeyRefs: [EventHotKeyRef] = []
@@ -92,13 +146,28 @@ private final class ShortcutListener: NSObject {
     private var paletteFooter: NSTextField?
     private var pendingTransitionCommand: Command?
     private var pendingMoveCommand: Command?
+    private var pendingStaggerCommand: Command?
     private var catalogQuery = ""
     private var visibleCommands: [Command] = []
     private var commandBridge: CommandBridge?
     private var isSubmittingPaletteCommand = false
     private var catalogRevision = 0
     private var focusPollTimer: Timer?
+    private var axObserver: AXObserver?
+    private var axObservedPid: pid_t = 0
+    private var axObservedElement: AXUIElement?
     private var shortcutScopeReason = "Starting"
+    private var clickMonitor: Any?
+    // Last mouse-down in Accessibility coordinates (top-left origin).
+    private var lastClickPoint: CGPoint?
+    private var cachedTimelineRegion: CGRect?
+    private var cachedRegionAt = Date.distantPast
+    private var registeredScopeRank = -1
+    // Diagnostic state. The logging itself lives in PRFXAccessibilityProbe.swift;
+    // stored properties cannot, because Swift extensions may not add storage.
+    var lastDiagnosticFingerprint = ""
+    var lastProbeAt = Date.distantPast
+    var lastProbeFingerprint = ""
     private var commands = prfxFunctionCommands + [
         Command(type: "effect", name: "Gaussian Blur", transitionFrames: 30, id: nil),
         Command(type: "effect", name: "Lumetri Color", transitionFrames: 30, id: nil),
@@ -138,6 +207,8 @@ private final class ShortcutListener: NSObject {
             }}
         )
         loadSettings()
+        promptForAccessibilityIfNeeded()
+        observeClicks()
         observeFrontmostApplication()
         refreshHotKeys()
         makePalette()
@@ -166,6 +237,8 @@ private final class ShortcutListener: NSObject {
 
     deinit {
         focusPollTimer?.invalidate()
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        removeFocusObserver()
         unregisterHotKeys()
         if let eventHandler { RemoveEventHandler(eventHandler) }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -200,6 +273,17 @@ private final class ShortcutListener: NSObject {
     // Carbon hotkeys are global by API design and they consume registered keys.
     // Keep them registered only while Premiere's Timeline/Sequence panel owns
     // focus, so typing in bins, search fields, and rename fields passes through.
+    // The app is ad-hoc signed, so every rebuild changes its code identity and
+    // macOS discards the previous Accessibility grant. Without that grant the
+    // listener cannot read focus and refuses to arm any shortcut, which looks
+    // exactly like the tool being broken. Ask for it explicitly instead.
+    private func promptForAccessibilityIfNeeded() {
+        guard !AXIsProcessTrusted() else { return }
+        listenerLog("Accessibility is not granted; prompting. Timeline shortcuts stay disabled until it is enabled.")
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
     private func observeFrontmostApplication() {
         let notifications = NSWorkspace.shared.notificationCenter
         notifications.addObserver(self, selector: #selector(frontmostApplicationChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
@@ -219,36 +303,112 @@ private final class ShortcutListener: NSObject {
     }
 
     private func updateFocusPolling() {
-        guard isPremiere(NSWorkspace.shared.frontmostApplication) else {
+        guard let premiere = NSWorkspace.shared.runningApplications.first(where: isPremiere),
+              isPremiere(NSWorkspace.shared.frontmostApplication) else {
             focusPollTimer?.invalidate()
             focusPollTimer = nil
+            removeFocusObserver()
             return
         }
+        // Accessibility notifications drive scope changes; the timer is only a
+        // safety net for notifications Premiere fails to emit, so it can run far
+        // slower than the old 0.35s poll and still never leave a hotkey armed
+        // for long. Each poll walks the AX focus chain, so this also cuts the
+        // steady-state cost by roughly two thirds.
+        installFocusObserver(for: premiere)
         guard focusPollTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateHotKeyRegistration(force: false)
         }
         focusPollTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    // A Carbon hotkey consumes the keystroke the moment it fires, so any delay
+    // between focus leaving the Timeline and the hotkey being unregistered is a
+    // window where a keypress meant for another panel is swallowed instead of
+    // reaching Premiere. Observing focus directly closes that window.
+    private func installFocusObserver(for application: NSRunningApplication) {
+        let pid = application.processIdentifier
+        if axObserver != nil && axObservedPid == pid { return }
+        removeFocusObserver()
+        guard AXIsProcessTrusted() else { return }
+        var created: AXObserver?
+        guard AXObserverCreate(pid, shortcutListenerFocusChanged, &created) == .success,
+              let observer = created else {
+            listenerLog("Focus observer unavailable; falling back to timer polling only")
+            return
+        }
+        let element = AXUIElementCreateApplication(pid)
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        var attached = 0
+        for notification in [kAXFocusedUIElementChangedNotification, kAXFocusedWindowChangedNotification] {
+            if AXObserverAddNotification(observer, element, notification as CFString, context) == .success {
+                attached += 1
+            }
+        }
+        guard attached > 0 else {
+            listenerLog("Focus observer rejected by Premiere; falling back to timer polling only")
+            return
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        axObserver = observer
+        axObservedPid = pid
+        axObservedElement = element
+        listenerLog("Focus observer attached to Premiere (pid \(pid))")
+    }
+
+    private func removeFocusObserver() {
+        guard let observer = axObserver else {
+            axObservedPid = 0
+            axObservedElement = nil
+            return
+        }
+        if let element = axObservedElement {
+            AXObserverRemoveNotification(observer, element, kAXFocusedUIElementChangedNotification as CFString)
+            AXObserverRemoveNotification(observer, element, kAXFocusedWindowChangedNotification as CFString)
+        }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        axObserver = nil
+        axObservedPid = 0
+        axObservedElement = nil
+    }
+
+    fileprivate func focusChangedFromObserver() {
+        updateHotKeyRegistration(force: false)
+    }
+
     private func updateHotKeyRegistration(force: Bool) {
         let focus = timelineShortcutFocus()
         shortcutScopeReason = focus.reason
-        guard focus.active else {
+        logAXDiagnostic(verdict: (focus.armsAnything, focus.reason))
+        logAXPanelProbe()
+        guard focus.armsAnything else {
             if !hotKeyRefs.isEmpty { unregisterHotKeys() }
             if force { listenerLog("Timeline shortcuts paused: \(focus.reason)") }
             return
         }
-        if !force && !hotKeyRefs.isEmpty { return }
+        // Re-register when the set of armable shortcuts changes, not merely when
+        // the reason text does. unregisterHotKeys() resets the rank, so an
+        // explicit release always re-arms on the next evaluation.
+        if !force && registeredScopeRank == focus.rank { return }
         unregisterHotKeys()
         installHotKeyHandler()
-        registerHotKey(settings.shortcut, id: 1, command: nil)
+        var armed = 0
+        var withheld = 0
+        if focus.arms(settings.shortcut) {
+            registerHotKey(settings.shortcut, id: 1, command: nil)
+            armed += 1
+        } else { withheld += 1 }
         for (offset, binding) in (settings.bindings ?? []).enumerated() {
-            registerHotKey(binding.shortcut, id: UInt32(offset + 2), command: binding.command)
+            if focus.arms(binding.shortcut) {
+                registerHotKey(binding.shortcut, id: UInt32(offset + 2), command: binding.command)
+                armed += 1
+            } else { withheld += 1 }
         }
-        shortcutScopeReason = "Timeline/Sequence panel focused"
-        listenerLog("Timeline shortcuts active: palette + \((settings.bindings ?? []).count) command shortcut(s)")
+        registeredScopeRank = focus.rank
+        listenerLog("Timeline shortcuts active (\(focus.reason)): \(armed) armed"
+            + (withheld > 0 ? ", \(withheld) withheld — modifier-less keys need the Timeline located" : ""))
     }
 
     private func installHotKeyHandler() {
@@ -267,6 +427,14 @@ private final class ShortcutListener: NSObject {
     }
 
     private func registerHotKey(_ shortcut: Shortcut, id: UInt32, command: Command?) {
+        // Modifier-less shortcuts are allowed again now that scope is decided by
+        // Timeline panel targeting: hotkeys are only registered while the last
+        // click landed in the Timeline, so a bare key cannot reach a rename or
+        // search field elsewhere in Premiere. Still worth noting in the log,
+        // since a bare key has no margin if panel detection ever regresses.
+        if !(shortcut.ctrl || shortcut.alt || shortcut.meta) {
+            listenerLog("Note: \(display(shortcut)) has no modifier; it relies entirely on Timeline panel targeting.")
+        }
         var reference: EventHotKeyRef?
         let eventID = EventHotKeyID(signature: OSType(0x50524658), id: id)
         let result = RegisterEventHotKey(keyCode(for: shortcut.code), carbonModifiers(for: shortcut), eventID, GetApplicationEventTarget(), 0, &reference)
@@ -282,12 +450,13 @@ private final class ShortcutListener: NSObject {
     private func unregisterHotKeys() {
         for hotKey in hotKeyRefs { UnregisterEventHotKey(hotKey) }
         hotKeyRefs.removeAll()
+        registeredScopeRank = -1
         hotKeyCommands.removeAll()
     }
 
     private func handleHotKey(id: UInt32) {
         guard isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
-        guard timelineShortcutFocus().active else {
+        guard timelineShortcutFocus().armsAnything else {
             unregisterHotKeys()
             return
         }
@@ -312,7 +481,7 @@ private final class ShortcutListener: NSObject {
             listenerLog("Hotkey ignored: Premiere is not frontmost")
             return
         }
-        guard timelineShortcutFocus().active else {
+        guard timelineShortcutFocus().armsAnything else {
             unregisterHotKeys()
             listenerLog("Hotkey ignored: Timeline/Sequence panel is not focused")
             return
@@ -320,7 +489,7 @@ private final class ShortcutListener: NSObject {
         listenerLog("Opening palette")
         loadSettings()
         unregisterHotKeys()
-        if pendingTransitionCommand != nil || pendingMoveCommand != nil { resetApplyMenu() }
+        if pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil { resetApplyMenu() }
         searchField?.stringValue = ""
         filterCommands()
         panel?.center()
@@ -331,7 +500,7 @@ private final class ShortcutListener: NSObject {
 
     private func applyMappedCommand(_ command: Command) {
         guard isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
-        guard timelineShortcutFocus().active else {
+        guard timelineShortcutFocus().armsAnything else {
             unregisterHotKeys()
             return
         }
@@ -435,13 +604,16 @@ private final class ShortcutListener: NSObject {
             visibleCommands = transitionPlacementCommands()
         } else if pendingMoveCommand != nil {
             visibleCommands = moveModeCommands()
+        } else if pendingStaggerCommand != nil {
+            visibleCommands = staggerFrameCommands()
         } else {
             let query = searchField?.stringValue.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             visibleCommands = commands.filter { query.isEmpty || ($0.name + " " + $0.type).lowercased().contains(query) }.map { Command(type: $0.type, name: $0.name, transitionFrames: settings.transitionFrames, id: $0.id, moveMode: $0.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1) }
         }
         listView?.reloadData()
         if !visibleCommands.isEmpty {
-            let row = pendingTransitionCommand != nil || pendingMoveCommand != nil ? max(0, min(visibleCommands.count - 1, previousRow)) : 0
+            let keepRow = pendingTransitionCommand != nil || pendingMoveCommand != nil
+            let row = keepRow ? max(0, min(visibleCommands.count - 1, previousRow)) : 0
             listView?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
@@ -464,6 +636,13 @@ private final class ShortcutListener: NSObject {
             submit(placementCommand, keepPaletteOpen: keepPaletteOpen)
             return
         }
+        if let stagger = pendingStaggerCommand {
+            let frames = Int(command.id ?? "") ?? settings.staggerFrames ?? 5
+            let staggerCommand = Command(type: stagger.type, name: stagger.name, transitionFrames: settings.transitionFrames, id: stagger.id, staggerFrames: frames, staggerGroup: settings.staggerGroup ?? 1)
+            resetApplyMenu()
+            submit(staggerCommand, keepPaletteOpen: keepPaletteOpen)
+            return
+        }
         if let move = pendingMoveCommand {
             let moveCommand = Command(type: move.type, name: move.name, transitionFrames: settings.transitionFrames, id: move.id, moveMode: command.id ?? "group")
             resetApplyMenu()
@@ -476,6 +655,10 @@ private final class ShortcutListener: NSObject {
         }
         if command.type == "custom" && (command.id == "move-selected-clips-up" || command.id == "move-selected-clips-down") && command.moveMode == nil {
             showMoveApplyMenu(for: command)
+            return
+        }
+        if command.type == "custom" && (command.id == "stagger-ascending" || command.id == "stagger-descending") {
+            showStaggerApplyMenu(for: command)
             return
         }
         submit(command, keepPaletteOpen: keepPaletteOpen)
@@ -528,9 +711,34 @@ private final class ShortcutListener: NSObject {
         if let search = searchField { panel?.makeFirstResponder(search) }
     }
 
+    private func showStaggerApplyMenu(for command: Command) {
+        pendingStaggerCommand = command
+        searchField?.stringValue = ""
+        paletteTitle?.stringValue = command.name.uppercased()
+        paletteHotkey?.stringValue = "FUNCTION"
+        searchField?.placeholderString = "Frames per step • default \(settings.staggerFrames ?? 5)"
+        paletteFooter?.stringValue = "↑ ↓  choose step     ↵  stagger + close     ⇧↵  stagger + keep open     esc  back"
+        filterCommands()
+    }
+
+    // Offers the typed frame count first, then common steps, so the prompt works
+    // whether the editor types an exact number or just picks one.
+    private func staggerFrameCommands() -> [Command] {
+        let typed = searchField?.stringValue.trimmingCharacters(in: .whitespaces) ?? ""
+        var frames: [Int] = []
+        if let value = Int(typed), value >= 0, value <= 9999 { frames.append(value) }
+        frames.append(max(0, settings.staggerFrames ?? 5))
+        frames.append(contentsOf: [2, 3, 5, 10, 15, 20, 30])
+        var seen = Set<Int>()
+        return frames.filter { seen.insert($0).inserted }.map { value in
+            Command(type: "stagger-frames", name: "\(value) frame\(value == 1 ? "" : "s") per step", transitionFrames: nil, id: String(value))
+        }
+    }
+
     private func resetApplyMenu() {
         pendingTransitionCommand = nil
         pendingMoveCommand = nil
+        pendingStaggerCommand = nil
         paletteTitle?.stringValue = "FX PALETTE"
         paletteHotkey?.stringValue = display(settings.shortcut).uppercased()
         searchField?.stringValue = catalogQuery
@@ -579,71 +787,216 @@ private final class ShortcutListener: NSObject {
         parts.append(key.code == "Space" ? "Space" : String(key.code.dropFirst(3)))
         return parts.joined(separator: " + ")
     }
-    private func isPremiere(_ application: NSRunningApplication?) -> Bool {
+    func isPremiere(_ application: NSRunningApplication?) -> Bool {
         application?.bundleIdentifier?.hasPrefix("com.adobe.PremierePro") == true
     }
 
-    private func timelineShortcutFocus() -> (active: Bool, reason: String) {
+    private func timelineShortcutFocus() -> ShortcutScope {
         guard let application = NSWorkspace.shared.frontmostApplication, isPremiere(application) else {
-            return (false, "Premiere is not frontmost")
+            return .none("Premiere is not frontmost")
         }
         guard AXIsProcessTrusted() else {
-            return (false, "Accessibility is not enabled for PR FX Shortcut Listener")
+            return .none("Accessibility is not enabled for PR FX Shortcut Listener")
         }
-        let context = premiereFocusContext(application).lowercased()
-        guard !context.isEmpty else {
-            return (false, "Premiere focus could not be read")
+        // Premiere's Accessibility tree does not identify panels: every element
+        // reports a generic role (AXLayoutArea, AXGroup, AXUnknown) with an
+        // empty identifier, and the focus chain runs straight from a control to
+        // the document window. The earlier keyword matcher only ever returned
+        // true because the window title contains the project or sequence name,
+        // which is present no matter which panel has focus — so it armed the
+        // shortcut everywhere and broke outright on some project names.
+        //
+        // Text inputs are the one thing Premiere does report honestly, and they
+        // are the case that actually matters: a hotkey must never swallow a
+        // keystroke meant for a rename box or a search field. So deny on text
+        // input and allow otherwise.
+        if let role = focusedTextInputRole(application) {
+            return .none("Text input is focused (\(role))")
         }
-        if containsAny(context, ["axtextfield", "text field", "search field", "combo box", "combobox", "rename", "edit text"]) {
-            return (false, "Text input is focused")
+        // Premiere publishes no focused element and no panel containers, but it
+        // does publish Timeline controls with real frames. Premiere gives a
+        // panel keyboard focus when you click it, so the last click tells us
+        // which panel is active.
+        //
+        // Locating the Timeline depends on Premiere's own English control
+        // descriptions, which do not survive a localized install or an Adobe
+        // rename. When that fails the tool must degrade rather than die: keys
+        // carrying a modifier are safe in any panel because typing never
+        // produces them, so they stay armed. Only modifier-less keys, which rely
+        // entirely on panel targeting, are withheld.
+        guard let region = timelineRegion(application) else {
+            return .modifierOnly("Timeline panel could not be located")
         }
-        if containsAny(context, ["project:", "project panel", "effects panel", "effect controls", "essential sound", "lumetri", "source monitor", "program monitor", "audio track mixer", "pr fx palette settings"]) {
-            return (false, "Timeline/Sequence panel is not focused")
+        guard let click = lastClickPoint else {
+            return .modifierOnly("No click recorded yet; click the Timeline once")
         }
-        if containsAny(context, ["timeline", "time ruler"]) {
-            return (true, "Timeline/Sequence panel focused")
+        guard region.contains(click) else {
+            return .none("Last click was outside the Timeline panel")
         }
-        if context.contains("sequence") && !containsAny(context, ["project", "source", "effect", "settings"]) {
-            return (true, "Timeline/Sequence panel focused")
-        }
-        return (false, "Timeline/Sequence panel is not focused")
+        return .full("Timeline panel active")
     }
 
-    private func premiereFocusContext(_ application: NSRunningApplication) -> String {
+    // Descriptions that appear only inside Premiere's Timeline panel. Premiere
+    // publishes no panel containers, but it does publish these controls with
+    // real frames, so the panel's rectangle can be derived from them.
+    private static let timelineMarkers: Set<String> = [
+        "Toggle Track Lock", "Toggle Track Output", "Mute Track", "Solo Track",
+        "Snap in Timeline", "Timeline Display Settings", "Caption track options",
+        "Insert and overwrite sequences as nests or individual clips"
+    ]
+
+    // Converts a Cocoa screen point (bottom-left origin) to Accessibility
+    // coordinates (top-left origin). The flip is measured against the top edge
+    // of the origin display, which is what AX uses as its reference for every
+    // display — including ones positioned above or below it, where a plain
+    // height would be wrong.
+    private func axPointFromScreen(_ point: CGPoint) -> CGPoint {
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGPoint(x: point.x, y: primaryTop - point.y)
+    }
+
+    private func observeClicks() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            self.lastClickPoint = self.axPointFromScreen(NSEvent.mouseLocation)
+        }
+    }
+
+    // Derives the Timeline panel's rectangle: union the frames of Timeline-only
+    // controls, then extend that union to the panel group's tab strip above it
+    // and down to the bottom of the window, so the whole panel body counts and
+    // not just the track-header column the marker controls live in.
+    private func timelineRegion(_ application: NSRunningApplication) -> CGRect? {
+        // Failures are cached too. Without that, a state where the Timeline is
+        // genuinely absent — closed panel, modal dialog, a workspace without it —
+        // would re-walk the whole element tree on every focus change and every
+        // safety-timer tick, indefinitely.
+        if Date().timeIntervalSince(cachedRegionAt) < 2.0 { return cachedTimelineRegion }
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
-        var parts: [String] = []
-        if let window = axElement(appElement, kAXFocusedWindowAttribute as CFString) {
-            appendAXStrings(from: window, into: &parts)
+        // Scan every window, not just the focused one: editors often tear the
+        // Timeline off into its own window on a second display, and it would be
+        // invisible to a focused-window-only walk.
+        var windows: [AXUIElement] = []
+        if let list = axChildren(appElement, kAXWindowsAttribute as CFString) { windows = list }
+        if windows.isEmpty, let focused = axElement(appElement, kAXFocusedWindowAttribute as CFString) {
+            windows = [focused]
         }
-        if let focused = axElement(appElement, kAXFocusedUIElementAttribute as CFString) {
-            var current: AXUIElement? = focused
-            for _ in 0..<10 {
-                guard let element = current else { break }
-                appendAXStrings(from: element, into: &parts)
-                current = axElement(element, kAXParentAttribute as CFString)
-            }
+        var region: CGRect?
+        for window in windows {
+            if let found = timelineRegion(inWindow: window) { region = found; break }
         }
-        return parts.joined(separator: " | ")
+        guard let region else {
+            cachedTimelineRegion = nil
+            cachedRegionAt = Date()
+            return nil
+        }
+        if cachedTimelineRegion.map({ !$0.equalTo(region) }) ?? true {
+            listenerLog("Timeline region: (\(Int(region.minX)),\(Int(region.minY)) \(Int(region.width))x\(Int(region.height)))")
+        }
+        cachedTimelineRegion = region
+        cachedRegionAt = Date()
+        return region
     }
 
-    private func appendAXStrings(from element: AXUIElement, into parts: inout [String]) {
-        let attributes = [
-            kAXRoleAttribute as CFString,
-            kAXSubroleAttribute as CFString,
-            kAXTitleAttribute as CFString,
-            kAXDescriptionAttribute as CFString,
-            kAXIdentifierAttribute as CFString,
-            kAXHelpAttribute as CFString,
-            kAXValueAttribute as CFString
-        ]
-        for attribute in attributes {
-            if let value = axString(element, attribute), !value.isEmpty {
-                parts.append(value)
+    private func timelineRegion(inWindow window: AXUIElement) -> CGRect? {
+        guard let windowOrigin = axPoint(window, kAXPositionAttribute as CFString),
+              let windowSize = axSize(window, kAXSizeAttribute as CFString) else { return nil }
+        let windowRect = CGRect(origin: windowOrigin, size: windowSize)
+        var markerUnion: CGRect?
+        var tabStrips: [CGRect] = []
+        var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
+        var scanned = 0
+        while !queue.isEmpty && scanned < 800 {
+            let (element, depth) = queue.removeFirst()
+            scanned += 1
+            if depth < 14, let children = axChildren(element) {
+                for child in children { queue.append((child, depth + 1)) }
             }
+            guard let description = axString(element, kAXDescriptionAttribute as CFString),
+                  !description.isEmpty,
+                  ShortcutListener.timelineMarkers.contains(description) || description == "UI_TabsContainer",
+                  let origin = axPoint(element, kAXPositionAttribute as CFString),
+                  let size = axSize(element, kAXSizeAttribute as CFString) else { continue }
+            let rect = CGRect(origin: origin, size: size)
+            if description == "UI_TabsContainer" { tabStrips.append(rect); continue }
+            markerUnion = markerUnion.map { $0.union(rect) } ?? rect
         }
+        guard var region = markerUnion else { return nil }
+        // Prefer the tab strip directly above the markers and horizontally
+        // overlapping them: that is this panel group's own tab bar.
+        let candidates = tabStrips.filter { $0.minY <= region.minY && $0.maxX > region.minX && $0.minX < region.maxX }
+        if let strip = candidates.max(by: { $0.minY < $1.minY }) {
+            region = CGRect(x: strip.minX, y: strip.minY,
+                            width: strip.width, height: windowRect.maxY - strip.minY)
+        } else {
+            region = CGRect(x: windowRect.minX, y: max(windowRect.minY, region.minY - 30),
+                            width: windowRect.width, height: windowRect.maxY - max(windowRect.minY, region.minY - 30))
+        }
+        return region
     }
 
-    private func axElement(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
+    private static let textInputRoles: Set<String> = [
+        "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSecureTextField"
+    ]
+
+    // Checks the focused element and its immediate parent: Premiere sometimes
+    // puts focus on an inner element of a compound text control.
+    private func focusedTextInputRole(_ application: NSRunningApplication) -> String? {
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        guard let focused = axElement(appElement, kAXFocusedUIElementAttribute as CFString) else { return nil }
+        var current: AXUIElement? = focused
+        var depth = 0
+        while let element = current, depth < 2 {
+            for attribute in [kAXRoleAttribute, kAXSubroleAttribute] {
+                if let value = axString(element, attribute as CFString),
+                   ShortcutListener.textInputRoles.contains(value) {
+                    return value
+                }
+            }
+            current = axElement(element, kAXParentAttribute as CFString)
+            depth += 1
+        }
+        return nil
+    }
+
+
+    // Shared Accessibility accessors. These belong to the listener rather
+    // than the diagnostics file: Timeline region lookup depends on them, so
+    // removing the probe must never break shortcut scoping.
+    func axChildren(_ element: AXUIElement, _ attribute: CFString = kAXChildrenAttribute as CFString) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value, CFGetTypeID(value) == CFArrayGetTypeID() else { return nil }
+        return value as? [AXUIElement]
+    }
+
+    func axBool(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+
+    func axPoint(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue((value as! AXValue), .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    func axSize(_ element: AXUIElement, _ attribute: CFString) -> CGSize? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        guard AXValueGetValue((value as! AXValue), .cgSize, &size) else { return nil }
+        return size
+    }
+
+    func axElement(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
               let value,
@@ -651,17 +1004,12 @@ private final class ShortcutListener: NSObject {
         return (value as! AXUIElement)
     }
 
-    private func axString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+    func axString(_ element: AXUIElement, _ attribute: CFString) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
               let value else { return nil }
         if CFGetTypeID(value) == AXUIElementGetTypeID() { return nil }
         return String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func containsAny(_ value: String, _ needles: [String]) -> Bool {
-        for needle in needles where value.contains(needle) { return true }
-        return false
     }
 
     private func jsonEscape(_ value: String) -> String {
@@ -694,7 +1042,7 @@ extension ShortcutListener: NSSearchFieldDelegate {
         if commandSelector == #selector(NSResponder.moveDown(_:)) { moveSelection(1); return true }
         if commandSelector == #selector(NSResponder.moveUp(_:)) { moveSelection(-1); return true }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            if self.pendingTransitionCommand != nil || self.pendingMoveCommand != nil { resetApplyMenu() }
+            if self.pendingTransitionCommand != nil || self.pendingMoveCommand != nil || self.pendingStaggerCommand != nil { resetApplyMenu() }
             else { panel?.orderOut(nil); NSWorkspace.shared.runningApplications.first(where: isPremiere)?.activate(options: []) }
             return true
         }
@@ -749,14 +1097,14 @@ private final class CommandRowView: NSTableCellView {
     }
     func configure(_ command: Command) {
         nameLabel.stringValue = command.name
-        typeLabel.stringValue = command.type == "custom" || command.type == "move-mode" ? "FUNCTION" : command.type == "transition-placement" ? "TRANSITION" : command.type.replacingOccurrences(of: "-", with: " ").uppercased()
+        typeLabel.stringValue = command.type == "custom" || command.type == "move-mode" || command.type == "stagger-frames" ? "FUNCTION" : command.type == "transition-placement" ? "TRANSITION" : command.type.replacingOccurrences(of: "-", with: " ").uppercased()
         if command.type == "transition" {
             typeLabel.textColor = NSColor(calibratedRed: 0.39, green: 0.69, blue: 0.86, alpha: 1)
         } else if command.type == "transition-placement" {
             typeLabel.textColor = NSColor(calibratedRed: 0.39, green: 0.69, blue: 0.86, alpha: 1)
         } else if command.type == "audio-transition" {
             typeLabel.textColor = NSColor(calibratedRed: 0.42, green: 0.76, blue: 0.61, alpha: 1)
-        } else if command.type == "custom" || command.type == "move-mode" {
+        } else if command.type == "custom" || command.type == "move-mode" || command.type == "stagger-frames" {
             typeLabel.textColor = NSColor(calibratedRed: 0.33, green: 0.72, blue: 0.68, alpha: 1)
         } else {
             typeLabel.textColor = NSColor(calibratedRed: 0.84, green: 0.45, blue: 0.18, alpha: 1)
@@ -885,8 +1233,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+// Declared with @main rather than as top-level statements: Swift only permits
+// top-level code in a file named main.swift, and the listener is now built from
+// more than one source file.
+@main
+enum PRFXShortcutListenerApp {
+    // Held statically because NSApplication does not retain its delegate.
+    private static let delegate = AppDelegate()
+
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}

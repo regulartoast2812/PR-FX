@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20260815-arrange-timing-2';
+prfx.HOST_BUILD = '20260816-stagger-prompt-1';
 if (prfx.lastPaletteEffectUndoCount === undefined) prfx.lastPaletteEffectUndoCount = 0;
 
 prfx.getCatalog = function () {
@@ -101,11 +101,53 @@ prfx.collectMediaItems = function (parent, known) {
 
 prfx.normalizedMediaPath = function (path) { return String(path || '').replace(/\\\\/g, '/').replace(/\\/g, '/').toLowerCase(); };
 
+// Registry of PR FX custom functions. Adding a function means adding one entry
+// here; prfx.apply itself never needs another branch. Set needsSequence to
+// false only for functions that do not touch the active sequence — those run
+// before the sequence guard and before lastPaletteEffectUndoCount is cleared.
+prfx.functions = {
+    'undo-last-palette-action': { needsSequence: false, run: function () {
+        return prfx.undoLastPaletteEffectApply();
+    } },
+    'remove-transitions': { run: function (publicSequence, qeSequence) {
+        var removed = prfx.removeTransitionsAtSelection(publicSequence, qeSequence);
+        return 'Removed ' + removed + ' transition' + (removed === 1 ? '' : 's') + ' from selected clips.';
+    } },
+    'move-selected-clips-up': { run: function (publicSequence, qeSequence, command) {
+        return prfx.moveSelectedClipsUp(publicSequence, qeSequence, String(command.moveMode || 'group'));
+    } },
+    'move-selected-clips-down': { run: function (publicSequence, qeSequence, command) {
+        return prfx.moveSelectedClipsDown(publicSequence, qeSequence, String(command.moveMode || 'group'));
+    } },
+    'pull-group-in': { run: function (publicSequence, qeSequence) {
+        return prfx.pullSelectedGroupToPlayhead(publicSequence, qeSequence, false);
+    } },
+    'pull-group-out': { run: function (publicSequence, qeSequence) {
+        return prfx.pullSelectedGroupToPlayhead(publicSequence, qeSequence, true);
+    } },
+    'dump-qe-api': { needsSequence: false, run: function () {
+        return prfx.dumpQeApi();
+    } },
+    'snap-tracks-in': { run: function (publicSequence, qeSequence) {
+        return prfx.snapSelectedTrackBlocksToPlayhead(publicSequence, qeSequence, false);
+    } },
+    'snap-tracks-out': { run: function (publicSequence, qeSequence) {
+        return prfx.snapSelectedTrackBlocksToPlayhead(publicSequence, qeSequence, true);
+    } },
+    'stagger-ascending': { run: function (publicSequence, qeSequence, command) {
+        return prfx.staggerSelectedTrackBlocks(publicSequence, qeSequence, Number(command.staggerFrames), Number(command.staggerGroup), false);
+    } },
+    'stagger-descending': { run: function (publicSequence, qeSequence, command) {
+        return prfx.staggerSelectedTrackBlocks(publicSequence, qeSequence, Number(command.staggerFrames), Number(command.staggerGroup), true);
+    } }
+};
+
 prfx.apply = function (payload) {
     try {
         var command = JSON.parse(payload);
-        if (command.type === 'custom' && command.id === 'undo-last-palette-action') return prfx.undoLastPaletteEffectApply();
-        if (command.type === 'custom' && command.id !== 'remove-transitions' && command.id !== 'move-selected-clips-up' && command.id !== 'move-selected-clips-down' && command.id !== 'pull-group-in' && command.id !== 'pull-group-out' && command.id !== 'stagger-ascending' && command.id !== 'stagger-descending') return 'ERROR: Unknown PR FX function.';
+        var handler = command.type === 'custom' ? prfx.functions[String(command.id)] : null;
+        if (command.type === 'custom' && !handler) return 'ERROR: Unknown PR FX function.';
+        if (handler && handler.needsSequence === false) return handler.run(null, null, command);
         prfx.lastPaletteEffectUndoCount = 0;
         if (!app.project || !app.project.activeSequence) return 'ERROR: Open a sequence and select one or more clips first.';
         app.enableQE();
@@ -113,16 +155,7 @@ prfx.apply = function (payload) {
         var sequence = qe.project.getActiveSequence();
         var item, selected, duration, i;
         if (!sequence) return 'ERROR: Premiere could not access the active sequence.';
-        if (command.type === 'custom') {
-            if (command.id === 'move-selected-clips-up') return prfx.moveSelectedClipsUp(publicSequence, sequence, String(command.moveMode || 'group'));
-            if (command.id === 'move-selected-clips-down') return prfx.moveSelectedClipsDown(publicSequence, sequence, String(command.moveMode || 'group'));
-            if (command.id === 'pull-group-in') return prfx.pullSelectedGroupToPlayhead(publicSequence, sequence, false);
-            if (command.id === 'pull-group-out') return prfx.pullSelectedGroupToPlayhead(publicSequence, sequence, true);
-            if (command.id === 'stagger-ascending') return prfx.staggerSelectedTrackBlocks(publicSequence, sequence, Number(command.staggerFrames), Number(command.staggerGroup), false);
-            if (command.id === 'stagger-descending') return prfx.staggerSelectedTrackBlocks(publicSequence, sequence, Number(command.staggerFrames), Number(command.staggerGroup), true);
-            var removed = prfx.removeTransitionsAtSelection(publicSequence, sequence);
-            return 'Removed ' + removed + ' transition' + (removed === 1 ? '' : 's') + ' from selected clips.';
-        }
+        if (handler) return handler.run(publicSequence, sequence, command);
         if (command.type === 'effect') {
             selected = prfx.getSelectedQEClips(publicSequence, sequence, 'video');
             if (!selected.length) return prfx.selectionError('video');
@@ -140,7 +173,7 @@ prfx.apply = function (payload) {
             if (!selected.length) return prfx.selectionError(kind);
             item = kind === 'audio' ? qe.project.getAudioTransitionByName(command.name) : qe.project.getVideoTransitionByName(command.name);
             if (!item) return 'ERROR: “' + command.name + '” is not available in this Premiere installation.';
-            duration = prfx.framesToTimecode(Number(command.transitionFrames) || 30);
+            duration = prfx.framesToSequenceTimecode(publicSequence, Number(command.transitionFrames) || 30);
             var applied = prfx.applyTransitionPlacement(selected, item, duration, placement);
             if (applied.error) return 'ERROR: ' + applied.error;
             if (!applied.count) return 'ERROR: No eligible ' + (kind === 'audio' ? 'audio ' : '') + 'clip boundaries were found for ' + prfx.transitionPlacementLabel(placement) + '.';
@@ -227,6 +260,12 @@ prfx.moveSelectedClipsDown = function (publicSequence, qeSequence, moveMode) {
 };
 
 prfx.moveSelectedClips = function (publicSequence, qeSequence, moveMode, moveDirection) {
+    // Vertical moves act on the explicit selection only. Linked partners are
+    // deliberately NOT pulled in: moving a clip to another track does not change
+    // its timing, so a linked pair cannot desync, and dragging the unselected
+    // half onto a different track is both surprising and destructive to a
+    // deliberate layout. Pull is different — it changes timing, so it does
+    // expand to linked items.
     var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence), groups = [];
     var groupsByKind = { video: [], audio: [] };
     var createdTracks = { video: 0, audio: 0 };
@@ -357,9 +396,7 @@ prfx.moveSelectedClips = function (publicSequence, qeSequence, moveMode, moveDir
 };
 
 prfx.pullSelectedGroupToPlayhead = function (publicSequence, qeSequence, useOutPoint) {
-    // Pull is a linked-media operation: selecting either side of a linked A/V
-    // edit must carry every live linked TrackItem. Other arrange commands keep
-    // their explicit-selection semantics.
+    // Linked-media expansion, shared with Move and Stagger.
     var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, true), selected, playhead, playheadTicks, anchorTicks, anchorSeconds, exact = true;
     var i, detail, edgeTicks, edgeSeconds, deltaTicks, deltaSeconds;
     if (!snapshot.selected.length) {
@@ -393,10 +430,153 @@ prfx.pullSelectedGroupToPlayhead = function (publicSequence, qeSequence, useOutP
     return prfx.executeTimingMove(publicSequence, qeSequence, snapshot, selected, 'pull', 'Pulled the selected group ' + (useOutPoint ? 'Out' : 'In') + ' to the playhead');
 };
 
+// Groups tracks that must snap as a unit. Two tracks belong to the same
+// component when a link group spans them, so a linked V1+A1 edit keeps one
+// shared anchor instead of each track snapping independently and desyncing.
+// Union-find, because a chain of linked edits can transitively bind three or
+// more tracks together.
+// Diagnostic. Enumerates what Premiere's QE DOM and public DOM actually expose,
+// so questions like "is there a preset API?" are answered by reflection instead
+// of assumption. Writes to ~/Library/Logs/PR FX QE API.txt and is never invoked
+// during normal use.
+prfx.reflectNames = function (label, target) {
+    var lines = [label + ':'], list, i, name;
+    if (target === null || target === undefined) return lines.concat(['  <unavailable>', '']);
+    try {
+        list = target.reflect.properties;
+        for (i = 0; i < list.length; i++) {
+            name = String(list[i].name);
+            if (name !== '__proto__' && name !== 'reflect') lines.push('  prop   ' + name);
+        }
+    } catch (propertyError) { lines.push('  <properties unavailable: ' + propertyError.toString() + '>'); }
+    try {
+        list = target.reflect.methods;
+        for (i = 0; i < list.length; i++) {
+            name = String(list[i].name);
+            if (name !== 'toString' && name !== 'valueOf') lines.push('  method ' + name);
+        }
+    } catch (methodError) { lines.push('  <methods unavailable: ' + methodError.toString() + '>'); }
+    lines.push('');
+    return lines;
+};
+
+prfx.dumpQeApi = function () {
+    var lines = [], file, path, sequence, qeSequence, track, clip, effect, publicClip;
+    try {
+        app.enableQE();
+        lines = lines.concat(prfx.reflectNames('qe', qe));
+        lines = lines.concat(prfx.reflectNames('qe.project', qe.project));
+        try { qeSequence = qe.project.getActiveSequence(); } catch (sequenceError) { qeSequence = null; }
+        lines = lines.concat(prfx.reflectNames('qe sequence', qeSequence));
+        try { track = qeSequence ? qeSequence.getVideoTrackAt(0) : null; } catch (trackError) { track = null; }
+        lines = lines.concat(prfx.reflectNames('qe video track', track));
+        try { clip = track ? track.getItemAt(0) : null; } catch (clipError) { clip = null; }
+        lines = lines.concat(prfx.reflectNames('qe track item', clip));
+        try { effect = qe.project.getVideoEffectList ? qe.project.getVideoEffectList()[0] : null; } catch (effectError) { effect = null; }
+        lines = lines.concat(prfx.reflectNames('qe effect entry', effect));
+        lines = lines.concat(prfx.reflectNames('app', app));
+        lines = lines.concat(prfx.reflectNames('app.project', app.project));
+        sequence = app.project ? app.project.activeSequence : null;
+        lines = lines.concat(prfx.reflectNames('public sequence', sequence));
+        try { publicClip = sequence ? sequence.videoTracks[0].clips[0] : null; } catch (publicError) { publicClip = null; }
+        lines = lines.concat(prfx.reflectNames('public track item', publicClip));
+        try { lines = lines.concat(prfx.reflectNames('public component', publicClip ? publicClip.components[0] : null)); } catch (componentError) {}
+        path = Folder.myDocuments.parent.fsName + '/Library/Logs/PR FX QE API.txt';
+        file = new File(path);
+        file.encoding = 'UTF-8';
+        file.open('w');
+        file.write(lines.join('\n'));
+        file.close();
+        return 'Wrote QE/DOM reflection to ' + path + ' (' + lines.length + ' lines).';
+    } catch (error) {
+        return 'ERROR: QE reflection failed: ' + error.toString();
+    }
+};
+
+prfx.snapTrackComponents = function (details) {
+    var parents = {}, byGroup = {}, map = {}, i, j, key, group;
+    function trackKey(detail) { return detail.kind + ':' + detail.sourceTrackIndex; }
+    function root(value) {
+        while (parents[value] !== value) { parents[value] = parents[parents[value]]; value = parents[value]; }
+        return value;
+    }
+    function join(first, second) {
+        var firstRoot = root(first), secondRoot = root(second);
+        if (firstRoot !== secondRoot) parents[secondRoot] = firstRoot;
+    }
+    for (i = 0; i < details.length; i++) {
+        key = trackKey(details[i]);
+        if (parents[key] === undefined) parents[key] = key;
+        if (!byGroup[details[i].linkGroup]) byGroup[details[i].linkGroup] = [];
+        byGroup[details[i].linkGroup].push(key);
+    }
+    for (group in byGroup) {
+        if (!byGroup.hasOwnProperty(group)) continue;
+        for (j = 1; j < byGroup[group].length; j++) join(byGroup[group][0], byGroup[group][j]);
+    }
+    for (i = 0; i < details.length; i++) { key = trackKey(details[i]); map[key] = root(key); }
+    return map;
+};
+
+// Snap is Pull applied per track rather than to the whole selection: every
+// track component gets its own offset so that its earliest In (or latest Out)
+// lands on the playhead. Pull moves the selection rigidly and preserves the
+// relative offsets between tracks; Snap deliberately collapses them.
+prfx.snapSelectedTrackBlocksToPlayhead = function (publicSequence, qeSequence, useEnd) {
+    var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, true), selected = snapshot.selected;
+    var components, anchors = {}, anchorTicks = {}, playhead, playheadSeconds, playheadTicks, exact = true;
+    var i, detail, key, edgeSeconds, edgeTicks, delta, deltaTicks;
+    if (!selected.length) {
+        if (snapshot.staleSelectionCount) return 'ERROR: Premiere\'s Timeline selection is stale. Click an empty Timeline area, reselect the clips, and try again.';
+        return 'ERROR: Select one or more Timeline clips first.';
+    }
+    try { playhead = publicSequence.getPlayerPosition(); } catch (playheadError) { playhead = null; }
+    playheadSeconds = prfx.timeInSeconds(playhead);
+    playheadTicks = prfx.numericTicks(playhead && playhead.ticks);
+    if (!(playheadSeconds >= 0)) return 'ERROR: Premiere could not read the playhead position.';
+    if (isNaN(playheadTicks)) exact = false;
+    components = prfx.snapTrackComponents(selected);
+    for (i = 0; i < selected.length; i++) {
+        detail = selected[i];
+        key = components[detail.kind + ':' + detail.sourceTrackIndex];
+        edgeSeconds = useEnd ? detail.end : detail.start;
+        edgeTicks = prfx.numericTicks(useEnd ? detail.endTicks : detail.startTicks);
+        if (isNaN(edgeTicks) || isNaN(prfx.numericTicks(detail.startTicks))) exact = false;
+        if (anchors[key] === undefined) { anchors[key] = edgeSeconds; anchorTicks[key] = edgeTicks; }
+        else {
+            anchors[key] = useEnd ? Math.max(anchors[key], edgeSeconds) : Math.min(anchors[key], edgeSeconds);
+            if (!isNaN(edgeTicks) && !isNaN(anchorTicks[key])) {
+                anchorTicks[key] = useEnd ? Math.max(anchorTicks[key], edgeTicks) : Math.min(anchorTicks[key], edgeTicks);
+            }
+        }
+    }
+    for (i = 0; i < selected.length; i++) {
+        detail = selected[i];
+        key = components[detail.kind + ':' + detail.sourceTrackIndex];
+        if (exact && !isNaN(anchorTicks[key])) {
+            deltaTicks = playheadTicks - anchorTicks[key];
+            prfx.assignTimingTargetTicks(detail, prfx.numericTicks(detail.startTicks) + deltaTicks);
+        } else {
+            delta = playheadSeconds - anchors[key];
+            prfx.assignTimingTargetSeconds(detail, detail.start + delta);
+        }
+        if (detail.targetStart < -0.000001) {
+            return 'ERROR: Snap would move a track block before the start of the sequence. Nothing was moved.';
+        }
+    }
+    return prfx.executeTimingMove(publicSequence, qeSequence, snapshot, selected, 'snap',
+        'Snapped each track block ' + (useEnd ? 'Out' : 'In') + ' to the playhead');
+};
+
 prfx.staggerSelectedTrackBlocks = function (publicSequence, qeSequence, frameAmount, groupSize, descending) {
-    var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence), selected = snapshot.selected, kinds = ['video', 'audio'];
-    var trackOrders = { video: [], audio: [] }, trackRanks = { video: {}, audio: {} }, seen = { video: {}, audio: {} };
-    var staggerable = false, frameTicks, i, j, kind, detail, rank, multiplier, startTicks;
+    // Stagger shifts timing, so linked audio must travel with its video or the
+    // edit desyncs. One kind drives the ordering: whichever the editor actually
+    // selected more of, with video winning ties because staggering video layers
+    // is the common case. Every clip in a link group takes the offset earned by
+    // its driving-kind member, so a linked pair always moves as one.
+    var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, true), selected = snapshot.selected;
+    var trackOrder = [], trackRanks = {}, seenTrack = {}, groupRanks = {};
+    var explicitCounts = { video: 0, audio: 0 }, primaryKind, frameTicks, i, detail, rank, multiplier, startTicks;
     if (!selected.length) {
         if (snapshot.staleSelectionCount) return 'ERROR: Premiere\'s Timeline selection is stale. Click an empty Timeline area, reselect the clips, and try again.';
         return 'ERROR: Select clips on at least two video tracks or at least two audio tracks first.';
@@ -404,25 +584,33 @@ prfx.staggerSelectedTrackBlocks = function (publicSequence, qeSequence, frameAmo
     frameAmount = isNaN(frameAmount) ? 5 : Math.max(0, Math.round(frameAmount));
     groupSize = isNaN(groupSize) ? 1 : Math.max(1, Math.floor(groupSize));
     frameTicks = prfx.numericTicks(publicSequence.timebase);
+    for (i = 0; i < selected.length; i++) if (selected[i].explicit) explicitCounts[selected[i].kind]++;
+    primaryKind = explicitCounts.audio > explicitCounts.video ? 'audio' : 'video';
     for (i = 0; i < selected.length; i++) {
         detail = selected[i];
-        if (!seen[detail.kind][detail.sourceTrackIndex]) {
-            seen[detail.kind][detail.sourceTrackIndex] = true;
-            trackOrders[detail.kind].push(detail.sourceTrackIndex);
+        if (!detail.explicit || detail.kind !== primaryKind) continue;
+        if (!seenTrack[detail.sourceTrackIndex]) {
+            seenTrack[detail.sourceTrackIndex] = true;
+            trackOrder.push(detail.sourceTrackIndex);
         }
     }
-    for (i = 0; i < kinds.length; i++) {
-        kind = kinds[i];
-        trackOrders[kind].sort(function (a, b) { return a - b; });
-        if (descending) trackOrders[kind].reverse();
-        if (trackOrders[kind].length >= 2) staggerable = true;
-        for (j = 0; j < trackOrders[kind].length; j++) trackRanks[kind][trackOrders[kind][j]] = j;
+    trackOrder.sort(function (a, b) { return a - b; });
+    if (descending) trackOrder.reverse();
+    if (trackOrder.length < 2) {
+        return 'ERROR: Select clips on at least two ' + primaryKind + ' tracks to stagger.';
     }
-    if (!staggerable) return 'ERROR: Select clips on at least two video tracks or at least two audio tracks to stagger.';
+    for (i = 0; i < trackOrder.length; i++) trackRanks[trackOrder[i]] = i;
+    // Rank per link group, taken from the driving-kind member.
     for (i = 0; i < selected.length; i++) {
         detail = selected[i];
-        rank = trackOrders[detail.kind].length < 2 ? 0 : trackRanks[detail.kind][detail.sourceTrackIndex];
-        multiplier = groupSize === 1 ? rank : rank % groupSize;
+        if (!detail.explicit || detail.kind !== primaryKind) continue;
+        if (groupRanks[detail.linkGroup] === undefined) groupRanks[detail.linkGroup] = trackRanks[detail.sourceTrackIndex];
+    }
+    for (i = 0; i < selected.length; i++) {
+        detail = selected[i];
+        rank = groupRanks[detail.linkGroup];
+        // A group with no driving-kind member stays where it is.
+        multiplier = rank === undefined ? 0 : (groupSize === 1 ? rank : rank % groupSize);
         startTicks = prfx.numericTicks(detail.startTicks);
         if (!isNaN(frameTicks) && !isNaN(startTicks) && !isNaN(prfx.numericTicks(detail.endTicks))) prfx.assignTimingTargetTicks(detail, startTicks + multiplier * frameAmount * frameTicks);
         else prfx.assignTimingTargetSeconds(detail, detail.start + multiplier * frameAmount * prfx.timeInSeconds({ ticks: publicSequence.timebase }));
@@ -963,7 +1151,7 @@ prfx.moveTransitionDuration = function (sequence, data) {
             return duration.getFormatted(frame, sequence.videoDisplayFormat);
         } catch (timeError) {}
     }
-    return prfx.framesToTimecode(30);
+    return prfx.framesToSequenceTimecode(sequence, 30);
 };
 
 prfx.restoreMoveTransitions = function (sequence, transitions, original) {
@@ -1024,12 +1212,18 @@ prfx.moveAudioTrackType = function (qeSequence, sourceTrackIndex) {
 prfx.moveSelectionSnapshot = function (sequence, qeSequence, includeLinked) {
     var selected = sequence.getSelection(), snapshot = { selected: [], selectedByKind: { video: [], audio: [] }, tracks: { video: [], audio: [] }, staleSelectionCount: 0 };
     var selectedKeys = {}, kinds = ['video', 'audio'], i, kind, item, detail, tracks, trackCount, trackIndex, track, clips, clipCount, clipIndex, clip, key;
-    if (includeLinked) selected = prfx.expandLinkedMoveSelection(sequence, selected);
-    for (i = 0; i < selected.length; i++) {
-        item = selected[i];
+    // Normalise to entries so every detail carries its link group and whether
+    // the editor selected it explicitly, whichever path produced it.
+    var entries = [];
+    if (includeLinked) entries = prfx.expandLinkedMoveSelection(sequence, selected);
+    else for (i = 0; i < Number(selected.numItems || selected.length || 0); i++) {
+        try { entries.push({ item: selected[i], linkGroup: 'g' + i, explicit: true }); } catch (entryError) {}
+    }
+    for (i = 0; i < entries.length; i++) {
+        item = entries[i].item;
         kind = prfx.moveSelectionKind(sequence, item);
         if (!kind) continue;
-        detail = { kind: kind, name: String(item.name || 'Timeline clip'), sourceTrackIndex: Number(item.parentTrackIndex), start: prfx.timeInSeconds(item.start), end: prfx.timeInSeconds(item.end), startTicks: prfx.timeTicks(item.start), endTicks: prfx.timeTicks(item.end), state: prfx.captureMoveClipState(item) };
+        detail = { kind: kind, name: String(item.name || 'Timeline clip'), sourceTrackIndex: Number(item.parentTrackIndex), start: prfx.timeInSeconds(item.start), end: prfx.timeInSeconds(item.end), startTicks: prfx.timeTicks(item.start), endTicks: prfx.timeTicks(item.end), state: prfx.captureMoveClipState(item), linkGroup: entries[i].linkGroup, explicit: entries[i].explicit };
         if (!(detail.end > detail.start) || detail.sourceTrackIndex < 0) continue;
         // Premiere can retain selected public TrackItem wrappers after QE has
         // moved their real timeline items. They look selected to getSelection
@@ -1065,30 +1259,51 @@ prfx.moveSelectionSnapshot = function (sequence, qeSequence, includeLinked) {
     return snapshot;
 };
 
+// Expands a selection to every live linked TrackItem, and records two things
+// callers need to reason about the result: which entries the editor actually
+// selected, and which link group each entry belongs to. Commands that shift
+// timing use the group to give a linked pair one shared offset, so the pair
+// cannot drift apart.
+//
+// Each seed is walked to completion before the next one starts. That way two
+// explicitly selected halves of the same linked edit land in one group rather
+// than two, which would otherwise let them receive different offsets.
 prfx.expandLinkedMoveSelection = function (sequence, selected) {
-    var output = [], queue = [], seen = {}, count = selected ? Number(selected.numItems || selected.length || 0) : 0;
-    var i, item, identity, linked, linkedCount, linkedIndex, linkedItem;
-    function add(candidate) {
-        var candidateKind;
-        if (!candidate) return;
-        candidateKind = prfx.moveSelectionKind(sequence, candidate);
-        if (!candidateKind) return;
-        identity = prfx.moveTrackItemIdentity(sequence, candidate, candidateKind);
-        if (!identity || seen[identity]) return;
-        seen[identity] = true;
-        output.push(candidate);
-        queue.push(candidate);
+    var output = [], entries = {}, count = selected ? Number(selected.numItems || selected.length || 0) : 0;
+    var groupCounter = 0, i, seed, groupId, localQueue, item, linked, linkedCount, linkedIndex, linkedItem;
+    function identityFor(candidate) {
+        var candidateKind = prfx.moveSelectionKind(sequence, candidate);
+        if (!candidateKind) return '';
+        return prfx.moveTrackItemIdentity(sequence, candidate, candidateKind);
+    }
+    function add(candidate, group, explicit) {
+        var identity;
+        if (!candidate) return null;
+        identity = identityFor(candidate);
+        if (!identity) return null;
+        if (entries[identity]) {
+            if (explicit) entries[identity].explicit = true;
+            return null;
+        }
+        entries[identity] = { item: candidate, linkGroup: group, explicit: !!explicit };
+        output.push(entries[identity]);
+        return entries[identity];
     }
     for (i = 0; i < count; i++) {
-        try { add(selected[i]); } catch (selectionError) {}
-    }
-    for (i = 0; i < queue.length; i++) {
-        item = queue[i]; linked = null;
-        try { linked = item.getLinkedItems ? item.getLinkedItems() : null; } catch (linkedError) { linked = null; }
-        linkedCount = linked ? Number(linked.numItems || linked.length || 0) : 0;
-        for (linkedIndex = 0; linkedIndex < linkedCount; linkedIndex++) {
-            try { linkedItem = linked[linkedIndex]; } catch (linkedItemError) { linkedItem = null; }
-            add(linkedItem);
+        try { seed = selected[i]; } catch (selectionError) { seed = null; }
+        if (!seed) continue;
+        groupId = 'g' + groupCounter;
+        if (!add(seed, groupId, true)) continue;
+        groupCounter++;
+        localQueue = [seed];
+        for (var queueIndex = 0; queueIndex < localQueue.length; queueIndex++) {
+            item = localQueue[queueIndex]; linked = null;
+            try { linked = item.getLinkedItems ? item.getLinkedItems() : null; } catch (linkedError) { linked = null; }
+            linkedCount = linked ? Number(linked.numItems || linked.length || 0) : 0;
+            for (linkedIndex = 0; linkedIndex < linkedCount; linkedIndex++) {
+                try { linkedItem = linked[linkedIndex]; } catch (linkedItemError) { linkedItem = null; }
+                if (add(linkedItem, groupId, false)) localQueue.push(linkedItem);
+            }
         }
     }
     return output;
@@ -1282,4 +1497,24 @@ prfx.selectionError = function (kind) { return prfx.lastPublicSelectionCount > 0
 prfx.sameTimelineRange = function (publicClip, qeClip) { try { return Math.abs(prfx.timeInSeconds(publicClip.start) - prfx.timeInSeconds(qeClip.start)) < 0.0001 && Math.abs(prfx.timeInSeconds(publicClip.end) - prfx.timeInSeconds(qeClip.end)) < 0.0001; } catch (error) { return false; } };
 prfx.timeInSeconds = function (time) { if (typeof time === 'number') return time; if (time && time.seconds !== undefined) return Number(time.seconds); if (time && time.ticks !== undefined) return Number(time.ticks) / 254016000000; return -999999; };
 prfx.timeTicks = function (time) { try { return String(time.ticks); } catch (error) { return ''; } };
+// Converts a frame count into a timecode string at the sequence's real frame
+// rate. Always prefer this over framesToTimecode: a frame count only means a
+// duration relative to a timebase, so assuming 30 makes every transition the
+// wrong length in 23.976/24/25/50/60fps sequences.
+prfx.framesToSequenceTimecode = function (sequence, frames) {
+    var frameTime, value;
+    frames = Math.max(0, Math.round(Number(frames) || 0));
+    try {
+        frameTime = new Time();
+        frameTime.ticks = String(sequence.timebase);
+        value = new Time();
+        value.ticks = String(Math.round(Number(frameTime.ticks) * frames));
+        return value.getFormatted(frameTime, sequence.videoDisplayFormat);
+    } catch (error) {
+        return prfx.framesToTimecode(frames);
+    }
+};
+
+// Last-resort fallback only, for when Premiere will not construct a Time and
+// the real timebase is therefore unreadable. Assumes 30fps.
 prfx.framesToTimecode = function (frames) { var seconds = Math.floor(frames / 30), remainder = frames % 30; return '00:00:' + (seconds < 10 ? '0' : '') + seconds + ':' + (remainder < 10 ? '0' : '') + remainder; };

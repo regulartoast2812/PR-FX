@@ -11,20 +11,35 @@ macOS is the currently supported target. Windows listener work is tracked in [WI
    - macOS: `./native/run-macos.sh` (rebuilds and restarts the listener)
 
 2. Restart Premiere Pro, then open **Window → Extensions → PR FX Palette Settings** once. The panel listens for commands from the native listener and applies them to the selected Timeline clips.
-3. In the settings panel, set the shortcut and default transition duration. Changes reload into the listener automatically. Supported trigger keys: Space, A–Z, and 0–9, with modifiers.
+3. In the settings panel, set the shortcut and default transition duration. Changes reload into the listener automatically. Supported trigger keys: Space, A–Z, and 0–9, with or without modifiers. A key with no modifier works only while the Timeline is the active panel, so add Ctrl, Option, or Command to anything destructive.
 4. Click/select clips in an active Timeline and invoke the shortcut. The standalone palette opens over Premiere; type, then press Enter.
 
 Pressing **Enter** applies the highlighted item to every compatible selected Timeline clip: video effects use selected video clips; transitions and audio fades apply to both the In and Out of compatible selected clips. Use Up/Down to change the highlighted result and Escape to cancel.
 
-The palette includes a small starting catalog (Gaussian Blur, Lumetri Color, Crop, Transform, Warp Stabilizer, Cross Dissolve, Dip to Black/White, and common audio fades). Add more commands in `client/app.js` using the same `{ type, name }` format. Names must match Premiere's installed effect/transition names.
+The palette lists PR FX's own functions alongside every video effect, video transition, and audio transition your Premiere installation actually has. The settings panel reads that catalog from Premiere and syncs it to the listener, which caches it so the palette still opens before Premiere has connected. PR FX functions are defined in `client/app.js`; effects and transitions come from Premiere and need no configuration.
 
 ## Why there is a listener
 
 Premiere does not let CEP or UXP extensions register a shortcut in the Timeline context. The included **PR FX Shortcut Listener** uses the same essential architecture as Excalibur’s companion shortcut listener: it owns the hotkey at the operating-system level but only responds while **Adobe Premiere Pro** is frontmost. This means Ctrl + Space works while the Timeline has focus—without first focusing a CEP panel.
 
-The app is built locally and ad-hoc signed on macOS. If Ctrl + Space is already used by Premiere or another app, choose a different combination in the settings panel.
+The app is built and signed locally on macOS. If Ctrl + Space is already used by Premiere or another app, choose a different combination in the settings panel.
 
-On macOS, PR FX registers Timeline shortcuts only while Premiere is frontmost and unregisters them immediately when you leave Premiere. This means no Accessibility permission is required and the same key combinations remain available in other apps.
+### How PR FX decides when a shortcut is live
+
+Premiere doesn't tell us which panel has focus — the Accessibility API reports a generic placeholder in every state and exposes no panel containers. It does expose individual controls with screen positions, so PR FX works out where the Timeline is and whether you're working in it.
+
+Shortcuts are registered only when all of the following hold:
+
+- Premiere is the frontmost application
+- Accessibility permission is granted (required — without it, nothing is armed)
+- No text field has focus
+- Your last mouse click landed inside the Timeline panel
+
+The Timeline's rectangle is derived by finding controls that exist only in that panel — track lock, mute, solo, snap — and extending their bounds to the panel's tab bar and the bottom of the window. It's recomputed as focus changes and re-checked on every keypress, so shortcuts release the moment you click into another panel.
+
+Because this follows your last click rather than true focus, it can be wrong if you switch panels by menu or keyboard without clicking, or if Premiere moves focus itself. Adding a modifier to a binding sidesteps that entirely, which is worth doing for anything destructive.
+
+**Accessibility permission is required.** Grant it under System Settings → Privacy & Security → Accessibility. Without it the listener cannot locate the Timeline, refuses to arm any shortcut, and neither the palette nor mapped keys will respond.
 
 ## Development installation
 
