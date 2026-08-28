@@ -33,7 +33,16 @@ xcuserdata/
 # Local runtime state, logs, and signing material
 *.log
 *.p12
+*.pem
+*.key
+*.cer
 *.mobileprovision
+
+# Diagnostic output. The findings belong in CLAUDE.md, which IS tracked — these
+# dumps are machine- and version-specific and must never be committed.
+PR FX QE API.txt
+ax-probe
+ax-diagnostic
 settings.local.json
 /native/com.prfx.shortcut-listener.plist
 /native/.DS_Store

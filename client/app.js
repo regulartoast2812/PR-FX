@@ -3,10 +3,15 @@
 
   var STORAGE_KEY = 'prfx.palette.settings.v1';
   var CATALOG_STORAGE_KEY = 'prfx.palette.catalog.v1';
+  var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
+  var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260816-stagger-prompt-1';
-  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, bindings: [], folderSyncsByProject: {} };
+  var PRFX_HOST_BUILD = '20260828-video-replace-fallback';
+  var RETIRED_COMMAND_IDS = { 'stretch-speed-to-playhead': true };
+  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', bindings: [], folderSyncsByProject: {} };
   var commands = [
+    { type: 'custom', id: 'dump-qe-api', name: '[System] Dump QE + DOM API' },
+    { type: 'custom', id: 'inspect-selected-clip', name: '[System] Inspect Selected Clip' },
     { type: 'custom', id: 'undo-last-palette-action', name: 'Undo Last PR FX Effect Apply' },
     { type: 'custom', id: 'remove-transitions', name: 'Remove Transitions on Selected Clips' },
     { type: 'custom', id: 'move-selected-clips-up', name: 'Move Selected Clips Up as Group', moveMode: 'group' },
@@ -15,7 +20,24 @@
     { type: 'custom', id: 'move-selected-clips-down', name: 'Move Selected Clips Down Individually', moveMode: 'individual' },
     { type: 'custom', id: 'pull-group-in', name: 'Pull Group In to Playhead' },
     { type: 'custom', id: 'pull-group-out', name: 'Pull Group Out to Playhead' },
-    { type: 'custom', id: 'dump-qe-api', name: 'Diagnostic: Dump QE + DOM API' },
+    { type: 'custom', id: 'retract-speed-in-to-playhead', name: 'Retract Speed In to Playhead' },
+    { type: 'custom', id: 'retract-speed-out-to-playhead', name: 'Retract Speed Out to Playhead' },
+    { type: 'custom', id: 'undo-last-prfx-action', name: 'Undo Last PR FX Action (Any)' },
+    { type: 'custom', id: 'undo-last-arrange', name: 'Undo Last PR FX Arrange Action' },
+    { type: 'custom', id: 'redo-last-arrange', name: 'Redo Last PR FX Arrange Action' },
+    { type: 'custom', id: 'perfect-pitch', name: 'Perfect Pitch (Correct Speed Transposition)' },
+    { type: 'custom', id: 'place-source-clip', name: 'Place Source Monitor Clip at Playhead' },
+    { type: 'custom', id: 'place-bin-clips', name: 'Place Bin Clips at Playhead in Row' },
+    { type: 'custom', id: 'place-bin-clips-column', name: 'Place Bin Clips at Playhead in Column' },
+    { type: 'custom', id: 'replace-from-bin', name: 'Replace Selected Clips from Bin' },
+    { type: 'custom', id: 'bulk-replace-preview', name: 'Bulk Replace — Dry Run (no changes)' },
+    { type: 'custom', id: 'bulk-replace-by-name', name: 'Bulk Replace from Bin by Name' },
+    { type: 'custom', id: 'queue-cuts-to-ame', name: 'Queue Cuts to Media Encoder' },
+    { type: 'custom', id: 'trim-in-to-playhead', name: 'Trim In to Playhead' },
+    { type: 'custom', id: 'trim-out-to-playhead', name: 'Trim Out to Playhead' },
+    { type: 'custom', id: 'close-selected-gaps', name: 'Close Gaps Between Selected Clips' },
+    { type: 'custom', id: 'clean-up-track-rows', name: 'Clean Up by Selected' },
+    { type: 'custom', id: 'fill-track-rows-down', name: 'Clean Up by Timeline' },
     { type: 'custom', id: 'snap-tracks-in', name: 'Snap Track Blocks In to Playhead' },
     { type: 'custom', id: 'snap-tracks-out', name: 'Snap Track Blocks Out to Playhead' },
     { type: 'custom', id: 'stagger-ascending', name: 'Stagger Ascending' },
@@ -28,6 +50,12 @@
     { type: 'transition', name: 'Dip To White' }, { type: 'transition', name: 'Film Dissolve' },
     { type: 'audio-transition', name: 'Constant Power' }, { type: 'audio-transition', name: 'Exponential Fade' }
   ];
+  // These iterate over clips and can legitimately take minutes.
+  var LONG_RUNNING_COMMANDS = {
+    'bulk-replace-by-name': true, 'bulk-replace-preview': true, 'replace-from-bin': true,
+    'place-bin-clips': true, 'place-bin-clips-column': true, 'place-source-clip': true, 'queue-cuts-to-ame': true,
+    'dump-qe-api': true, 'inspect-selected-clip': true
+  };
   var functionCommands = commands.filter(function (command) { return command.type === 'custom'; });
   var catalogReady = false;
   var hostResponsive = false;
@@ -66,15 +94,21 @@
   var durationInput = document.getElementById('default-duration');
   var staggerFramesInput = document.getElementById('stagger-frames');
   var staggerGroupInput = document.getElementById('stagger-group');
+  var exportNameInput = document.getElementById('export-name-pattern');
+  var mergeTouchingInput = document.getElementById('merge-touching-source');
+  var nameToleranceInput = document.getElementById('name-tolerance');
   var managerSearch = document.getElementById('command-manager-search');
   var managerTypeFilter = document.getElementById('command-type-filter');
   var managerList = document.getElementById('command-manager-list');
   var managerShortcut = document.getElementById('manager-shortcut');
+  var failureLogButton = document.getElementById('open-failure-log');
+  var failureLogStatus = document.getElementById('failure-log-status');
   var selectedManagerCommand = null;
   var managerAssignmentFilter = 'all';
   var bridgeState = document.getElementById('bridge-state');
   var bridgeDetail = document.getElementById('bridge-detail');
   var catalogHealth = document.getElementById('catalog-health');
+  var kickstartListenerButton = document.getElementById('kickstart-listener');
   var forceReconnectButton = document.getElementById('force-reconnect');
   var commandStatus = document.getElementById('command-status');
   var folderDropZone = document.getElementById('folder-drop-zone');
@@ -83,11 +117,53 @@
   var syncStatus = document.getElementById('sync-status');
   var syncProjectNote = document.getElementById('sync-project-note');
   var lastBridgeCatalogSync = 0;
+  var bridgeOnline = false;
+  var lastBridgePayload = null;
+  var expectedListenerBuild = '';
   var heldCaptureModifiers = { ctrl: false, alt: false, shift: false, meta: false };
   var folderSnapshots = {};
   var syncRunning = false;
   var projectSyncKey = '';
   var projectSyncName = '';
+  var lastPanelErrorMessage = '';
+  var extensionPathCache = '';
+
+  function errorMessage(error) {
+    if (!error) return 'Unknown error';
+    if (error.stack) return String(error.stack);
+    if (error.message) return String(error.message);
+    return String(error);
+  }
+  function rememberPanelError(label, error) {
+    var detail = errorMessage(error);
+    var message = 'Panel ' + label + ': ' + detail;
+    try {
+      var errors = JSON.parse(localStorage.getItem(PANEL_ERROR_STORAGE_KEY) || '[]');
+      errors.push({ at: new Date().toISOString(), label: label, message: detail });
+      while (errors.length > 20) errors.shift();
+      localStorage.setItem(PANEL_ERROR_STORAGE_KEY, JSON.stringify(errors));
+    } catch (_) {}
+    if (message !== lastPanelErrorMessage) {
+      lastPanelErrorMessage = message;
+      try { setStatus(message, true); } catch (_) {}
+    }
+  }
+  function safeInterval(label, task, delay) {
+    return window.setInterval(function () {
+      try { task(); } catch (error) { rememberPanelError(label, error); }
+    }, delay);
+  }
+  function safeRun(label, task) {
+    try { task(); } catch (error) { rememberPanelError(label, error); }
+  }
+
+  window.addEventListener('error', function (event) {
+    rememberPanelError('error', (event && (event.error || event.message)) || 'Unknown error');
+    return true;
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    rememberPanelError('promise rejection', event && event.reason);
+  });
 
   function loadSettings() {
     try {
@@ -97,9 +173,14 @@
       loaded.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(loaded.staggerGroup) || 1)));
       if (Array.isArray(loaded.folderSyncs) && loaded.folderSyncs.length && !loaded.folderSyncsByProject.__legacy__) loaded.folderSyncsByProject.__legacy__ = loaded.folderSyncs;
       delete loaded.folderSyncs;
+      loaded.bindings = (loaded.bindings || []).filter(function (binding) { return !(binding.command && RETIRED_COMMAND_IDS[binding.command.id]); });
       loaded.bindings.forEach(function (binding) {
         if (binding.command.id === 'undo-last-palette-action') binding.command.name = 'Undo Last PR FX Effect Apply';
         if (binding.command.id === 'remove-transitions') binding.command.name = 'Remove Transitions on Selected Clips';
+        if (binding.command.id === 'dump-qe-api') binding.command.name = '[System] Dump QE + DOM API';
+        if (binding.command.id === 'clean-up-track-rows') binding.command.name = 'Clean Up by Selected';
+        if (binding.command.id === 'fill-track-rows-down') binding.command.name = 'Clean Up by Timeline';
+        if (binding.command.id === 'place-bin-clips') binding.command.name = 'Place Bin Clips at Playhead in Row';
         // The former single move command executed in group mode when invoked
         // through a saved shortcut. Preserve that exact behavior while moving
         // the binding onto the new explicit CEP command.
@@ -128,6 +209,9 @@
     durationInput.value = settings.transitionFrames;
     staggerFramesInput.value = settings.staggerFrames;
     staggerGroupInput.value = settings.staggerGroup;
+    if (exportNameInput) exportNameInput.value = settings.exportNamePattern || '{sequence} - {index}';
+    if (mergeTouchingInput) mergeTouchingInput.checked = settings.mergeTouchingSameSource === true;
+    if (nameToleranceInput) nameToleranceInput.value = settings.nameTolerance || 'normalized';
     renderManager();
     renderFolderSyncs();
   }
@@ -163,7 +247,7 @@
     var binding = selectedManagerCommand && bindingFor(selectedManagerCommand);
     document.getElementById('manager-command-name').textContent = selectedManagerCommand ? selectedManagerCommand.name : 'Select a command';
     var selectedType = selectedManagerCommand && (selectedManagerCommand.type === 'custom' ? 'Function' : selectedManagerCommand.type.replace(/-/g, ' '));
-    document.getElementById('manager-command-type').textContent = selectedManagerCommand ? 'Apply this ' + selectedType + ' directly to the current Timeline selection.' : 'Choose an item from the list to assign a Timeline shortcut.';
+    document.getElementById('manager-command-type').textContent = selectedManagerCommand ? 'Apply this ' + selectedType + ' directly to the current Premiere selection.' : 'Choose an item from the list to assign a Premiere shortcut.';
     var typeBadge = document.getElementById('manager-type-badge');
     typeBadge.textContent = selectedType || '—';
     typeBadge.className = 'type-badge' + (selectedManagerCommand ? ' is-visible ' + selectedManagerCommand.type : '');
@@ -173,10 +257,12 @@
     document.getElementById('perform-manager-command').disabled = !selectedManagerCommand;
     document.getElementById('save-manager-shortcut').disabled = !selectedManagerCommand;
     document.getElementById('remove-manager-shortcut').disabled = !binding;
-    catalogHealth.textContent = catalogReady ? commands.length + ' live/cached commands ready' : commands.length + ' fallback commands only';
+    var listenerLabel = (lastBridgePayload && lastBridgePayload.listenerBuild) || readExpectedListenerBuild();
+    catalogHealth.textContent = (catalogReady ? commands.length + ' live/cached commands ready' : commands.length + ' fallback commands only') +
+      (listenerLabel ? ' · listener ' + shortBuild(listenerLabel) : '');
   }
   function syncListenerSettings() {
-    // The native listener reads this file so it can receive a shortcut while the Timeline owns focus.
+    // The native listener reads this file so it can receive shortcuts while Premiere is frontmost.
     try {
       if (typeof require !== 'function') return;
       var fs = require('fs');
@@ -186,14 +272,69 @@
         ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'PR FX Palette')
         : path.join(os.homedir(), 'Library', 'Application Support', 'PR FX Palette');
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings), 'utf8');
+      var target = path.join(dir, 'settings.json');
+      var temp = path.join(dir, 'settings.' + process.pid + '.' + Date.now() + '.tmp');
+      fs.writeFileSync(temp, JSON.stringify(settings), 'utf8');
+      fs.renameSync(temp, target);
     } catch (_) {}
   }
   function nodeModules() {
     if (typeof require !== 'function') return null;
     try { return { fs: require('fs'), path: require('path') }; } catch (_) { return null; }
   }
+  function appSupportDir() {
+    if (typeof require !== 'function') return '';
+    try {
+      var path = require('path');
+      var os = require('os');
+      return process.platform === 'win32'
+        ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'PR FX Palette')
+        : path.join(os.homedir(), 'Library', 'Application Support', 'PR FX Palette');
+    } catch (_) { return ''; }
+  }
+  function failureLogPath() {
+    var dir = appSupportDir();
+    if (!dir || typeof require !== 'function') return '';
+    try { return require('path').join(dir, 'failure-log.jsonl'); } catch (_) { return ''; }
+  }
+  function setFailureLogStatus(message, error) {
+    if (!failureLogStatus) return;
+    failureLogStatus.textContent = message || '';
+    failureLogStatus.style.color = error ? '#ff9f9f' : '#8f8f8f';
+  }
+  function refreshFailureLogStatus() {
+    var logPath = failureLogPath(), fs, text, lines, lastLine, last;
+    if (!logPath || typeof require !== 'function') { setFailureLogStatus('Failure log unavailable in this CEP runtime.', true); return; }
+    try {
+      fs = require('fs');
+      if (!fs.existsSync(logPath)) { setFailureLogStatus('No failures logged yet.'); return; }
+      text = fs.readFileSync(logPath, 'utf8');
+      lines = text.split(/\r?\n/).filter(function (line) { return line.replace(/^\s+|\s+$/g, '').length; });
+      if (!lines.length) { setFailureLogStatus('No failures logged yet.'); return; }
+      lastLine = lines[lines.length - 1];
+      try { last = JSON.parse(lastLine); } catch (_) { last = null; }
+      setFailureLogStatus(lines.length + ' logged failure' + (lines.length === 1 ? '' : 's') + (last && last.at ? ' · last ' + last.at : '') + '.');
+    } catch (error) {
+      setFailureLogStatus('Could not read failure log: ' + (error && error.message ? error.message : error), true);
+    }
+  }
+  function openFailureLog() {
+    var logPath = failureLogPath(), fs, child;
+    if (!logPath || typeof require !== 'function') { setFailureLogStatus('Failure log unavailable in this CEP runtime.', true); return; }
+    try {
+      fs = require('fs');
+      if (!fs.existsSync(logPath)) { setFailureLogStatus('No failures logged yet. Try the failing replace once, then open the log.'); return; }
+      child = require('child_process');
+      if (process.platform === 'darwin') child.execFile('/usr/bin/open', [logPath]);
+      else if (process.platform === 'win32') child.execFile('cmd.exe', ['/c', 'start', '', logPath]);
+      else child.execFile('xdg-open', [logPath]);
+      setFailureLogStatus('Opened ' + logPath + '.');
+    } catch (error) {
+      setFailureLogStatus('Could not open failure log: ' + (error && error.message ? error.message : error), true);
+    }
+  }
   function setSyncStatus(message, error) {
+    if (!syncStatus) return;
     syncStatus.textContent = message || '';
     syncStatus.style.color = error ? '#ff9f9f' : '#a8d7a8';
   }
@@ -215,11 +356,12 @@
         saveSettings();
       }
       if (changed) { folderSnapshots = {}; setSyncStatus('Folder sync is scoped to ' + projectSyncName + '.'); }
-      syncProjectNote.textContent = 'Sync settings for ' + projectSyncName + ' only. Each source folder becomes a same-named top-level Project bin; deleted source files remain offline in the project.';
+      if (syncProjectNote) syncProjectNote.textContent = 'Sync settings for ' + projectSyncName + ' only. Each source folder becomes a same-named top-level Project bin; deleted source files remain offline in the project.';
       renderFolderSyncs();
     });
   }
   function renderFolderSyncs() {
+    if (!folderList) return;
     var folders = activeFolderSyncs();
     folderList.innerHTML = folders.length ? folders.map(function (folder) {
       return '<div class="sync-folder-row" data-sync-path="' + escapeHtml(folder.sourcePath) + '"><div><strong>' + escapeHtml(folder.binName) + '</strong><span>' + escapeHtml(folder.sourcePath) + '</span><small>Top-level Project bin: ' + escapeHtml(folder.binName) + '</small></div><button class="secondary remove-sync-folder" type="button">Stop sync</button></div>';
@@ -307,7 +449,8 @@
     var folders = activeFolderSyncs().slice(), index = 0;
     if (!folders.length) { if (!silent) setSyncStatus('Add a folder first.', true); return; }
     function next() { if (index >= folders.length) return; syncFolderMapping(folders[index++], force, next); }
-    setSyncStatus('Scanning folders…'); next();
+    if (!silent) setSyncStatus('Scanning folders…');
+    next();
   }
   function folderFromFileList(fileList) {
     var modules = nodeModules();
@@ -324,27 +467,39 @@
   function extensionFilesystemPath() {
     // CSInterface can return a file:// URL. ExtendScript's $.evalFile only
     // accepts an operating-system path, so normalize it before every reload.
-    var value = cs.getSystemPath('extension') || '';
+    var value = extensionPathCache || '';
+    try {
+      value = cs.getSystemPath('extension') || extensionPathCache || '';
+    } catch (error) {
+      if (!extensionPathCache) rememberPanelError('extension path lookup', error);
+      return extensionPathCache || '';
+    }
     try { value = decodeURI(value); } catch (_) {}
     value = value.replace(/^file:\/\//, '');
     if (/^\/[A-Za-z]:\//.test(value)) value = value.slice(1);
+    if (value) extensionPathCache = value;
     return value;
   }
   function evalHostFile(path, callback) {
     var expression = "(function(){try{$.evalFile(" + JSON.stringify(path) + ");return '__PRFX_HOST_OK__';}" +
       "catch(error){return '__PRFX_HOST_ERROR__' + error.toString() + ' (line ' + (error.line || '?') + ')';}})()";
-    cs.evalScript(expression, function (result) {
-      var message = String(result || '');
-      if (message.indexOf('__PRFX_HOST_ERROR__') === 0) {
-        callback(message.replace('__PRFX_HOST_ERROR__', ''), true);
-        return;
-      }
-      if (message === 'EvalScript error.') {
-        callback('Premiere could not evaluate ' + path + '.', true);
-        return;
-      }
-      callback('', false);
-    });
+    try {
+      cs.evalScript(expression, function (result) {
+        var message = String(result || '');
+        if (message.indexOf('__PRFX_HOST_ERROR__') === 0) {
+          callback(message.replace('__PRFX_HOST_ERROR__', ''), true);
+          return;
+        }
+        if (message === 'EvalScript error.') {
+          callback('Premiere could not evaluate ' + path + '.', true);
+          return;
+        }
+        callback('', false);
+      });
+    } catch (error) {
+      rememberPanelError('host file evaluation', error);
+      callback('Premiere could not evaluate ' + path + '.', true);
+    }
   }
   function evalPremiere(expression, callback) {
     // A CEP panel's ScriptPath can be discarded by Premiere while the native
@@ -356,20 +511,177 @@
       "if(typeof prfx==='undefined'||prfx.HOST_BUILD!==" + JSON.stringify(PRFX_HOST_BUILD) + "||typeof prfx.apply!=='function'){$.evalFile(" + JSON.stringify(hostPath) + ");}" +
       "return (" + expression + ");" +
       "}catch(error){return 'ERROR: PR FX host load failed: ' + error.toString() + ' (line ' + (error.line || '?') + ')';}})()";
-    cs.evalScript(wrapped, callback);
+    try {
+      cs.evalScript(wrapped, callback);
+    } catch (error) {
+      rememberPanelError('Premiere evalScript', error);
+      callback('EvalScript error.');
+    }
   }
   function dispatchPremiereApply(payload, callback) {
     evalPremiere('prfx.apply(' + JSON.stringify(payload) + ')', callback);
+  }
+  // A stale host is invisible from inside the panel, so ask the host to compare
+  // itself against host.jsx on disk. This is what a whole afternoon of phantom
+  // bugs turned out to be.
+  function checkHostFreshness() {
+    var root = extensionFilesystemPath() || '';
+    evalPremiere('prfx.buildStatus(' + JSON.stringify(root) + ')', function (result) {
+      var info;
+      try { info = JSON.parse(result); } catch (_) { return; }
+      if (!info || !info.onDisk || info.onDisk === info.loaded) return;
+      setStatus('STALE HOST: running ' + info.loaded + ' but host.jsx on disk is ' + info.onDisk +
+        '. Quit Premiere completely and relaunch — reopening the panel is not enough.', true);
+    });
   }
   function reloadHostScript(complete) {
     evalPremiere("typeof prfx !== 'undefined' && prfx.HOST_BUILD===" + JSON.stringify(PRFX_HOST_BUILD) + " && typeof prfx.apply === 'function' ? 'PR FX host loaded.' : 'ERROR: PR FX host did not load.'", function (status) {
       hostResponsive = status !== 'EvalScript error.' && !(status && status.indexOf('ERROR:') === 0);
       if (status === 'EvalScript error.') setStatus('PR FX host did not respond after reload. Use Force reconnect.', true);
       else if (status && status.indexOf('ERROR:') === 0) setStatus(status.replace('ERROR: ', ''), true);
-      else setStatus('PR FX host loaded.');
+      else { setStatus('PR FX host loaded.'); checkHostFreshness(); }
       if (complete) complete();
     });
   }
+  // ---------------------------------------------------------------------
+  // Setup
+  //
+  // Installing by hand meant a terminal, a compiler and two shell scripts. The
+  // panel is already open and already has Node, so it can do all of it except
+  // the Accessibility grant -- macOS requires a human for that one, and no
+  // amount of scripting changes it.
+  // ---------------------------------------------------------------------
+  var setupStatusList = document.getElementById('setup-status');
+  var setupInstallButton = document.getElementById('setup-install');
+  var setupAccessibilityButton = document.getElementById('setup-accessibility');
+  var setupDetail = document.getElementById('setup-detail');
+
+  function nodeChild() { try { return require('child_process'); } catch (_) { return null; } }
+  function nodeOs() { try { return require('os'); } catch (_) { return null; } }
+
+  function listenerAppPath() {
+    var root = extensionFilesystemPath();
+    return root ? root + '/native/build/PR FX Shortcut Listener.app' : '';
+  }
+  function listenerBuildMarkerPath() {
+    var root = extensionFilesystemPath();
+    return root ? root + '/native/build/listener-build.txt' : '';
+  }
+  function launchAgentPath() {
+    var os = nodeOs();
+    return os ? os.homedir() + '/Library/LaunchAgents/com.prfx.shortcut-listener.plist' : '';
+  }
+  function readExpectedListenerBuild() {
+    var node = nodeModules();
+    var marker = listenerBuildMarkerPath();
+    if (!node || !marker) return '';
+    try {
+      expectedListenerBuild = String(node.fs.readFileSync(marker, 'utf8') || '').replace(/^\s+|\s+$/g, '');
+    } catch (_) {
+      expectedListenerBuild = '';
+    }
+    return expectedListenerBuild;
+  }
+  function shortBuild(value) {
+    value = String(value || '');
+    return value.length > 18 ? value.slice(0, 18) : value;
+  }
+  function listenerBuildIsStale(payload) {
+    var expected = readExpectedListenerBuild();
+    if (!expected) return false;
+    return !payload || payload.listenerBuild !== expected;
+  }
+
+  function setSetupCheck(name, ok) {
+    if (!setupStatusList) return;
+    var row = setupStatusList.querySelector('[data-check="' + name + '"]');
+    if (!row) return;
+    row.className = ok ? 'is-ok' : 'is-bad';
+  }
+
+  function refreshSetupStatus() {
+    var node = nodeModules();
+    if (!node) return;
+    var app = listenerAppPath();
+    var agent = launchAgentPath();
+    setSetupCheck('listener', !!(app && node.fs.existsSync(app)));
+    setSetupCheck('autostart', !!(agent && node.fs.existsSync(agent)));
+    setSetupCheck('running', bridgeOnline === true);
+  }
+
+  // Each step reports for itself. A silent installer that half-works is worse
+  // than one that says which part failed.
+  function runSetupStep(command, args, done, timeoutMs) {
+    var child = nodeChild();
+    if (!child) { done('Node is not available in this panel'); return; }
+    try {
+      child.execFile(command, args, { timeout: timeoutMs || 60000 }, function (error) {
+        done(error ? (error.message || String(error)) : '');
+      });
+    } catch (thrown) { done(thrown.message || String(thrown)); }
+  }
+
+  function installListener(complete) {
+    var done = typeof complete === 'function' ? complete : null;
+    var node = nodeModules();
+    var root = extensionFilesystemPath();
+    var app = listenerAppPath();
+    if (!node || !root) {
+      setStatus('Could not locate the PR FX extension folder.', true);
+      if (done) done('Could not locate the PR FX extension folder.');
+      return;
+    }
+    setupInstallButton.disabled = true;
+    setSetupDetail('Installing…');
+
+    var steps = [];
+    if (node.fs.existsSync(root + '/native/build-macos.sh')) {
+      // Repair should produce a fresh listener, not merely confirm that some
+      // older app bundle exists. Otherwise macOS can keep a stale listener alive.
+      steps.push({ label: 'building the current listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
+    }
+    // The app arrives inside the extension rather than as a download, but
+    // clear any quarantine flag anyway or Gatekeeper blocks the first launch.
+    steps.push({ label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true });
+    steps.push({ label: 'installing autostart', command: '/bin/zsh', args: [root + '/native/install-autostart-macos.sh'] });
+    steps.push({ label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 });
+    steps.push({ label: 'starting the listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'] });
+
+    var index = 0;
+    function next() {
+      if (index >= steps.length) {
+        setupInstallButton.disabled = false;
+        setSetupDetail('Installed. Shortcuts arm when Premiere is frontmost; restart Premiere if the running listener is stale.');
+        window.setTimeout(refreshSetupStatus, 1200);
+        if (done) done('');
+        return;
+      }
+      var step = steps[index++];
+      setSetupDetail('Installing — ' + step.label + '…');
+      runSetupStep(step.command, step.args, function (error) {
+        if (error && !step.optional) {
+          setupInstallButton.disabled = false;
+          setSetupDetail('Install stopped while ' + step.label + ': ' + error);
+          refreshSetupStatus();
+          if (done) done('Install stopped while ' + step.label + ': ' + error);
+          return;
+        }
+        next();
+      }, step.timeout);
+    }
+    next();
+  }
+
+  function setSetupDetail(text) { if (setupDetail) setupDetail.textContent = text; }
+
+  if (setupInstallButton) setupInstallButton.addEventListener('click', installListener);
+  if (setupAccessibilityButton) setupAccessibilityButton.addEventListener('click', function () {
+    runSetupStep('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], function (error) {
+      if (error) setSetupDetail('Could not open System Settings: ' + error);
+      else setSetupDetail('Accessibility is optional now. Shortcuts use Premiere-frontmost mode even if macOS reports the listener as untrusted.');
+    });
+  });
+
   function checkBridge() {
     var request = new XMLHttpRequest();
     request.open('GET', 'http://127.0.0.1:27389/health', true);
@@ -379,18 +691,52 @@
       var payload;
       try { payload = request.status === 200 ? JSON.parse(request.responseText) : null; } catch (_) { payload = null; }
       if (!payload) {
+        bridgeOnline = false;
+        lastBridgePayload = null;
+        setSetupCheck('running', false);
         bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Offline';
-        bridgeDetail.textContent = 'The native listener is not running. It should start automatically with Premiere; if it does not, run native/run-macos.sh.';
+        bridgeDetail.textContent = 'The native listener is not running. Use Install / Repair in Setup above.';
         return;
       }
-      if (payload.mode === 'active') {
+      bridgeOnline = true;
+      lastBridgePayload = payload;
+      setSetupCheck('running', true);
+      var expectedBuild = readExpectedListenerBuild();
+      if (listenerBuildIsStale(payload)) {
+        bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Stale listener';
+        bridgeDetail.textContent = payload.listenerBuild
+          ? 'Running listener build ' + shortBuild(payload.listenerBuild) + ' does not match installed build ' + shortBuild(expectedBuild) + '. Use Force reconnect.'
+          : 'The running listener is from an older build and cannot report its version. Use Force reconnect.';
+        catalogHealth.textContent = (Number(payload.catalogCount) || 0) + ' commands in stale listener';
+        return;
+      }
+      var savedBindings = Number(payload.bindings) || 0;
+      var armedBindings = Number(payload.armedBindings);
+      if (isNaN(armedBindings)) armedBindings = savedBindings;
+      var withheldBindings = Number(payload.withheldBindings);
+      if (isNaN(withheldBindings)) withheldBindings = Math.max(0, savedBindings - armedBindings);
+      var shortcutWord = savedBindings === 1 ? 'shortcut' : 'shortcuts';
+      if (payload.accessibilityTrusted === false && payload.accessibilityBypassed !== true && savedBindings > 0 && payload.mode !== 'active') {
+        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Needs Accessibility';
+        bridgeDetail.textContent = 'Ctrl+Space can open the palette, but ' + savedBindings + ' saved command ' + shortcutWord + ' are paused until macOS Accessibility is enabled for PR FX Shortcut Listener.';
+      } else if (payload.mode === 'active') {
         if (hostResponsive) {
           bridgeState.className = 'bridge-state is-active'; bridgeState.innerHTML = '<i></i>Active';
-          bridgeDetail.textContent = 'Timeline/Sequence shortcuts are active with ' + payload.bindings + ' command shortcut' + (payload.bindings === 1 ? '' : 's') + '.';
+          bridgeDetail.textContent = (payload.accessibilityBypassed === true
+            ? 'Premiere-frontmost shortcut mode is active with '
+            : 'Timeline/Sequence shortcuts are active with ') + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + ' armed.'
+            + (payload.accessibilityBypassed === true ? ' Accessibility focus detection is bypassed.' : (payload.accessibilityTrusted === false ? ' Using the saved Timeline position because Accessibility is currently unavailable.' : ''))
+            + (withheldBindings > 0 ? ' ' + withheldBindings + ' shortcut' + (withheldBindings === 1 ? ' is' : 's are') + ' waiting for a confirmed Timeline click.' : '');
         } else {
           bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Host offline';
           bridgeDetail.textContent = 'The native Timeline listener is active, but Premiere’s host script is not responding. Use Force reconnect.';
         }
+      } else if (payload.mode === 'modifier-only') {
+        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Waiting for Timeline';
+        bridgeDetail.textContent = 'Listener is healthy. Ctrl/Option/Cmd command shortcuts are armed: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + '. Shift-only and plain-key shortcuts stay paused until the Timeline/Sequence panel is clicked, so typing in bins is safe. Repair will not change this state.';
+      } else if (payload.mode === 'palette-only') {
+        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Palette only';
+        bridgeDetail.textContent = payload.accessibilityBypassed === true ? 'Ctrl+Space can open the palette while Premiere is frontmost.' : 'Ctrl+Space can open the palette while Premiere is frontmost. Command shortcuts are paused until Accessibility is enabled.';
       } else if (payload.mode === 'paused') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Paused';
         bridgeDetail.textContent = payload.focus || 'Shortcuts activate only while the Timeline/Sequence panel is focused.';
@@ -401,22 +747,32 @@
       if (payload.pendingCommand) {
         bridgeDetail.textContent = 'Waiting for CEP to run “' + payload.pendingCommand + '”.';
       }
+      if (expectedBuild || payload.listenerBuild) {
+        catalogHealth.textContent = (catalogReady ? commands.length + ' live/cached commands ready' : commands.length + ' fallback commands only') +
+          ' · listener ' + shortBuild(payload.listenerBuild || expectedBuild || 'unknown') +
+          (savedBindings ? ' · ' + armedBindings + '/' + savedBindings + ' shortcuts armed' : '');
+      }
       if (catalogReady && Number(payload.catalogCount) !== commands.length && Date.now() - lastBridgeCatalogSync > 900) syncBridgeCatalog();
     };
-    request.ontimeout = request.onerror = function () { bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Offline'; bridgeDetail.textContent = 'The native listener is not responding.'; };
+    request.ontimeout = request.onerror = function () { bridgeOnline = false; lastBridgePayload = null; bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Offline'; bridgeDetail.textContent = 'The native listener is not responding.'; };
     try { request.send(); } catch (_) {}
   }
   function startCommandPolling() {
     // The native listener owns localhost. Poll it from CEP instead of requiring Node in Premiere.
     if (window.__prfxCommandPolling) return;
     window.__prfxCommandPolling = true;
-    window.setInterval(function () {
-      if (window.__prfxApplying) return;
+    window.__prfxCommandPollInFlight = false;
+    safeInterval('command polling', function () {
+      if (window.__prfxApplying || window.__prfxCommandPollInFlight) return;
       var request = new XMLHttpRequest();
       request.open('GET', 'http://127.0.0.1:27389/next', true);
       request.timeout = 1500;
+      window.__prfxCommandPollInFlight = true;
+      function finishPoll() { window.__prfxCommandPollInFlight = false; }
       request.onreadystatechange = function () {
-        if (request.readyState !== 4 || request.status !== 200) return;
+        if (request.readyState !== 4) return;
+        finishPoll();
+        if (request.status !== 200) return;
         try {
           var command = JSON.parse(request.responseText);
           if (!command) return;
@@ -426,9 +782,9 @@
             if (completed) return;
             completed = true;
             window.__prfxApplying = false;
-            setStatus('Premiere did not answer the palette command within 12 seconds. The bridge is ready for another command.', true);
-          }, 12000);
-          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999) });
+            setStatus('Premiere did not answer the palette command in time. It may still be running — check the Timeline before retrying.', true);
+          }, LONG_RUNNING_COMMANDS[command && command.id] ? 600000 : 12000);
+          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized' });
           dispatchPremiereApply(payload, function (result) {
             if (completed) return;
             completed = true;
@@ -442,14 +798,15 @@
             hostResponsive = true;
             setStatus(result || ('Applied ' + command.name + '.'), result && result.indexOf('ERROR:') === 0);
           });
-        } catch (error) { window.__prfxApplying = false; setStatus('Could not dispatch palette command: ' + error.toString(), true); }
+        } catch (error) { window.__prfxApplying = false; rememberPanelError('palette command dispatch', error); }
       };
-      request.ontimeout = request.onerror = function () { if (!window.__prfxApplying) setStatus('The palette bridge did not answer CEP.', true); };
-      try { request.send(); } catch (_) {}
-    }, 180);
+      request.ontimeout = request.onerror = finishPoll;
+      try { request.send(); } catch (error) { finishPoll(); rememberPanelError('command polling send', error); }
+    }, 250);
   }
   function syncPremiereCatalog(complete) {
-    evalPremiere('prfx.getCatalog()', function (result) {
+    var extensionRoot = extensionFilesystemPath() || '';
+    evalPremiere('prfx.getCatalog(' + JSON.stringify(extensionRoot) + ')', function (result) {
       if (result === 'EvalScript error.') {
         hostResponsive = false;
         var noResponse = 'Premiere host script did not respond.';
@@ -499,39 +856,142 @@
       lastBridgeCatalogSync = Date.now();
     } catch (_) {}
   }
+  function restartNativeListener(complete) {
+    var node = nodeModules();
+    var root = extensionFilesystemPath();
+    var app = listenerAppPath();
+    if (!node || !root || !app) { complete('Could not locate the native listener app.'); return; }
+    if (!node.fs.existsSync(app)) { complete('Native listener is not built yet. Use Install / Repair first.'); return; }
+    var steps = [
+      { label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true },
+      { label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 },
+      { label: 'starting current listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'], timeout: 10000 }
+    ];
+    var index = 0;
+    function next() {
+      if (index >= steps.length) {
+        window.setTimeout(function () {
+          readExpectedListenerBuild();
+          checkBridge();
+          complete('');
+        }, 1200);
+        return;
+      }
+      var step = steps[index++];
+      setStatus('Restarting listener — ' + step.label + '…');
+      runSetupStep(step.command, step.args, function (error) {
+        if (error && !step.optional) { complete('Listener restart stopped while ' + step.label + ': ' + error); return; }
+        next();
+      }, step.timeout);
+    }
+    next();
+  }
   function forceReconnectHost() {
     var root = extensionFilesystemPath();
     if (!root) { setStatus('Could not locate the PR FX extension folder.', true); return; }
+    var staleListener = listenerBuildIsStale(lastBridgePayload);
+    var restartFirst = staleListener || !bridgeOnline;
     var finished = false;
     forceReconnectButton.disabled = true;
-    setStatus('Forcing Premiere host reload and catalog scan…');
-    var watchdog = window.setTimeout(function () {
-      if (finished) return;
-      finished = true;
-      hostResponsive = false;
-      forceReconnectButton.disabled = false;
-      setStatus('Premiere’s scripting engine is not responding. Save the project and restart Premiere once; the last complete catalog will be preserved.', true);
-    }, 8000);
-    evalHostFile(root + '/jsx/host.jsx', function (message, failed) {
-      if (finished) return;
-      if (failed) {
-        finished = true;
-        hostResponsive = false;
-        window.clearTimeout(watchdog);
-        forceReconnectButton.disabled = false;
-        setStatus('Host reload failed: ' + message, true);
-        return;
-      }
-      syncPremiereCatalog(function (ok, detail) {
+    function reconnectHost() {
+      setStatus('Forcing Premiere host reload and catalog scan…');
+      var watchdog = window.setTimeout(function () {
         if (finished) return;
         finished = true;
-        window.clearTimeout(watchdog);
+        hostResponsive = false;
         forceReconnectButton.disabled = false;
-        if (ok) {
-          hostResponsive = true;
-          setStatus('Host reconnected. ' + detail);
-          checkBridge();
-        } else setStatus(detail + ' If Force reconnect cannot recover it, save and restart Premiere once.', true);
+        setStatus('Premiere’s scripting engine is not responding. Save the project and restart Premiere once; the last complete catalog will be preserved.', true);
+      }, 8000);
+      evalHostFile(root + '/jsx/host.jsx', function (message, failed) {
+        if (finished) return;
+        if (failed) {
+          finished = true;
+          hostResponsive = false;
+          window.clearTimeout(watchdog);
+          forceReconnectButton.disabled = false;
+          setStatus('Host reload failed: ' + message, true);
+          return;
+        }
+        syncPremiereCatalog(function (ok, detail) {
+          if (finished) return;
+          finished = true;
+          window.clearTimeout(watchdog);
+          forceReconnectButton.disabled = false;
+          if (ok) {
+            hostResponsive = true;
+            setStatus('Host reconnected. ' + detail);
+            checkBridge();
+          } else setStatus(detail + ' If Force reconnect cannot recover it, save and restart Premiere once.', true);
+        });
+      });
+    }
+    if (restartFirst) {
+      setStatus(staleListener ? 'Running listener is stale. Restarting it…' : 'Listener is offline. Starting it…');
+      restartNativeListener(function (error) {
+        if (finished) return;
+        if (error) {
+          finished = true;
+          forceReconnectButton.disabled = false;
+          setStatus(error, true);
+          return;
+        }
+        reconnectHost();
+      });
+    } else {
+      reconnectHost();
+    }
+  }
+  function setReconnectButtonsDisabled(disabled) {
+    if (kickstartListenerButton) kickstartListenerButton.disabled = disabled;
+    if (forceReconnectButton) forceReconnectButton.disabled = disabled;
+  }
+  function kickstartBridge() {
+    var root = extensionFilesystemPath();
+    if (!root) { setStatus('Could not locate the PR FX extension folder.', true); return; }
+    if (lastBridgePayload && lastBridgePayload.mode === 'modifier-only' && !listenerBuildIsStale(lastBridgePayload)) {
+      setStatus('Listener is healthy. Click the Timeline/Sequence panel once to arm Shift-only and plain-key shortcuts; Repair will not change this safe mode.');
+      checkBridge();
+      return;
+    }
+    setReconnectButtonsDisabled(true);
+    setStatus('Kickstarting PR FX — repairing listener, then reloading Premiere host…');
+    setSetupDetail('Kickstart: repairing the native listener…');
+    installListener(function (installError) {
+      if (installError) {
+        setReconnectButtonsDisabled(false);
+        setStatus('Kickstart stopped: ' + installError, true);
+        refreshSetupStatus();
+        return;
+      }
+      var finished = false;
+      setSetupDetail('Kickstart: reloading Premiere host and rebuilding the command catalog…');
+      function finish(message, failed) {
+        if (finished) return;
+        finished = true;
+        setReconnectButtonsDisabled(false);
+        setStatus(message, failed);
+        refreshSetupStatus();
+        checkBridge();
+      }
+      var watchdog = window.setTimeout(function () {
+        finish('Kickstart started the listener, but Premiere did not finish the host/catalog reload. Save and restart Premiere if the catalog still looks wrong.', true);
+      }, 15000);
+      evalHostFile(root + '/jsx/host.jsx', function (message, failed) {
+        if (finished) return;
+        if (failed) {
+          window.clearTimeout(watchdog);
+          hostResponsive = false;
+          finish('Kickstart could not reload Premiere host: ' + message, true);
+          return;
+        }
+        syncPremiereCatalog(function (ok, detail) {
+          if (finished) return;
+          window.clearTimeout(watchdog);
+          syncListenerSettings();
+          syncBridgeCatalog();
+          hostResponsive = ok;
+          finish(ok ? 'Kickstart complete. ' + detail : 'Kickstart started the listener, but catalog reload failed: ' + detail, !ok);
+        });
       });
     });
   }
@@ -595,10 +1055,9 @@
       setStatus('Use Space, a letter, or a number with modifiers.', true);
       return;
     }
-    // Modifier-less keys are allowed: the listener only arms shortcuts while the
-    // Timeline panel is the active panel, so a bare key cannot reach a rename or
-    // search field elsewhere in Premiere. It has no margin if panel detection
-    // regresses though, so say so. Shift does not count: Shift+W still types a W.
+    // Modifier-less keys are allowed in the Accessibility-free mode. They can
+    // fire anywhere Premiere is frontmost, so the UI needs to be honest about
+    // that instead of promising Timeline-only protection.
     var bareKey = !candidate.ctrl && !candidate.alt && !candidate.meta;
     var shortcut = captureShortcut(event, target);
     if (!shortcut) {
@@ -612,7 +1071,7 @@
       shortcutInput.blur();
     } else {
       setStatus(bareKey
-        ? 'Shortcut captured. Click Save shortcut. Plain keys work only while the Timeline is the active panel.'
+        ? 'Shortcut captured. Click Save shortcut. Plain/Shift-only keys fire while Premiere is frontmost.'
         : 'Shortcut captured. Click Save shortcut.');
     }
     heldCaptureModifiers = { ctrl: false, alt: false, shift: false, meta: false };
@@ -644,10 +1103,13 @@
     activeIndex = Math.max(0, Math.min(activeIndex, available.length - 1));
     list.innerHTML = available.length ? available.map(function (command, i) {
       var kind = command.type === 'custom' || command.type === 'move-mode' || command.type === 'stagger-frames' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
-      return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind">' + kind + '</span></button>';
+      return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind ' + escapeHtml(kind) + '">' + kind + '</span></button>';
     }).join('') : '<p class="muted">No matching command.</p>';
   }
-  function escapeHtml(value) { return value.replace(/[&<>'"]/g, function (char) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]; }); }
+  function escapeHtml(value) {
+    value = value === undefined || value === null ? '' : String(value);
+    return value.replace(/[&<>'"]/g, function (char) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]; });
+  }
   function openPalette() { palette.classList.remove('is-hidden'); hideApplyMenu(); search.value = ''; activeIndex = 0; renderCommands(); window.setTimeout(function () { search.focus(); }, 0); }
   function closePalette() { hideApplyMenu(); palette.classList.add('is-hidden'); }
   function isTransition(command) { return command && (command.type === 'transition' || command.type === 'audio-transition'); }
@@ -711,7 +1173,7 @@
       settled = true;
       if (watchdog) window.clearTimeout(watchdog);
       if (result === 'EvalScript error.') { setStatus('Premiere host script did not respond. Reopen the PR FX panel to reload it.', true); return; }
-      if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); return; }
+      if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); refreshFailureLogStatus(); return; }
       setStatus(result || 'Applied ' + command.name + '.');
       if (keepPaletteOpen) {
         if (pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand) { hideApplyMenu(); renderCommands(); }
@@ -719,20 +1181,27 @@
       } else closePalette();
     }
     setStatus('Applying ' + command.name + '…');
-    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999) });
+    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized' });
+    // Bulk replace and the place functions work clip by clip and legitimately
+    // run for minutes. Timing them out at 12s reports failure for work that is
+    // still running and will complete.
+    var timeoutMs = LONG_RUNNING_COMMANDS[command.id] ? 600000 : 12000;
     watchdog = window.setTimeout(function () {
-      finish('ERROR: Premiere did not finish ' + command.name + ' within 12 seconds. You can try another command after this timeout.');
-    }, 12000);
+      finish('ERROR: Premiere did not finish ' + command.name + ' within ' + Math.round(timeoutMs / 1000) +
+        ' seconds. It may still be running — check the Timeline before retrying.');
+    }, timeoutMs);
     dispatchPremiereApply(payload, finish);
   }
   function setStatus(message, error) {
     var color = error ? '#ff9f9f' : '#a8d7a8';
     var status = document.getElementById('status');
-    status.textContent = message; status.style.color = color;
-    commandStatus.textContent = message; commandStatus.style.color = color;
+    if (status) { status.textContent = message; status.style.color = color; }
+    if (commandStatus) { commandStatus.textContent = message; commandStatus.style.color = color; }
   }
 
   document.getElementById('open-palette').addEventListener('click', openPalette);
+  if (failureLogButton) failureLogButton.addEventListener('click', openFailureLog);
+  if (kickstartListenerButton) kickstartListenerButton.addEventListener('click', kickstartBridge);
   forceReconnectButton.addEventListener('click', forceReconnectHost);
   document.getElementById('reset-shortcut').addEventListener('click', function () { settings.shortcut = Object.assign({}, DEFAULTS.shortcut); saveSettings(); });
   managerSearch.addEventListener('input', renderManager);
@@ -803,6 +1272,19 @@
   durationInput.addEventListener('change', function () { settings.transitionFrames = Math.max(1, Math.min(300, Number(durationInput.value) || 30)); saveSettings(); });
   staggerFramesInput.addEventListener('change', function () { settings.staggerFrames = Math.max(0, Math.min(9999, Math.round(Number(staggerFramesInput.value) || 0))); saveSettings(); });
   staggerGroupInput.addEventListener('change', function () { settings.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(staggerGroupInput.value) || 1))); saveSettings(); });
+  if (nameToleranceInput) nameToleranceInput.addEventListener('change', function () {
+    settings.nameTolerance = nameToleranceInput.value || 'normalized';
+    saveSettings();
+  });
+  if (mergeTouchingInput) mergeTouchingInput.addEventListener('change', function () {
+    settings.mergeTouchingSameSource = mergeTouchingInput.checked === true;
+    saveSettings();
+  });
+  if (exportNameInput) exportNameInput.addEventListener('change', function () {
+    settings.exportNamePattern = String(exportNameInput.value || '').replace(/^\s+|\s+$/g, '') || '{sequence} - {index}';
+    exportNameInput.value = settings.exportNamePattern;
+    saveSettings();
+  });
   search.addEventListener('input', function () { if (!pendingTransitionCommand && !pendingMoveCommand) activeIndex = 0; renderCommands(); });
   list.addEventListener('click', function (event) {
     var target = event.target.closest('.command'); if (!target) return;
@@ -837,13 +1319,20 @@
     }
   });
 
-  updateShortcutUI();
-  syncListenerSettings();
-  startCommandPolling();
-  checkBridge();
-  window.setInterval(checkBridge, 2000);
-  reloadHostScript(function () { syncPremiereCatalog(); loadProjectSyncContext(); });
-  window.setInterval(syncPremiereCatalog, 30000);
-  window.setInterval(loadProjectSyncContext, 7500);
-  window.setInterval(function () { syncAllFolders(false, true); }, 5000);
+  safeRun('initial UI render', updateShortcutUI);
+  safeRun('listener settings sync', syncListenerSettings);
+  safeRun('failure log status', refreshFailureLogStatus);
+  safeRun('command polling startup', startCommandPolling);
+  safeRun('setup status refresh', refreshSetupStatus);
+  safeRun('initial bridge check', checkBridge);
+  safeInterval('bridge check', checkBridge, 2000);
+  safeRun('host reload', function () {
+    reloadHostScript(function () {
+      safeRun('initial catalog sync', syncPremiereCatalog);
+      safeRun('initial project sync context', loadProjectSyncContext);
+    });
+  });
+  safeInterval('catalog sync', syncPremiereCatalog, 30000);
+  safeInterval('project sync context', loadProjectSyncContext, 7500);
+  safeInterval('folder sync', function () { syncAllFolders(false, true); }, AUTO_FOLDER_SYNC_INTERVAL_MS);
 }());

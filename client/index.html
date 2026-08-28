@@ -20,7 +20,7 @@
         <div class="commands-browser">
           <div class="browser-toolbar"><input id="command-manager-search" type="search" placeholder="Search commands…" autocomplete="off"><span id="command-count" class="command-count"></span></div>
           <div class="manager-filters" aria-label="Command filters">
-            <label class="filter-select" for="command-type-filter"><span>Type</span><select id="command-type-filter"><option value="all">All types</option><option value="effect">Effects</option><option value="transition">Transitions</option><option value="audio-transition">Audio transitions</option><option value="custom">Functions</option></select></label>
+            <label class="filter-select" for="command-type-filter"><span>Type</span><select id="command-type-filter"><option value="all">All types</option><option value="preset">Presets</option><option value="effect">Effects</option><option value="transition">Transitions</option><option value="audio-transition">Audio transitions</option><option value="custom">Functions</option></select></label>
             <div class="filter-segmented" role="group" aria-label="Shortcut assignment"><button class="is-active" type="button" data-assignment-filter="all" aria-pressed="true">All</button><button type="button" data-assignment-filter="assigned" aria-pressed="false">Assigned</button><button type="button" data-assignment-filter="unassigned" aria-pressed="false">Unassigned</button></div>
           </div>
           <div class="command-columns"><span>Command</span><span>Type</span><span>Shortcut</span></div>
@@ -29,31 +29,70 @@
         <aside class="command-editor">
           <p class="eyebrow">SELECTED COMMAND</p>
           <div class="editor-heading"><h2 id="manager-command-name">Select a command</h2><span id="manager-type-badge" class="type-badge">—</span></div>
-          <p id="manager-command-type" class="editor-copy">Choose an item from the list to assign a Timeline shortcut.</p>
+          <p id="manager-command-type" class="editor-copy">Choose an item from the list to assign a Premiere shortcut.</p>
           <div class="shortcut-capture"><label for="manager-shortcut">Shortcut</label><input id="manager-shortcut" type="text" placeholder="Press a key combination" autocomplete="off" spellcheck="false" disabled></div>
           <div class="editor-actions"><button id="perform-manager-command" class="secondary" type="button" disabled>Perform</button><button id="save-manager-shortcut" class="primary" type="button" disabled>Save shortcut</button><button id="remove-manager-shortcut" class="secondary" type="button" disabled>Remove</button></div>
           <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
-          <p class="editor-note">Shortcuts work while the Timeline has focus.</p>
+          <div class="failure-log-actions"><button id="open-failure-log" class="secondary" type="button">Open failure log</button><span id="failure-log-status">No failures logged yet.</span></div>
+          <p class="editor-note">Shortcuts work while Premiere is frontmost.</p>
         </aside>
       </div>
     </section>
 
     <section id="general-view" class="settings-view is-hidden">
-      <section class="card">
-        <label for="shortcut">Open FX palette</label><div class="shortcut-row"><input id="shortcut" type="text" autocomplete="off" spellcheck="false" aria-describedby="shortcut-help"><button id="reset-shortcut" class="secondary" type="button">Reset</button></div>
-        <p id="shortcut-help" class="help">Click the field, then press a key combination. Default: Ctrl + Space.</p>
+      <section class="general-section tool-health-section">
+        <p class="eyebrow">TOOL STATUS</p>
+        <h2>Launch, bridge, and recovery</h2>
+        <section class="card setup-card">
+          <span class="card-title">Setup</span>
+          <ul id="setup-status" class="setup-status">
+            <li data-check="listener"><i></i><span>Shortcut listener installed</span></li>
+            <li data-check="autostart"><i></i><span>Auto-start guard installed</span></li>
+            <li data-check="running"><i></i><span>Listener running</span></li>
+          </ul>
+          <div class="setup-actions">
+            <button id="setup-install" class="primary" type="button">Install / Repair</button>
+            <button id="setup-accessibility" class="secondary" type="button">Open Accessibility settings</button>
+          </div>
+          <p id="setup-detail" class="help">Accessibility focus detection is bypassed. PR FX now arms shortcuts when Premiere is frontmost; Install / Repair keeps the last working listener until a new build is complete.</p>
+        </section>
+        <section class="card bridge-card" aria-live="polite"><div class="bridge-heading"><span>Bridge status</span><span id="bridge-state" class="bridge-state is-checking"><i></i>Checking…</span></div><p id="bridge-detail" class="help">Checking the native Timeline shortcut listener.</p><div class="bridge-actions"><button id="kickstart-listener" class="secondary" type="button">Kickstart / Repair</button><button id="force-reconnect" class="secondary" type="button">Force reconnect</button><span id="catalog-health">Catalog not checked</span></div></section>
+        <footer class="tool-action-footer"><button id="open-palette" class="primary" type="button">Open FX palette</button><span id="status" role="status" aria-live="polite"></span></footer>
+        <section class="card">
+          <label for="shortcut">Open FX palette shortcut</label><div class="shortcut-row"><input id="shortcut" type="text" autocomplete="off" spellcheck="false" aria-describedby="shortcut-help"><button id="reset-shortcut" class="secondary" type="button">Reset</button></div>
+          <p id="shortcut-help" class="help">Click the field, then press a key combination. Default: Ctrl + Space.</p>
+        </section>
       </section>
-      <section class="card"><label for="default-duration">Default transition duration</label><div class="duration-control"><input id="default-duration" type="number" min="1" max="300" step="1" value="30"><span>frames</span></div></section>
-      <section class="card">
-        <span class="card-title">Stagger timing</span>
-        <div class="stagger-controls">
-          <label for="stagger-frames"><span>Interval</span><span class="number-with-unit"><input id="stagger-frames" type="number" min="0" max="9999" step="1" value="5"><small>frames</small></span></label>
-          <label for="stagger-group"><span>Group size</span><input id="stagger-group" type="number" min="1" max="999" step="1" value="1"></label>
-        </div>
-        <p class="help">Ascending starts with lower-numbered tracks; Descending starts with higher-numbered tracks.</p>
+
+      <section class="general-section command-defaults-section">
+        <p class="eyebrow">PREMIERE COMMAND DEFAULTS</p>
+        <h2>Command behavior</h2>
+        <section class="card"><label for="default-duration">Default transition duration</label><div class="duration-control"><input id="default-duration" type="number" min="1" max="300" step="1" value="30"><span>frames</span></div></section>
+        <section class="card">
+          <span class="card-title">Stagger timing</span>
+          <div class="stagger-controls">
+            <label for="stagger-frames"><span>Interval</span><span class="number-with-unit"><input id="stagger-frames" type="number" min="0" max="9999" step="1" value="5"><small>frames</small></span></label>
+            <label for="stagger-group"><span>Group size</span><input id="stagger-group" type="number" min="1" max="999" step="1" value="1"></label>
+          </div>
+          <p class="help">Ascending starts with lower-numbered tracks; Descending starts with higher-numbered tracks.</p>
+        </section>
+        <section class="card">
+          <label for="export-name-pattern">Media Encoder file naming</label>
+          <input id="export-name-pattern" type="text" value="{sequence} - {index}" spellcheck="false">
+          <p class="help">Tokens: <code>{sequence}</code>, <code>{index}</code>, <code>{clip}</code>. Illegal filename characters are replaced.</p>
+          <label for="merge-touching-source" class="checkbox-row"><input id="merge-touching-source" type="checkbox"><span>Touching clips from the same source become one job</span></label>
+          <p class="help">Overlapping clips always merge. Only video and image clips are queued — adjustment layers, mattes and graphics are skipped.</p>
+        </section>
+        <section class="card">
+          <label for="name-tolerance">Bulk replace name matching</label>
+          <select id="name-tolerance">
+            <option value="exact">Strict — shot key and variant must match</option>
+            <option value="normalized">Normal — variant ignores case and punctuation</option>
+            <option value="fuzzy">Loose — also allow near-spellings and a missing variant</option>
+          </select>
+          <p class="help">Names are read as <code>K1 Beige O1</code> → key <code>K1</code>, variant <code>Beige</code>, option <code>1</code>. The key must always match exactly; the option is lenient. Stills are never swapped for video. A clip is only replaced when one file wins clearly — run the dry run first.</p>
+        </section>
       </section>
-      <section class="card bridge-card" aria-live="polite"><div class="bridge-heading"><span>Bridge status</span><span id="bridge-state" class="bridge-state is-checking"><i></i>Checking…</span></div><p id="bridge-detail" class="help">Checking the native Timeline shortcut listener.</p><div class="bridge-actions"><button id="force-reconnect" class="secondary" type="button">Force reconnect</button><span id="catalog-health">Catalog not checked</span></div></section>
-      <footer><button id="open-palette" class="primary" type="button">Open FX palette</button><span id="status" role="status" aria-live="polite"></span></footer>
     </section>
 
     <section id="sync-view" class="settings-view is-hidden">

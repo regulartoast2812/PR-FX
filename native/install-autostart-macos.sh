@@ -22,4 +22,4 @@ launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$UID" "$TARGET"
 launchctl kickstart -k "gui/$UID/$LABEL"
 
-print "Installed PR FX automatic listener. It will start the palette bridge whenever Premiere opens."
+print "Installed PR FX automatic listener guard."

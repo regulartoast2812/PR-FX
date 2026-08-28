@@ -18,6 +18,10 @@ Pressing **Enter** applies the highlighted item to every compatible selected Tim
 
 The palette lists PR FX's own functions alongside every video effect, video transition, and audio transition your Premiere installation actually has. The settings panel reads that catalog from Premiere and syncs it to the listener, which caches it so the palette still opens before Premiere has connected. PR FX functions are defined in `client/app.js`; effects and transitions come from Premiere and need no configuration.
 
+## Major features
+
+- [Replace Selected Clips from Bin](docs/replace-selected-clips-from-bin.md) — swaps selected Timeline clips to the selected Project/Bin item while preserving timeline position, source In/Out, speed, effects, linked audio/video, and recoverable transitions.
+
 ## Why there is a listener
 
 Premiere does not let CEP or UXP extensions register a shortcut in the Timeline context. The included **PR FX Shortcut Listener** uses the same essential architecture as Excalibur’s companion shortcut listener: it owns the hotkey at the operating-system level but only responds while **Adobe Premiere Pro** is frontmost. This means Ctrl + Space works while the Timeline has focus—without first focusing a CEP panel.

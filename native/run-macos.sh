@@ -3,6 +3,6 @@ set -euo pipefail
 
 script_dir="${0:A:h}"
 "$script_dir/build-macos.sh"
-osascript -e 'tell application id "com.prfx.shortcut-listener" to quit' >/dev/null 2>&1 || true
+/bin/zsh "$script_dir/stop-listener-macos.sh"
 sleep 0.4
-open "$script_dir/build/PR FX Shortcut Listener.app"
+/bin/zsh "$script_dir/start-listener-macos.sh"
