@@ -52,6 +52,8 @@ private struct Command: Codable {
 private let prfxFunctionCommands = [
     Command(type: "custom", name: "[System] Dump QE + DOM API", transitionFrames: 30, id: "dump-qe-api"),
     Command(type: "custom", name: "[System] Inspect Selected Clip", transitionFrames: 30, id: "inspect-selected-clip"),
+    Command(type: "custom", name: "[System] Failure Report", transitionFrames: 30, id: "failure-report"),
+    Command(type: "custom", name: "[System] Clear Failure Ledger", transitionFrames: 30, id: "clear-failure-ledger"),
     Command(type: "custom", name: "Undo Last PR FX Effect Apply", transitionFrames: 30, id: "undo-last-palette-action"),
     Command(type: "custom", name: "Remove Transitions on Selected Clips", transitionFrames: 30, id: "remove-transitions"),
     Command(type: "custom", name: "Move Selected Clips Up", transitionFrames: 30, id: "move-selected-clips-up"),

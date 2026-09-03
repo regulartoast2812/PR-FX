@@ -161,6 +161,24 @@ non-enumerable methods, so `<not found>` in the dump means nothing on its own.
 Only `typeof app.thing` settles it. The dump has a `typeof probes` section for
 exactly this; add to it rather than trusting the signature lists.
 
+### Staging: where a written clip actually lands
+
+`overwriteClip` routes by **track targeting**, not by the track object you
+address. Looking for the new clip on the staging track therefore finds nothing
+whenever targeting disagrees — audio-only files were the obvious case, but it
+also made placement position depend on whatever the editor had targeted.
+
+`prfx.stageOneProjectItem` diffs the whole sequence before and after the write
+(`trackContentsMap` / `newClipsSince`) and returns `fromTrackIndex`, so callers
+move the clip from where it really is.
+
+A source can publish **several** audio clips — dual mono, split stereo, 5.1.
+`staged.audioClips` carries all of them and `prfx.placeStagedAudioClips` moves
+each onto a free lane. **Untested:** no multichannel footage was available in
+the project this was built against, so the multi-clip path is written and
+reviewed but has never actually run. Replace's multichannel path is also
+unverified.
+
 ### Bulk replace: the matching ladder
 
 Editors name iterations by hand, so matching is a ladder of rules. Each rung is
@@ -259,7 +277,10 @@ source start later.
   A clip someone trimmed in the Source monitor lands short, which silently
   breaks Replace (the replacement cannot fill the edit). `prfx.stageOneProjectItem`
   widens the range to the full media for the write and restores it immediately.
-  Setting an over-long out point is safe — Premiere clamps it to the media end.
+  **Premiere does NOT reliably clamp an over-long out point.** Widening to a
+  fixed 36000s produced ten-hour clips running far past the media (hatched in
+  the Timeline). Only Replace widens, because it trims to the edit afterwards;
+  the Place functions pass `keepRange` and use the bin item's marked in/out.
 - Setting `projectItem.setInPoint/setOutPoint` to write a trimmed clip **mutates
   the bin item** — always restore it afterwards.
 - QE `getTransitionAt()` returns empty spans with type `"Empty"`; filter them or

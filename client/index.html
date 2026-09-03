@@ -43,7 +43,15 @@
       <section class="general-section tool-health-section">
         <p class="eyebrow">TOOL STATUS</p>
         <h2>Launch, bridge, and recovery</h2>
-        <section class="card setup-card">
+        <section class="card">
+        <label for="failure-policy">When a function reports a failure</label>
+        <select id="failure-policy">
+          <option value="rollback">Roll back — undo everything the function did</option>
+          <option value="keep">Keep changes — leave them and let me judge</option>
+        </select>
+        <p class="help">Verification is strict, so it occasionally cries wolf on work that actually landed. <strong>Keep</strong> leaves the result on the Timeline; <em>Undo Last PR FX Action (Any)</em> still reverts it if the failure was real.</p>
+      </section>
+      <section class="card setup-card">
           <span class="card-title">Setup</span>
           <ul id="setup-status" class="setup-status">
             <li data-check="listener"><i></i><span>Shortcut listener installed</span></li>

@@ -6,12 +6,14 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260828-video-replace-fallback';
+  var PRFX_HOST_BUILD = '20260903-place-make-room-1';
   var RETIRED_COMMAND_IDS = { 'stretch-speed-to-playhead': true };
-  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', bindings: [], folderSyncsByProject: {} };
+  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', bindings: [], folderSyncsByProject: {} };
   var commands = [
     { type: 'custom', id: 'dump-qe-api', name: '[System] Dump QE + DOM API' },
     { type: 'custom', id: 'inspect-selected-clip', name: '[System] Inspect Selected Clip' },
+    { type: 'custom', id: 'failure-report', name: '[System] Failure Report' },
+    { type: 'custom', id: 'clear-failure-ledger', name: '[System] Clear Failure Ledger' },
     { type: 'custom', id: 'undo-last-palette-action', name: 'Undo Last PR FX Effect Apply' },
     { type: 'custom', id: 'remove-transitions', name: 'Remove Transitions on Selected Clips' },
     { type: 'custom', id: 'move-selected-clips-up', name: 'Move Selected Clips Up as Group', moveMode: 'group' },
@@ -97,6 +99,7 @@
   var exportNameInput = document.getElementById('export-name-pattern');
   var mergeTouchingInput = document.getElementById('merge-touching-source');
   var nameToleranceInput = document.getElementById('name-tolerance');
+  var failurePolicyInput = document.getElementById('failure-policy');
   var managerSearch = document.getElementById('command-manager-search');
   var managerTypeFilter = document.getElementById('command-type-filter');
   var managerList = document.getElementById('command-manager-list');
@@ -212,6 +215,7 @@
     if (exportNameInput) exportNameInput.value = settings.exportNamePattern || '{sequence} - {index}';
     if (mergeTouchingInput) mergeTouchingInput.checked = settings.mergeTouchingSameSource === true;
     if (nameToleranceInput) nameToleranceInput.value = settings.nameTolerance || 'normalized';
+    if (failurePolicyInput) failurePolicyInput.value = settings.failurePolicy || 'rollback';
     renderManager();
     renderFolderSyncs();
   }
@@ -784,7 +788,7 @@
             window.__prfxApplying = false;
             setStatus('Premiere did not answer the palette command in time. It may still be running — check the Timeline before retrying.', true);
           }, LONG_RUNNING_COMMANDS[command && command.id] ? 600000 : 12000);
-          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized' });
+          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback' });
           dispatchPremiereApply(payload, function (result) {
             if (completed) return;
             completed = true;
@@ -1181,7 +1185,7 @@
       } else closePalette();
     }
     setStatus('Applying ' + command.name + '…');
-    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized' });
+    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback' });
     // Bulk replace and the place functions work clip by clip and legitimately
     // run for minutes. Timing them out at 12s reports failure for work that is
     // still running and will complete.
@@ -1272,6 +1276,10 @@
   durationInput.addEventListener('change', function () { settings.transitionFrames = Math.max(1, Math.min(300, Number(durationInput.value) || 30)); saveSettings(); });
   staggerFramesInput.addEventListener('change', function () { settings.staggerFrames = Math.max(0, Math.min(9999, Math.round(Number(staggerFramesInput.value) || 0))); saveSettings(); });
   staggerGroupInput.addEventListener('change', function () { settings.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(staggerGroupInput.value) || 1))); saveSettings(); });
+  if (failurePolicyInput) failurePolicyInput.addEventListener('change', function () {
+    settings.failurePolicy = failurePolicyInput.value === 'keep' ? 'keep' : 'rollback';
+    saveSettings();
+  });
   if (nameToleranceInput) nameToleranceInput.addEventListener('change', function () {
     settings.nameTolerance = nameToleranceInput.value || 'normalized';
     saveSettings();

@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20260828-video-replace-fallback';
+prfx.HOST_BUILD = '20260903-place-make-room-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -631,6 +631,12 @@ prfx.functions = {
     'bulk-replace-by-name': { run: function (publicSequence, qeSequence, command) {
         return prfx.bulkReplaceByName(publicSequence, qeSequence, (command && command.nameTolerance) || 'normalized');
     } },
+    'failure-report': { needsSequence: false, run: function () {
+        return prfx.failureReport();
+    } },
+    'clear-failure-ledger': { needsSequence: false, run: function () {
+        return prfx.clearFailureLedger();
+    } },
     'inspect-selected-clip': { run: function (publicSequence, qeSequence) {
         return prfx.inspectSelectedClip(publicSequence, qeSequence);
     } },
@@ -697,6 +703,8 @@ prfx.NON_MUTATING_COMMANDS = {
     'dump-qe-api': true,
     'inspect-selected-clip': true,
     'build-status': true,
+    'failure-report': true,
+    'clear-failure-ledger': true,
     'bulk-replace-preview': true,
     'undo-last-arrange': true,
     'redo-last-arrange': true,
@@ -713,10 +721,16 @@ prfx.commandLabel = function (command) {
 prfx.apply = function (payload) {
     var command, before, result, after;
     try { command = JSON.parse(payload); } catch (parseError) { return 'ERROR: PR FX could not read the command.'; }
-    if (command.type === 'custom' && prfx.NON_MUTATING_COMMANDS[String(command.id)]) return prfx.applyCommand(payload);
+    if (command.type === 'custom' && prfx.NON_MUTATING_COMMANDS[String(command.id)]) {
+        result = prfx.applyCommand(payload);
+        prfx.recordOutcome(command, result);
+        return result;
+    }
 
+    prfx.failurePolicy = String(command.failurePolicy || 'rollback');
     before = prfx.undoCheckpoint();
     result = prfx.applyCommand(payload);
+    prfx.recordOutcome(command, result);
     if (typeof result === 'string' && result.indexOf('ERROR:') === 0) return result;
     after = prfx.undoCheckpoint();
     // Only record when Premiere's stack actually moved; a command that changed
@@ -4052,11 +4066,65 @@ prfx.createStagingTracks = function (publicSequence, qeSequence) {
     if (addError) return { ok: false, message: addError };
     live = app.project.activeSequence;
     audioIndex = Number(live.audioTracks.numTracks) - 1;
-    state = { videoIndex: videoIndex, audioIndex: audioIndex };
+    state = { videoIndex: videoIndex, audioIndex: audioIndex, extra: { video: [], audio: [] } };
     if (!prfx.stagingTrackEmpty(live, 'video', videoIndex) || !prfx.stagingTrackEmpty(live, 'audio', audioIndex)) {
         return { ok: false, message: 'the new staging tracks did not come up empty' };
     }
     return { ok: true, tracks: state };
+};
+
+// Placing used to fail outright when every existing track was occupied at the
+// playhead: "there are not enough free video tracks ... Add tracks or move the
+// playhead", and the whole run rolled back. A sequence that has not been set up
+// in advance is the normal case, so placement makes the room it needs.
+//
+// The new track is appended above the staging track, using the same append that
+// createStagingTracks uses -- inserting between tracks renumbers existing clips,
+// appending never does. That leaves the staging indices, which the replace paths
+// also rely on, untouched for the rest of the run. removeStagingTracks then
+// takes the staging track out from under these, so anything recorded above it
+// shifts down one; settleCreatedTrackIndexes applies that before the placed
+// clips are reselected.
+prfx.appendPlacementTrack = function (staging, kind) {
+    var live, qeSequence, before, addError, newIndex;
+    try { app.enableQE(); qeSequence = qe.project.getActiveSequence(); } catch (bindError) { qeSequence = null; }
+    if (!qeSequence) throw new Error('Premiere did not publish the active sequence while adding a ' + kind + ' track');
+    live = app.project.activeSequence;
+    before = Number(kind === 'audio' ? live.audioTracks.numTracks : live.videoTracks.numTracks);
+    addError = prfx.addMoveDestinationTrack(qeSequence, kind, before, 0);
+    if (addError) throw new Error(addError);
+    newIndex = before;
+    live = app.project.activeSequence;
+    if (!prfx.stagingTrackEmpty(live, kind, newIndex)) {
+        throw new Error('the ' + kind + ' track Premiere added did not come up empty');
+    }
+    staging.extra[kind].push(newIndex);
+    return newIndex;
+};
+
+// The staging lane has to be unusable as a destination without hiding the lanes
+// above it, which is where appended tracks live. Truncating the snapshot to the
+// staging index removed both.
+prfx.maskStagingLanes = function (snapshot, staging) {
+    var blocked = { locked: true, intervals: [] };
+    if (snapshot.tracks.video[staging.tracks.videoIndex]) snapshot.tracks.video[staging.tracks.videoIndex] = blocked;
+    if (snapshot.tracks.audio[staging.tracks.audioIndex]) snapshot.tracks.audio[staging.tracks.audioIndex] = blocked;
+};
+
+prfx.settleCreatedTrackIndexes = function (staging, created) {
+    var i, entry, stagingIndex;
+    for (i = 0; i < created.length; i++) {
+        entry = created[i];
+        stagingIndex = entry.kind === 'audio' ? staging.tracks.audioIndex : staging.tracks.videoIndex;
+        if (entry.trackIndex > stagingIndex) entry.trackIndex--;
+    }
+    return created;
+};
+
+prfx.appendedTrackNote = function (staging) {
+    var total = staging.extra.video.length + staging.extra.audio.length;
+    if (!total) return '';
+    return ' Added ' + total + ' track' + (total === 1 ? '' : 's') + ' to make room.';
 };
 
 prfx.stagingTrackEmpty = function (sequence, kind, index) {
@@ -4107,8 +4175,9 @@ prfx.freeDestinationTrack = function (snapshot, kind, spans) {
 
 prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
     var items = prfx.selectedProjectItems(), placeable = [], i, skipped = 0;
-    var checkpoint, staging, live, playhead, cursor, spans = [], staged = [], clips, clip;
-    var videoTarget, audioTarget, failure = null, moved = 0, snapshot, offset, qeClip, created = [], selectionRanges;
+    var checkpoint, staging, live, playhead, cursor, clip;
+    var videoTarget = null, audioTarget = null, failure = null, snapshot, created = [];
+    var staged, kind, fromIndex, target, span, placedAudio, j;
 
     if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
     for (i = 0; i < items.length; i++) {
@@ -4129,52 +4198,52 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
     }
 
     try {
-        // Write each item onto the staging track at its final timeline position.
-        // The track is empty, so no position on it can collide with anything.
+        // One item at a time: stage it, then move it off, leaving the staging
+        // tracks empty for the next. Batching them onto the video staging track
+        // could not represent an audio-only file at all, so music and voiceover
+        // failed outright.
         for (i = 0; i < placeable.length; i++) {
+            // keepRange: place what the editor marked. Widening is a Replace
+            // concern, and here it produced ten-hour clips running past the media.
+            staged = prfx.stageOneProjectItem(staging.tracks, placeable[i], cursor, true);
+            kind = staged.audioOnly ? 'audio' : 'video';
+            fromIndex = staged.fromTrackIndex;
+
             live = app.project.activeSequence;
-            try {
-                live.videoTracks[staging.tracks.videoIndex].overwriteClip(placeable[i], cursor);
-            } catch (writeError) { throw new Error('Premiere refused to place "' + String(placeable[i].name) + '": ' + writeError.toString()); }
-            live = app.project.activeSequence;
-            clips = prfx.stagingTrackClips(live, 'video', staging.tracks.videoIndex);
-            if (clips.length !== i + 1) throw new Error('Premiere did not publish "' + String(placeable[i].name) + '" onto the staging track.');
-            clip = clips[clips.length - 1];
-            spans.push({ start: prfx.timeInSeconds(clip.start), end: prfx.timeInSeconds(clip.end) });
-            cursor = prfx.timeInSeconds(clip.end);
-        }
+            snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
+            prfx.maskStagingLanes(snapshot, staging);
+            span = [{ start: staged.start, end: staged.end }];
 
-        // Only now, with real clips and real durations, look for somewhere to
-        // put them. Staging tracks are excluded because the snapshot is taken
-        // against the live sequence and they sit above everything.
-        live = app.project.activeSequence;
-        snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
-        snapshot.tracks.video.length = staging.tracks.videoIndex;
-        snapshot.tracks.audio.length = staging.tracks.audioIndex;
-        videoTarget = prfx.freeDestinationTrack(snapshot, 'video', spans);
-        if (videoTarget === null) throw new Error('No video track has room for the placed clips at the playhead.');
-        audioTarget = prfx.freeDestinationTrack(snapshot, 'audio', spans);
-        if (audioTarget === null) audioTarget = staging.tracks.audioIndex;
+            // Keep the run on one row where possible: reuse the track already
+            // chosen for this kind, and only look elsewhere if it is occupied.
+            target = kind === 'audio' ? audioTarget : videoTarget;
+            if (target === null || target === undefined ||
+                !prfx.trackHasRoom(snapshot, kind, target, staged.start, staged.end, null)) {
+                target = prfx.freeDestinationTrack(snapshot, kind, span);
+            }
+            if (target === null || target === undefined) target = prfx.appendPlacementTrack(staging, kind);
+            if (kind === 'audio') audioTarget = target; else videoTarget = target;
 
-        // Move down into place. moveToTrack never overwrites, so this step
-        // cannot damage the tracks it lands on.
-        staged = prfx.stagingTrackClips(live, 'video', staging.tracks.videoIndex);
-        for (i = staged.length - 1; i >= 0; i--) {
-            app.enableQE();
-            qeSequence = qe.project.getActiveSequence();
-            qeClip = prfx.resolveMoveQEClipAt(qeSequence, { kind: 'video' }, staging.tracks.videoIndex,
-                prfx.timeInSeconds(staged[i].start), prfx.timeInSeconds(staged[i].end));
-            if (!qeClip) throw new Error('Lost track of a staged clip before moving it into place.');
-            offset = videoTarget - staging.tracks.videoIndex;
-            if (qeClip.moveToTrack(offset, 0, '00:00:00:00', 0) === false) throw new Error('Premiere rejected the move into place.');
-            moved++;
-        }
+            if (staged.audioOnly) {
+                placedAudio = prfx.placeStagedAudioClips(staging, staged.audioClips, null, audioTarget,
+                    '"' + String(placeable[i].name) + '"');
+                for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+                if (placedAudio.length) audioTarget = placedAudio[0].trackIndex;
+            } else {
+                prfx.moveStagedClipToTrack(kind, fromIndex, target, staged.start, staged.end, '"' + String(placeable[i].name) + '"');
+                created.push({ kind: kind, trackIndex: target, start: staged.start, end: staged.end });
+            }
+            cursor = staged.end;
 
-        live = app.project.activeSequence;
-        for (i = 0; i < spans.length; i++) {
-            clip = prfx.resolveMovePublicClipAt(live, { kind: 'video' }, videoTarget, spans[i].start, spans[i].end);
-            if (!clip) throw new Error('A placed clip did not arrive on video track ' + (videoTarget + 1) + '.');
-            created.push({ detail: { kind: 'video', sourceTrackIndex: videoTarget, start: spans[i].start, end: spans[i].end }, trackIndex: videoTarget });
+            // An A/V item brings its audio. Targeting decides where that lands,
+            // so it has to be pulled down to a real lane rather than left
+            // wherever Premiere happened to put it.
+            if (!staged.audioOnly && staged.audioClips && staged.audioClips.length) {
+                placedAudio = prfx.placeStagedAudioClips(staging, staged.audioClips, null, audioTarget,
+                    '"' + String(placeable[i].name) + '"');
+                for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+                if (placedAudio.length) audioTarget = placedAudio[0].trackIndex;
+            }
         }
     } catch (error) {
         failure = error.toString();
@@ -4183,19 +4252,21 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
     prfx.removeStagingTracks(qeSequence, staging.tracks);
 
     if (failure) {
-        prfx.revertToUndoCheckpoint(checkpoint, placeable.length * 8 + 20);
-        return 'ERROR: Placing stopped and everything was rolled back - ' + failure;
+        prfx.revertUnlessKeeping(checkpoint, placeable.length * 8 + 20);
+        return 'ERROR: Placing stopped and ' + prfx.failureOutcomeText() + ' - ' + failure;
     }
 
-    live = app.project.activeSequence;
-    selectionRanges = [];
-    for (i = 0; i < created.length; i++) {
-        selectionRanges.push({ kind: 'video', trackIndex: created[i].trackIndex, start: created[i].detail.start, end: created[i].detail.end });
-    }
-    prfx.selectClipRanges(live, selectionRanges);
+    // The staging tracks are gone, so anything placed above them has moved down
+    // a row. Report and reselect the rows the editor can actually see.
+    prfx.settleCreatedTrackIndexes(staging, created);
+    if (videoTarget > staging.tracks.videoIndex) videoTarget--;
+    if (audioTarget > staging.tracks.audioIndex) audioTarget--;
+    prfx.selectClipRanges(app.project.activeSequence, created);
 
-    return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' from the Project panel onto video track ' +
-        (videoTarget + 1) + ', back to back from the playhead.' +
+    return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' (video plus any linked audio) from the Project panel, back to back from the playhead' +
+        (videoTarget !== null && videoTarget !== undefined ? ' on V' + (videoTarget + 1) : '') +
+        (audioTarget !== null && audioTarget !== undefined ? (videoTarget !== null && videoTarget !== undefined ? ' and' : ' on') + ' A' + (audioTarget + 1) : '') + '.' +
+        prfx.appendedTrackNote(staging) +
         (skipped ? ' Skipped ' + skipped + ' non-media item' + (skipped === 1 ? '' : 's') + '.' : '');
 };
 
@@ -4318,8 +4389,78 @@ prfx.describeStagedRange = function () {
 // keepRange honours the item's current in/out instead of widening to the whole
 // media. Replace wants the full media (it trims to the edit itself); a clip the
 // editor has just marked up in the Source monitor must land exactly as marked.
+// Where a written clip actually lands is decided by Premiere's track targeting,
+// not by the track object we address. For an audio-only item nothing arrives on
+// the staging video track and the audio can arrive on ANY targeted audio track,
+// so the only reliable way to find the new clip is to diff the sequence.
+prfx.trackContentsMap = function (sequence, kind) {
+    var map = {}, tracks, count, t, clips, clipCount, i, clip;
+    tracks = kind === 'audio' ? sequence.audioTracks : sequence.videoTracks;
+    count = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+    for (t = 0; t < count; t++) {
+        try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+        catch (trackError) { clipCount = 0; }
+        for (i = 0; i < clipCount; i++) {
+            try { clip = clips[i]; } catch (clipError) { continue; }
+            if (!clip) continue;
+            map[t + ':' + prfx.timeInSeconds(clip.start).toFixed(4) + ':' + prfx.timeInSeconds(clip.end).toFixed(4)] = true;
+        }
+    }
+    return map;
+};
+
+prfx.newClipsSince = function (sequence, kind, before) {
+    var out = [], tracks, count, t, clips, clipCount, i, clip, key;
+    tracks = kind === 'audio' ? sequence.audioTracks : sequence.videoTracks;
+    count = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+    for (t = 0; t < count; t++) {
+        try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+        catch (trackError) { clipCount = 0; }
+        for (i = 0; i < clipCount; i++) {
+            try { clip = clips[i]; } catch (clipError) { continue; }
+            if (!clip) continue;
+            key = t + ':' + prfx.timeInSeconds(clip.start).toFixed(4) + ':' + prfx.timeInSeconds(clip.end).toFixed(4);
+            if (!before[key]) out.push({ clip: clip, trackIndex: t, start: prfx.timeInSeconds(clip.start), end: prfx.timeInSeconds(clip.end) });
+        }
+    }
+    return out;
+};
+
+// Moves every staged audio clip onto a free lane. `used` marks lanes taken by
+// this run (a column wants one clip per lane); pass null to let a row reuse the
+// same lanes across items.
+prfx.placeStagedAudioClips = function (staging, clips, used, preferTrack, label) {
+    var out = [], i, entry, live, snapshot, target, trackIndex, laneCount;
+    for (i = 0; i < clips.length; i++) {
+        entry = clips[i];
+        live = app.project.activeSequence;
+        snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
+        prfx.maskStagingLanes(snapshot, staging);
+        laneCount = snapshot.tracks.audio.length;
+        target = null;
+        if (!used && preferTrack !== null && preferTrack !== undefined && preferTrack < laneCount &&
+            prfx.trackHasRoom(snapshot, 'audio', preferTrack, entry.start, entry.end, null)) {
+            target = preferTrack;
+        }
+        if (target === null) {
+            for (trackIndex = 0; trackIndex < laneCount; trackIndex++) {
+                if (used && used['audio' + trackIndex]) continue;
+                if (prfx.trackHasRoom(snapshot, 'audio', trackIndex, entry.start, entry.end, null)) { target = trackIndex; break; }
+            }
+        }
+        if (target === null) target = prfx.appendPlacementTrack(staging, 'audio');
+        if (used) used['audio' + target] = true;
+        if (target !== entry.trackIndex) {
+            prfx.moveStagedClipToTrack('audio', entry.trackIndex, target, entry.start, entry.end, label + ' audio');
+        }
+        out.push({ kind: 'audio', trackIndex: target, start: entry.start, end: entry.end });
+    }
+    return out;
+};
+
 prfx.stageOneProjectItem = function (stagingTracks, item, atSeconds, keepRange, sourceState) {
-    var live = app.project.activeSequence, videoClips, audioClips, rangeState = null;
+    var live = app.project.activeSequence, videoClips, audioClips, rangeState = null, beforeVideo, beforeAudio;
+    var earliest, latest, index;
     if (!prfx.stagingTrackEmpty(live, 'video', stagingTracks.videoIndex)) {
         throw new Error('the staging track was not empty before writing "' + String(item.name) + '"');
     }
@@ -4333,6 +4474,8 @@ prfx.stageOneProjectItem = function (stagingTracks, item, atSeconds, keepRange, 
         rangeState = prfx.expandProjectItemRange(item);
     }
     prfx.lastStagedRange = rangeState;
+    beforeVideo = prfx.trackContentsMap(live, 'video');
+    beforeAudio = prfx.trackContentsMap(live, 'audio');
     try {
         try {
             live.videoTracks[stagingTracks.videoIndex].overwriteClip(item, atSeconds);
@@ -4344,16 +4487,45 @@ prfx.stageOneProjectItem = function (stagingTracks, item, atSeconds, keepRange, 
         prfx.restoreProjectItemRange(item, rangeState);
     }
     live = app.project.activeSequence;
-    videoClips = prfx.stagingTrackClips(live, 'video', stagingTracks.videoIndex);
-    audioClips = prfx.stagingTrackClips(live, 'audio', stagingTracks.audioIndex);
+    // Diff, don't look in one place: targeting decides where the clip lands.
+    videoClips = prfx.newClipsSince(live, 'video', beforeVideo);
+    audioClips = prfx.newClipsSince(live, 'audio', beforeAudio);
+    // Music and voiceover have no video stream at all, so an audio-only result
+    // is a success, not the failure the video-only check used to report.
+    // A source can publish SEVERAL audio clips -- dual mono, 5.1, split stereo.
+    // Insisting on exactly one stranded every extra channel wherever targeting
+    // dropped it, which is the same failure as leaving a companion behind.
+    if (!videoClips.length && audioClips.length) {
+        earliest = audioClips[0].start;
+        latest = audioClips[0].end;
+        for (index = 1; index < audioClips.length; index++) {
+            if (audioClips[index].start < earliest) earliest = audioClips[index].start;
+            if (audioClips[index].end > latest) latest = audioClips[index].end;
+        }
+        return {
+            video: null,
+            audio: audioClips[0].clip,
+            audioClips: audioClips,
+            audioOnly: true,
+            fromTrackIndex: audioClips[0].trackIndex,
+            audioTrackIndex: audioClips[0].trackIndex,
+            start: earliest,
+            end: latest
+        };
+    }
     if (videoClips.length !== 1) {
-        throw new Error('Premiere published ' + videoClips.length + ' clips for "' + String(item.name) + '" instead of one');
+        throw new Error('Premiere published ' + videoClips.length + ' video and ' + audioClips.length +
+            ' audio clips for "' + String(item.name) + '"; expected one video, or one audio for an audio-only file');
     }
     return {
-        video: videoClips[0],
-        audio: audioClips.length === 1 ? audioClips[0] : null,
-        start: prfx.timeInSeconds(videoClips[0].start),
-        end: prfx.timeInSeconds(videoClips[0].end)
+        video: videoClips[0].clip,
+        audio: audioClips.length ? audioClips[0].clip : null,
+        audioClips: audioClips,
+        audioOnly: false,
+        fromTrackIndex: videoClips[0].trackIndex,
+        audioTrackIndex: audioClips.length ? audioClips[0].trackIndex : -1,
+        start: videoClips[0].start,
+        end: videoClips[0].end
     };
 };
 
@@ -4446,7 +4618,7 @@ prfx.trackHasRoom = function (snapshot, kind, trackIndex, start, end, ignoreRang
 prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
     var items = prfx.selectedProjectItems(), placeable = [], i, skipped = 0;
     var checkpoint, staging, live, playhead, atSeconds, failure = null, used = {}, created = [];
-    var stagedClip, snapshot, trackIndex, target, laneCount, clip;
+    var stagedClip, snapshot, trackIndex, target, laneCount, clip, kind, fromIndex, placedAudio, j;
 
     if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
     for (i = 0; i < items.length; i++) {
@@ -4471,29 +4643,39 @@ prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
             // One at a time: stage it, move it off, leaving the staging track
             // empty again for the next. Two clips on one staging track at the
             // same start would overwrite each other.
-            stagedClip = prfx.stageOneProjectItem(staging.tracks, placeable[i], atSeconds);
+            stagedClip = prfx.stageOneProjectItem(staging.tracks, placeable[i], atSeconds, true);
+            // Audio-only files have no video stream to stack, so they take their
+            // own column on the audio side.
+            kind = stagedClip.audioOnly ? 'audio' : 'video';
+            fromIndex = stagedClip.fromTrackIndex;
             live = app.project.activeSequence;
             snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
-            laneCount = staging.tracks.videoIndex;
+            prfx.maskStagingLanes(snapshot, staging);
+            laneCount = snapshot.tracks[kind].length;
             target = null;
             for (trackIndex = 0; trackIndex < laneCount; trackIndex++) {
-                if (used[trackIndex]) continue;
-                if (prfx.trackHasRoom(snapshot, 'video', trackIndex, stagedClip.start, stagedClip.end, null)) { target = trackIndex; break; }
+                if (used[kind + trackIndex]) continue;
+                if (prfx.trackHasRoom(snapshot, kind, trackIndex, stagedClip.start, stagedClip.end, null)) { target = trackIndex; break; }
             }
-            if (target === null) {
-                throw new Error('there are not enough free video tracks for a column of ' + placeable.length +
-                    ' clips at this point. Add tracks or move the playhead.');
+            // Every existing lane is taken at this point, so make one rather
+            // than refusing the whole column.
+            if (target === null) target = prfx.appendPlacementTrack(staging, kind);
+            if (stagedClip.audioOnly) {
+                placedAudio = prfx.placeStagedAudioClips(staging, stagedClip.audioClips, used, null,
+                    '"' + String(placeable[i].name) + '"');
+                for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+            } else {
+                used[kind + target] = true;
+                prfx.moveStagedClipToTrack(kind, fromIndex, target, stagedClip.start, stagedClip.end);
+                created.push({ kind: kind, trackIndex: target, start: stagedClip.start, end: stagedClip.end });
             }
-            used[target] = true;
-            prfx.moveStagedClipToTrack('video', staging.tracks.videoIndex, target, stagedClip.start, stagedClip.end);
-            created.push({ kind: 'video', trackIndex: target, start: stagedClip.start, end: stagedClip.end });
-            // The staged audio companion has nowhere sensible to go in a column
-            // layout; drop it so it cannot be left orphaned on the staging track.
-            live = app.project.activeSequence;
-            try {
-                clip = prfx.stagingTrackClips(live, 'audio', staging.tracks.audioIndex)[0];
-                if (clip && clip.remove) clip.remove(false, false);
-            } catch (audioError) {}
+            // The companion audio gets its own lane in the column, chosen the
+            // same way as the video: lowest free track not already used here.
+            if (!stagedClip.audioOnly && stagedClip.audioClips && stagedClip.audioClips.length) {
+                placedAudio = prfx.placeStagedAudioClips(staging, stagedClip.audioClips, used, null,
+                    '"' + String(placeable[i].name) + '"');
+                for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+            }
         }
     } catch (error) {
         failure = error.toString();
@@ -4502,13 +4684,15 @@ prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
     prfx.removeStagingTracks(qeSequence, staging.tracks);
 
     if (failure) {
-        prfx.revertToUndoCheckpoint(checkpoint, placeable.length * 10 + 20);
-        return 'ERROR: Placing stopped and everything was rolled back - ' + failure;
+        prfx.revertUnlessKeeping(checkpoint, placeable.length * 10 + 20);
+        return 'ERROR: Placing stopped and ' + prfx.failureOutcomeText() + ' - ' + failure;
     }
 
+    prfx.settleCreatedTrackIndexes(staging, created);
     prfx.selectClipRanges(app.project.activeSequence, created);
 
     return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' as a column at the playhead, one per video track.' +
+        prfx.appendedTrackNote(staging) +
         (skipped ? ' Skipped ' + skipped + ' non-media item' + (skipped === 1 ? '' : 's') + '.' : '');
 };
 
@@ -5147,7 +5331,7 @@ prfx.runReplace = function (publicSequence, qeSequence, targets, resolveSource, 
     prfx.removeStagingTracks(qeSequence, staging.tracks);
 
     if (failure) {
-        rollback = prfx.revertToUndoCheckpoint(checkpoint, targets.length * 16 + 24);
+        rollback = prfx.revertUnlessKeeping(checkpoint, targets.length * 16 + 24);
         logPath = prfx.writeFailureLog({
             operation: 'replace',
             sourceLabel: String(sourceLabel || ''),
@@ -5167,7 +5351,7 @@ prfx.runReplace = function (publicSequence, qeSequence, targets, resolveSource, 
             propertyFailures: prfx.uniqueList(prfx.lastPropertyFailures || []),
             skipped: prfx.uniqueList(prfx.lastSkipNotes || [])
         });
-        return 'ERROR: Replace stopped and everything was rolled back - ' + failure + '.' +
+        return 'ERROR: Replace stopped and ' + prfx.failureOutcomeText() + ' - ' + failure + '.' +
             (logPath ? ' Failure logged.' : ' Failure log could not be written.');
     }
     if (!replaced) {
@@ -6521,7 +6705,7 @@ prfx.sourceMonitorItem = function () {
 
 prfx.placeSourceMonitorClip = function (publicSequence, qeSequence) {
     var item = prfx.sourceMonitorItem(), checkpoint, staging, live, playhead, atSeconds;
-    var staged, snapshot, videoTarget, audioTarget, failure = null, created = [], spans, clip, marked;
+    var staged, snapshot, videoTarget, audioTarget, failure = null, created = [], spans, clip, marked, placedAudio, j;
 
     if (!item) return 'ERROR: Load a clip into the Source monitor first - PR FX places whatever is open there.';
     if (!prfx.projectItemIsPlaceable(item)) {
@@ -6544,6 +6728,16 @@ prfx.placeSourceMonitorClip = function (publicSequence, qeSequence) {
         // keepRange: the Source monitor In/Out is the whole point here.
         staged = prfx.stageOneProjectItem(staging.tracks, item, atSeconds, true);
         spans = [{ start: staged.start, end: staged.end }];
+        if (staged.audioOnly) {
+            // Music loaded in the Source monitor is the common case here.
+            live = app.project.activeSequence;
+            snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
+            snapshot.tracks.audio.length = staging.tracks.audioIndex;
+            placedAudio = prfx.placeStagedAudioClips(staging, staged.audioClips, null, null, '"' + String(item.name) + '"');
+            for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+            audioTarget = placedAudio.length ? placedAudio[0].trackIndex : null;
+            throw { prfxDone: true };
+        }
 
         live = app.project.activeSequence;
         snapshot = prfx.moveSelectionSnapshot(live, qe.project.getActiveSequence(), false);
@@ -6555,27 +6749,28 @@ prfx.placeSourceMonitorClip = function (publicSequence, qeSequence) {
         audioTarget = staged.audio ? prfx.freeDestinationTrack(snapshot, 'audio', spans) : null;
         if (staged.audio && audioTarget === null) throw new Error('no audio track has room at the playhead');
 
-        prfx.moveStagedClipToTrack('video', staging.tracks.videoIndex, videoTarget, staged.start, staged.end, '"' + String(item.name) + '"');
+        prfx.moveStagedClipToTrack('video', staged.fromTrackIndex, videoTarget, staged.start, staged.end, '"' + String(item.name) + '"');
         created.push({ kind: 'video', trackIndex: videoTarget, start: staged.start, end: staged.end });
 
         if (staged.audio) {
             live = app.project.activeSequence;
-            clip = prfx.stagingTrackClips(live, 'audio', staging.tracks.audioIndex)[0];
-            if (clip) {
-                prfx.moveStagedClipToTrack('audio', staging.tracks.audioIndex, audioTarget,
-                    prfx.timeInSeconds(clip.start), prfx.timeInSeconds(clip.end), '"' + String(item.name) + '" audio');
-                created.push({ kind: 'audio', trackIndex: audioTarget, start: staged.start, end: staged.end });
+            if (staged.audioClips && staged.audioClips.length) {
+                placedAudio = prfx.placeStagedAudioClips(staging, staged.audioClips, null, audioTarget, '"' + String(item.name) + '"');
+                for (j = 0; j < placedAudio.length; j++) created.push(placedAudio[j]);
+                audioTarget = placedAudio.length ? placedAudio[0].trackIndex : audioTarget;
             }
         }
     } catch (error) {
-        failure = error.toString();
+        // The audio-only path finishes early rather than running the video
+        // placement below; that is a completed run, not a failure.
+        if (!error || error.prfxDone !== true) failure = error.toString();
     }
 
     prfx.removeStagingTracks(qeSequence, staging.tracks);
 
     if (failure) {
-        prfx.revertToUndoCheckpoint(checkpoint, 24);
-        return 'ERROR: Placing stopped and everything was rolled back - ' + failure + '.';
+        prfx.revertUnlessKeeping(checkpoint, 24);
+        return 'ERROR: Placing stopped and ' + prfx.failureOutcomeText() + ' - ' + failure + '.';
     }
 
     live = app.project.activeSequence;
@@ -6740,11 +6935,197 @@ prfx.applyPerfectPitch = function (publicSequence, qeSequence) {
     } catch (error) { failure = error.toString(); }
 
     if (failure) {
-        prfx.revertToUndoCheckpoint(checkpoint, plans.length * 4 + 12);
-        return 'ERROR: Perfect Pitch stopped and everything was rolled back - ' + failure + '.';
+        prfx.revertUnlessKeeping(checkpoint, plans.length * 4 + 12);
+        return 'ERROR: Perfect Pitch stopped and ' + prfx.failureOutcomeText() + ' - ' + failure + '.';
     }
 
     return 'Corrected pitch on ' + corrected + ' clip' + (corrected === 1 ? '' : 's') +
         (added ? ' (added Pitch Shifter to ' + added + ')' : '') +
         (reset ? ', reset ' + reset + ' back to neutral at 100% speed' : '') + '.';
+};
+
+// ---------------------------------------------------------------------------
+// Failure ledger
+//
+// Failures have been intermittent, which is the hardest kind to chase from
+// screenshots. Every command outcome is recorded against a fingerprint of the
+// error, so repeats group together and the ledger can say whether something is
+// still broken, genuinely intermittent, or fixed by a later build.
+//
+// The build stamp is recorded on every entry on purpose: a stale host produces
+// exactly this "works sometimes" signature, and an entry whose failures all
+// happened on an out-of-date build usually is not a real bug at all.
+// ---------------------------------------------------------------------------
+// Verification here is deliberately strict, and strict checks produce the odd
+// false alarm -- a read-back that lags, a wrapper that reports stale values.
+// Rolling back good work on a false alarm is its own kind of damage, so the
+// editor chooses: undo everything, or keep it and judge for themselves.
+// Either way the universal undo checkpoint is still recorded, so "keep" is
+// recoverable rather than final.
+if (prfx.failurePolicy === undefined) prfx.failurePolicy = 'rollback';
+
+prfx.revertUnlessKeeping = function (checkpoint, maxSteps) {
+    if (prfx.failurePolicy === 'keep') {
+        return { ok: false, steps: 0, kept: true, message: 'kept by failure policy' };
+    }
+    return prfx.revertToUndoCheckpoint(checkpoint, maxSteps);
+};
+
+// Wording has to follow the policy, or the message lies about what is on the
+// Timeline -- which is worse than the failure it is reporting.
+prfx.failureOutcomeText = function () {
+    return prfx.failurePolicy === 'keep'
+        ? 'changes were KEPT (failure policy). Check the Timeline; Undo Last PR FX Action (Any) reverts it'
+        : 'everything was rolled back';
+};
+
+prfx.LEDGER_FILE = 'PR FX Failures.json';
+prfx.REPORT_FILE = 'PR FX Failure Report.txt';
+
+prfx.logPath = function (fileName) {
+    return Folder.myDocuments.parent.fsName + '/Library/Logs/' + fileName;
+};
+
+prfx.readLedger = function () {
+    var file, text = '', parsed;
+    try {
+        file = new File(prfx.logPath(prfx.LEDGER_FILE));
+        if (!file.exists) return { entries: {} };
+        file.encoding = 'UTF-8';
+        file.open('r');
+        text = file.read();
+        file.close();
+    } catch (readError) { return { entries: {} }; }
+    try { parsed = JSON.parse(text); } catch (parseError) { return { entries: {} }; }
+    if (!parsed || !parsed.entries) return { entries: {} };
+    return parsed;
+};
+
+prfx.writeLedger = function (ledger) {
+    var file;
+    try {
+        file = new File(prfx.logPath(prfx.LEDGER_FILE));
+        file.encoding = 'UTF-8';
+        file.open('w');
+        file.write(JSON.stringify(ledger));
+        file.close();
+        return true;
+    } catch (writeError) { return false; }
+};
+
+// Strip the parts that vary between runs -- clip names, numbers, paths -- so the
+// same underlying failure lands on one entry instead of fifty.
+prfx.failureFingerprint = function (commandId, message) {
+    var text = String(message || '');
+    text = text.replace(/“[^”]*”/g, 'X');
+    text = text.replace(/"[^"]*"/g, 'X');
+    text = text.replace(/\/[^\s,;)]+/g, 'PATH');
+    text = text.replace(/[0-9]+(\.[0-9]+)?/g, 'N');
+    text = text.toLowerCase().replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ');
+    text = text.replace(/^\s+|\s+$/g, '').substring(0, 120);
+    return String(commandId || 'unknown') + '|' + text;
+};
+
+prfx.nowStamp = function () {
+    var now = new Date();
+    function pad(value) { return (value < 10 ? '0' : '') + value; }
+    return now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) +
+        ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+};
+
+// Reads the build on disk so a failure can be flagged as "ran on a stale host".
+prfx.onDiskBuild = function () {
+    var status;
+    try { status = JSON.parse(prfx.buildStatus(prfx.EXTENSION_ROOT)); } catch (error) { return ''; }
+    return status && status.onDisk ? String(status.onDisk) : '';
+};
+
+prfx.recordOutcome = function (command, result) {
+    var failed = typeof result === 'string' && result.indexOf('ERROR:') === 0;
+    var ledger, key, entry, label, onDisk;
+    if (!command) return;
+    label = prfx.commandLabel(command);
+    ledger = prfx.readLedger();
+    key = failed ? prfx.failureFingerprint(command.id, result) : ('ok|' + String(command.id));
+
+    if (!failed) {
+        // Successes are only interesting against a known failure: they turn
+        // "still broken" into "intermittent" or "fixed in a later build".
+        for (var existing in ledger.entries) {
+            if (!ledger.entries.hasOwnProperty(existing)) continue;
+            if (existing.indexOf(String(command.id) + '|') !== 0) continue;
+            ledger.entries[existing].successCount = Number(ledger.entries[existing].successCount || 0) + 1;
+            ledger.entries[existing].lastSuccess = prfx.nowStamp();
+            ledger.entries[existing].lastSuccessBuild = prfx.HOST_BUILD;
+        }
+        prfx.writeLedger(ledger);
+        return;
+    }
+
+    onDisk = prfx.onDiskBuild();
+    entry = ledger.entries[key];
+    if (!entry) {
+        entry = { command: label, commandId: String(command.id || ''), firstSeen: prfx.nowStamp(),
+            failCount: 0, successCount: 0, sample: String(result).substring(0, 400) };
+    }
+    entry.failCount = Number(entry.failCount || 0) + 1;
+    entry.lastSeen = prfx.nowStamp();
+    entry.lastFailBuild = prfx.HOST_BUILD;
+    entry.sample = String(result).substring(0, 400);
+    entry.staleHost = (onDisk && onDisk !== prfx.HOST_BUILD) ? (prfx.HOST_BUILD + ' vs ' + onDisk) : '';
+    ledger.entries[key] = entry;
+    prfx.writeLedger(ledger);
+};
+
+// OPEN        failed, and nothing has succeeded since
+// INTERMITTENT failed and succeeded on the SAME build -- the nasty kind
+// RESOLVED    last success came from a newer build than the last failure
+prfx.ledgerStatus = function (entry) {
+    if (!Number(entry.successCount || 0)) return 'OPEN';
+    if (!entry.lastSuccess || entry.lastSuccess < entry.lastSeen) return 'OPEN';
+    if (entry.lastSuccessBuild && entry.lastFailBuild && entry.lastSuccessBuild !== entry.lastFailBuild) {
+        return 'RESOLVED';
+    }
+    return 'INTERMITTENT';
+};
+
+prfx.failureReport = function () {
+    var ledger = prfx.readLedger(), lines = [], groups = { OPEN: [], INTERMITTENT: [], RESOLVED: [] };
+    var key, entry, order = ['OPEN', 'INTERMITTENT', 'RESOLVED'], i, j, list, counts = [];
+    lines.push('PR FX failure report — ' + prfx.nowStamp());
+    lines.push('Host build: ' + prfx.HOST_BUILD + '   on disk: ' + (prfx.onDiskBuild() || '?'));
+    try { lines.push('Premiere: ' + String(app.version) + ' build ' + String(app.build)); } catch (versionError) {}
+    lines.push('');
+
+    for (key in ledger.entries) {
+        if (!ledger.entries.hasOwnProperty(key)) continue;
+        entry = ledger.entries[key];
+        entry.key = key;
+        groups[prfx.ledgerStatus(entry)].push(entry);
+    }
+    for (i = 0; i < order.length; i++) {
+        list = groups[order[i]];
+        counts.push(list.length + ' ' + order[i].toLowerCase());
+        lines.push('== ' + order[i] + ' (' + list.length + ') ==');
+        if (!list.length) lines.push('  none');
+        for (j = 0; j < list.length; j++) {
+            entry = list[j];
+            lines.push('  [' + order[i] + '] ' + entry.command);
+            lines.push('      failed ' + entry.failCount + 'x, succeeded ' + Number(entry.successCount || 0) + 'x since');
+            lines.push('      first ' + entry.firstSeen + '   last ' + entry.lastSeen);
+            lines.push('      fail build ' + (entry.lastFailBuild || '?') +
+                '   last success build ' + (entry.lastSuccessBuild || 'never'));
+            if (entry.staleHost) lines.push('      ** RAN ON A STALE HOST (' + entry.staleHost + ') — likely not a real bug **');
+            lines.push('      ' + entry.sample);
+            lines.push('');
+        }
+        lines.push('');
+    }
+    prfx.writeDiagnostic(prfx.REPORT_FILE, lines);
+    return 'Failure report: ' + counts.join(', ') + '. Written to ' + prfx.logPath(prfx.REPORT_FILE);
+};
+
+prfx.clearFailureLedger = function () {
+    prfx.writeLedger({ entries: {} });
+    return 'Cleared the PR FX failure ledger.';
 };
