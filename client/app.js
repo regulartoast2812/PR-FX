@@ -27,6 +27,7 @@
     { type: 'custom', id: 'undo-last-prfx-action', name: 'Undo Last PR FX Action (Any)' },
     { type: 'custom', id: 'undo-last-arrange', name: 'Undo Last PR FX Arrange Action' },
     { type: 'custom', id: 'redo-last-arrange', name: 'Redo Last PR FX Arrange Action' },
+    { type: 'custom', id: 'adjustment-layer-over-selection', name: 'Adjustment Layer Over Selection' },
     { type: 'custom', id: 'perfect-pitch', name: 'Perfect Pitch (Correct Speed Transposition)' },
     { type: 'custom', id: 'place-source-clip', name: 'Place Source Monitor Clip at Playhead' },
     { type: 'custom', id: 'place-bin-clips', name: 'Place Bin Clips at Playhead in Row' },
@@ -55,7 +56,7 @@
   // These iterate over clips and can legitimately take minutes.
   var LONG_RUNNING_COMMANDS = {
     'bulk-replace-by-name': true, 'bulk-replace-preview': true, 'replace-from-bin': true,
-    'place-bin-clips': true, 'place-bin-clips-column': true, 'place-source-clip': true, 'queue-cuts-to-ame': true,
+    'place-bin-clips': true, 'place-bin-clips-column': true, 'place-source-clip': true, 'queue-cuts-to-ame': true, 'adjustment-layer-over-selection': true,
     'dump-qe-api': true, 'inspect-selected-clip': true
   };
   var functionCommands = commands.filter(function (command) { return command.type === 'custom'; });
@@ -640,9 +641,9 @@
 
     var steps = [];
     if (node.fs.existsSync(root + '/native/build-macos.sh')) {
-      // Repair should produce a fresh listener, not merely confirm that some
-      // older app bundle exists. Otherwise macOS can keep a stale listener alive.
-      steps.push({ label: 'building the current listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
+      // On soft-launch machines this validates and uses the bundled app. On a
+      // dev machine it can still rebuild when the bundled app is missing/stale.
+      steps.push({ label: 'checking the bundled listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
     }
     // The app arrives inside the extension rather than as a download, but
     // clear any quarantine flag anyway or Gatekeeper blocks the first launch.

@@ -65,6 +65,7 @@ private let prfxFunctionCommands = [
     Command(type: "custom", name: "Undo Last PR FX Action (Any)", transitionFrames: 30, id: "undo-last-prfx-action"),
     Command(type: "custom", name: "Undo Last PR FX Arrange Action", transitionFrames: 30, id: "undo-last-arrange"),
     Command(type: "custom", name: "Redo Last PR FX Arrange Action", transitionFrames: 30, id: "redo-last-arrange"),
+    Command(type: "custom", name: "Adjustment Layer Over Selection", transitionFrames: 30, id: "adjustment-layer-over-selection"),
     Command(type: "custom", name: "Perfect Pitch (Correct Speed Transposition)", transitionFrames: 30, id: "perfect-pitch"),
     Command(type: "custom", name: "Place Source Monitor Clip at Playhead", transitionFrames: 30, id: "place-source-clip"),
     Command(type: "custom", name: "Place Bin Clips at Playhead in Row", transitionFrames: 30, id: "place-bin-clips"),
@@ -85,11 +86,17 @@ private let prfxFunctionCommands = [
 ]
 
 private let retiredCommandIDs: Set<String> = ["stretch-speed-to-playhead"]
-// Accessibility/TCC has proven too brittle for this tool: ad-hoc rebuilds can
-// make macOS report the listener as untrusted even when the toggle is visibly
-// enabled. Keep shortcut scoping simple and permission-free: arm while Premiere
-// is frontmost, and do not inspect Premiere's Accessibility tree for panel focus.
-private let prfxBypassAccessibilityFocus = true
+// Arming on "Premiere is frontmost" alone makes every modifier-less binding live
+// in the Project panel, the Source monitor and every rename box -- pressing S to
+// type a name runs Move Down instead. Panel scoping is the feature, not an
+// optimisation, so this stays false.
+//
+// It was set true because ad-hoc rebuilds kept invalidating the Accessibility
+// grant. That cause is fixed: build-macos.sh signs with a stable self-signed
+// certificate, so the grant now survives rebuilds. If Accessibility is genuinely
+// unavailable the code already degrades on its own -- saved Timeline region
+// first, then modifier-only keys -- which is the safe fallback this flag skipped.
+private let prfxBypassAccessibilityFocus = false
 
 private struct Binding: Codable {
     let shortcut: Shortcut

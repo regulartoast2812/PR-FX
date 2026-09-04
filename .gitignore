@@ -7,10 +7,13 @@ Thumbs.db
 /SDK/
 
 # macOS builds and Xcode state
-/native/build/
+/native/build/*
 /native/control-surface/build/
 /native/windows/build/
 *.app/
+!/native/build/listener-build.txt
+!/native/build/PR FX Shortcut Listener.app/
+!/native/build/PR FX Shortcut Listener.app/**
 *.dSYM/
 *.xcarchive/
 DerivedData/

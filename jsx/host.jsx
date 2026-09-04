@@ -619,6 +619,9 @@ prfx.functions = {
     'dump-qe-api': { needsSequence: false, run: function () {
         return prfx.dumpQeApi();
     } },
+    'adjustment-layer-over-selection': { run: function (publicSequence, qeSequence) {
+        return prfx.addAdjustmentLayerOverSelection(publicSequence, qeSequence);
+    } },
     'perfect-pitch': { run: function (publicSequence, qeSequence) {
         return prfx.applyPerfectPitch(publicSequence, qeSequence);
     } },
@@ -7128,4 +7131,153 @@ prfx.failureReport = function () {
 prfx.clearFailureLedger = function () {
     prfx.writeLedger({ entries: {} });
     return 'Cleared the PR FX failure ledger.';
+};
+
+// ---------------------------------------------------------------------------
+// Adjustment layer over the selection
+//
+// QE has newBarsAndTone, newBlackVideo, newColorMatte and newTransparentVideo
+// but no newAdjustmentLayer, so one cannot be created from a script. That suits
+// the requirement: reuse the adjustment layer the project already has instead of
+// adding another bin item every time.
+//
+// It is found from the Timeline first -- isAdjustmentLayer() on a TrackItem is
+// the only reliable test -- then by scanning the bins as a fallback.
+// ---------------------------------------------------------------------------
+prfx.findAdjustmentLayerItem = function (sequence) {
+    var tracks, count, t, clips, clipCount, i, clip;
+    tracks = sequence.videoTracks;
+    count = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+    for (t = 0; t < count; t++) {
+        try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+        catch (trackError) { clipCount = 0; }
+        for (i = 0; i < clipCount; i++) {
+            try { clip = clips[i]; } catch (clipError) { continue; }
+            try {
+                if (clip && clip.isAdjustmentLayer && clip.isAdjustmentLayer() === true) return clip.projectItem;
+            } catch (testError) {}
+        }
+    }
+    return prfx.findAdjustmentLayerInBins(app.project.rootItem, 0);
+};
+
+// Bins carry no isAdjustmentLayer test, so this leans on the two things that are
+// true of one: it is synthetic (no media file) and Premiere names it
+// "Adjustment Layer". The name half will not survive a localized install.
+prfx.findAdjustmentLayerInBins = function (bin, depth) {
+    var children, count, i, child, found, path = '';
+    if (depth > 8) return null;
+    try { children = bin.children; count = Number(children.numItems || 0); } catch (error) { return null; }
+    for (i = 0; i < count; i++) {
+        try { child = children[i]; } catch (childError) { continue; }
+        if (!child) continue;
+        if (prfx.projectItemIsBin(child)) {
+            found = prfx.findAdjustmentLayerInBins(child, depth + 1);
+            if (found) return found;
+            continue;
+        }
+        try { path = String(child.getMediaPath ? child.getMediaPath() : ''); } catch (pathError) { path = ''; }
+        if (path.length) continue;
+        if (prfx.normalizedPitchName(child.name).indexOf('adjustmentlayer') !== -1) return child;
+    }
+    return null;
+};
+
+// Sets a synthetic item's range so the staged clip comes out exactly as long as
+// the span it has to cover. Verified by reading back, like every other write.
+prfx.setProjectItemRange = function (item, outSeconds) {
+    var i, after;
+    for (i = 0; i < prfx.PROJECT_ITEM_MEDIA_TYPES.length; i++) {
+        try {
+            item.setInPoint(0, prfx.PROJECT_ITEM_MEDIA_TYPES[i]);
+            item.setOutPoint(outSeconds, prfx.PROJECT_ITEM_MEDIA_TYPES[i]);
+        } catch (writeError) { continue; }
+        after = prfx.projectItemRange(item);
+        if (after && Math.abs((after.outSeconds - after.inSeconds) - outSeconds) < 0.5) return true;
+    }
+    return false;
+};
+
+prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
+    var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, false), selected;
+    var i, detail, spanStart = NaN, spanEnd = NaN, topTrack = -1, item, savedRange;
+    var checkpoint, staging, live, target, snapshotLive, failure = null, created = [], staged, addError;
+
+    selected = snapshot.selected;
+    if (!selected.length) {
+        if (snapshot.staleSelectionCount) return 'ERROR: Premiere\'s Timeline selection is stale. Click an empty Timeline area, reselect the clips, and try again.';
+        return 'ERROR: Select the Timeline clips the adjustment layer should cover.';
+    }
+    for (i = 0; i < selected.length; i++) {
+        detail = selected[i];
+        if (detail.kind !== 'video') continue;
+        if (isNaN(spanStart) || detail.start < spanStart) spanStart = detail.start;
+        if (isNaN(spanEnd) || detail.end > spanEnd) spanEnd = detail.end;
+        if (detail.sourceTrackIndex > topTrack) topTrack = detail.sourceTrackIndex;
+    }
+    if (isNaN(spanStart) || !(spanEnd > spanStart)) {
+        return 'ERROR: Select video clips — an adjustment layer needs a video span to cover.';
+    }
+
+    item = prfx.findAdjustmentLayerItem(publicSequence);
+    if (!item) {
+        return 'ERROR: No adjustment layer exists in this project. Premiere gives scripts no way to create one, so make a single Adjustment Layer in the Project panel — PR FX will reuse it from then on.';
+    }
+
+    checkpoint = prfx.undoCheckpoint();
+
+    // Find a lane above the selection with room, adding one if every existing
+    // track is occupied across the span. Done before staging so track indices
+    // do not shift underneath it.
+    target = null;
+    live = app.project.activeSequence;
+    snapshotLive = prfx.moveSelectionSnapshot(live, qeSequence, false);
+    for (i = topTrack + 1; i < snapshotLive.tracks.video.length; i++) {
+        if (prfx.trackHasRoom(snapshotLive, 'video', i, spanStart, spanEnd, null)) { target = i; break; }
+    }
+    if (target === null) {
+        addError = prfx.addMoveDestinationTrack(qeSequence, 'video', 0, 0);
+        if (addError) {
+            prfx.revertToUndoCheckpoint(checkpoint, 12);
+            return 'ERROR: ' + addError + ' Nothing was added.';
+        }
+        live = app.project.activeSequence;
+        target = Number(live.videoTracks.numTracks) - 1;
+        try { qeSequence = qe.project.getActiveSequence(); } catch (rebindError) {}
+    }
+
+    savedRange = prfx.projectItemRange(item);
+    staging = prfx.createStagingTracks(app.project.activeSequence, qeSequence);
+    if (!staging.ok) {
+        prfx.revertToUndoCheckpoint(checkpoint, 16);
+        return 'ERROR: Could not prepare a safe staging track - ' + staging.message + '. Nothing was added.';
+    }
+
+    try {
+        if (!prfx.setProjectItemRange(item, spanEnd - spanStart)) {
+            throw new Error('the adjustment layer\'s duration could not be set to ' + (spanEnd - spanStart).toFixed(2) + 's');
+        }
+        staged = prfx.stageOneProjectItem(staging.tracks, item, spanStart, true);
+        if (Math.abs((staged.end - staged.start) - (spanEnd - spanStart)) > 0.5) {
+            throw new Error('the staged adjustment layer is ' + (staged.end - staged.start).toFixed(2) +
+                's, not the ' + (spanEnd - spanStart).toFixed(2) + 's the selection spans');
+        }
+        prfx.moveStagedClipToTrack('video', staged.fromTrackIndex, target, staged.start, staged.end, 'the adjustment layer');
+        created.push({ kind: 'video', trackIndex: target, start: staged.start, end: staged.end });
+    } catch (error) {
+        failure = error.toString();
+    }
+
+    prfx.removeStagingTracks(qeSequence, staging.tracks);
+    // The bin item is shared; a changed range would follow it into every later use.
+    prfx.restoreProjectItemRange(item, { saved: savedRange, expanded: true });
+
+    if (failure) {
+        prfx.revertUnlessKeeping(checkpoint, 24);
+        return 'ERROR: Adjustment layer not added and ' + prfx.failureOutcomeText() + ' - ' + failure + '.';
+    }
+
+    prfx.selectClipRanges(app.project.activeSequence, created);
+    return 'Added an adjustment layer on V' + (target + 1) + ' covering ' +
+        (spanEnd - spanStart).toFixed(2) + 's of the selection, reusing the project\'s existing layer.';
 };
