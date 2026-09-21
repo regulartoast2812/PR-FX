@@ -49,15 +49,17 @@ private struct Command: Codable {
     }
 }
 
-private let prfxFunctionCommands = [
+private let prfxFallbackCommands = [
     Command(type: "custom", name: "[System] Dump QE + DOM API", transitionFrames: 30, id: "dump-qe-api"),
     Command(type: "custom", name: "[System] Inspect Selected Clip", transitionFrames: 30, id: "inspect-selected-clip"),
     Command(type: "custom", name: "[System] Failure Report", transitionFrames: 30, id: "failure-report"),
     Command(type: "custom", name: "[System] Clear Failure Ledger", transitionFrames: 30, id: "clear-failure-ledger"),
     Command(type: "custom", name: "Undo Last PR FX Effect Apply", transitionFrames: 30, id: "undo-last-palette-action"),
     Command(type: "custom", name: "Remove Transitions on Selected Clips", transitionFrames: 30, id: "remove-transitions"),
-    Command(type: "custom", name: "Move Selected Clips Up", transitionFrames: 30, id: "move-selected-clips-up"),
-    Command(type: "custom", name: "Move Selected Clips Down", transitionFrames: 30, id: "move-selected-clips-down"),
+    Command(type: "custom", name: "Move Selected Clips Up as Group", transitionFrames: 30, id: "move-selected-clips-up", moveMode: "group"),
+    Command(type: "custom", name: "Move Selected Clips Up Individually", transitionFrames: 30, id: "move-selected-clips-up", moveMode: "individual"),
+    Command(type: "custom", name: "Move Selected Clips Down as Group", transitionFrames: 30, id: "move-selected-clips-down", moveMode: "group"),
+    Command(type: "custom", name: "Move Selected Clips Down Individually", transitionFrames: 30, id: "move-selected-clips-down", moveMode: "individual"),
     Command(type: "custom", name: "Pull Group In to Playhead", transitionFrames: 30, id: "pull-group-in"),
     Command(type: "custom", name: "Pull Group Out to Playhead", transitionFrames: 30, id: "pull-group-out"),
     Command(type: "custom", name: "Retract Speed In to Playhead", transitionFrames: 30, id: "retract-speed-in-to-playhead"),
@@ -65,6 +67,7 @@ private let prfxFunctionCommands = [
     Command(type: "custom", name: "Undo Last PR FX Action (Any)", transitionFrames: 30, id: "undo-last-prfx-action"),
     Command(type: "custom", name: "Undo Last PR FX Arrange Action", transitionFrames: 30, id: "undo-last-arrange"),
     Command(type: "custom", name: "Redo Last PR FX Arrange Action", transitionFrames: 30, id: "redo-last-arrange"),
+    Command(type: "custom", name: "Select Everything Starting Before Playhead", transitionFrames: 30, id: "select-before-playhead"),
     Command(type: "custom", name: "Adjustment Layer Over Selection", transitionFrames: 30, id: "adjustment-layer-over-selection"),
     Command(type: "custom", name: "Perfect Pitch (Correct Speed Transposition)", transitionFrames: 30, id: "perfect-pitch"),
     Command(type: "custom", name: "Place Source Monitor Clip at Playhead", transitionFrames: 30, id: "place-source-clip"),
@@ -91,11 +94,10 @@ private let retiredCommandIDs: Set<String> = ["stretch-speed-to-playhead"]
 // type a name runs Move Down instead. Panel scoping is the feature, not an
 // optimisation, so this stays false.
 //
-// It was set true because ad-hoc rebuilds kept invalidating the Accessibility
-// grant. That cause is fixed: build-macos.sh signs with a stable self-signed
-// certificate, so the grant now survives rebuilds. If Accessibility is genuinely
-// unavailable the code already degrades on its own -- saved Timeline region
-// first, then modifier-only keys -- which is the safe fallback this flag skipped.
+// It was briefly set true while chasing ad-hoc rebuild/TCC instability, but that
+// made shortcut keys live in bins and rename fields. Keep the safe behavior:
+// Timeline-aware arming when Accessibility can confirm it, saved-region fallback
+// when it cannot, and modifier-only degradation when panel detection is missing.
 private let prfxBypassAccessibilityFocus = false
 
 private struct Binding: Codable {
@@ -206,6 +208,7 @@ final class ShortcutListener: NSObject {
     private var lastSavedPaletteFrameString = ""
     private var isSubmittingPaletteCommand = false
     private var catalogRevision = 0
+    private var catalogFingerprint = ""
     private var focusPollTimer: Timer?
     private var axObserver: AXObserver?
     private var axObservedPid: pid_t = 0
@@ -214,8 +217,8 @@ final class ShortcutListener: NSObject {
     private var clickMonitor: Any?
     // Last mouse-down in Accessibility coordinates (top-left origin).
     private var lastClickPoint: CGPoint?
-    private var cachedTimelineRegion: CGRect?
-    private var cachedRegionAt = Date.distantPast
+    private var timelineRegionCache = TimelineRegionCache()
+    private var timelineDetectionDetails = "No live lookup yet"
     private var attemptedTimelineRegionLogRestore = false
     private var registeredScopeRank = -1
     private var settingsFileModifiedAt: Date?
@@ -225,7 +228,7 @@ final class ShortcutListener: NSObject {
     var lastDiagnosticFingerprint = ""
     var lastProbeAt = Date.distantPast
     var lastProbeFingerprint = ""
-    private var commands = prfxFunctionCommands + [
+    private var commands = prfxFallbackCommands + [
         Command(type: "effect", name: "Gaussian Blur", transitionFrames: 30, id: nil),
         Command(type: "effect", name: "Lumetri Color", transitionFrames: 30, id: nil),
         Command(type: "effect", name: "Crop", transitionFrames: 30, id: nil)
@@ -248,19 +251,25 @@ final class ShortcutListener: NSObject {
         }
         loadCatalog()
         commandBridge = try? CommandBridge(
-            catalogHandler: { [weak self] catalog in
+            catalogHandler: { [weak self] catalog, fingerprint in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     guard catalog.count >= 25 else {
                         listenerLog("Rejected incomplete catalog: \(catalog.count) command(s)")
                         return
                     }
-                    // CEP is the single command registry. It sends functions and
-                    // Premiere's live effects/transitions together, in display order.
-                    self.commands = self.mergingBuiltInFunctions(into: catalog)
+                    let sanitized = self.sanitizedCatalog(catalog)
+                    if self.catalogFingerprint == fingerprint && self.commands.count == sanitized.count {
+                        return
+                    }
+                    // CEP is the single command registry. Native keeps only a
+                    // small fallback list for pre-CEP startup and then adopts
+                    // CEP's exact catalog so split variants cannot drift.
+                    self.commands = sanitized
+                    self.catalogFingerprint = fingerprint
                     self.saveCatalog()
                     self.catalogRevision += 1
-                    listenerLog("Catalog synced: \(catalog.count) command(s), revision \(self.catalogRevision)")
+                    listenerLog("Catalog synced: \(sanitized.count) command(s), revision \(self.catalogRevision), fingerprint \(fingerprint)")
                     self.filterCommands()
                 }
             },
@@ -337,7 +346,8 @@ final class ShortcutListener: NSObject {
         guard let data = try? Data(contentsOf: catalogURL),
               let catalog = try? JSONDecoder().decode([Command].self, from: data),
               catalog.count >= 25 else { return }
-        commands = mergingBuiltInFunctions(into: catalog)
+        commands = sanitizedCatalog(catalog)
+        catalogFingerprint = ""
         listenerLog("Restored cached catalog: \(catalog.count) command(s)")
     }
 
@@ -347,11 +357,10 @@ final class ShortcutListener: NSObject {
         try? data.write(to: catalogURL, options: .atomic)
     }
 
-    private func mergingBuiltInFunctions(into catalog: [Command]) -> [Command] {
-        let managedIDs = Set(prfxFunctionCommands.compactMap(\.id))
-        return prfxFunctionCommands + catalog.filter { command in
+    private func sanitizedCatalog(_ catalog: [Command]) -> [Command] {
+        return catalog.filter { command in
             if let id = command.id, retiredCommandIDs.contains(id) { return false }
-            return !(command.type == "custom" && command.id.map(managedIDs.contains) == true)
+            return true
         }
     }
 
@@ -438,10 +447,7 @@ final class ShortcutListener: NSObject {
         if !Thread.isMainThread {
             return DispatchQueue.main.sync { self.healthPayload() }
         }
-        let settingsChanged = reloadSettingsIfNeeded()
-        updateHotKeyRegistration(force: settingsChanged)
         let accessibilityTrusted = prfxBypassAccessibilityFocus ? false : AXIsProcessTrusted()
-        let currentFocus = timelineShortcutFocus()
         let mode: String
         if isPremiere(NSWorkspace.shared.frontmostApplication) && !hotKeyRefs.isEmpty {
             if registeredScopeRank == paletteFallbackScopeRank {
@@ -457,26 +463,23 @@ final class ShortcutListener: NSObject {
         let pending = commandBridge?.pendingName() ?? ""
         let paletteFrameSaved = FileManager.default.fileExists(atPath: paletteFrameURL.path) ? "true" : "false"
         let savedBindings = (settings.bindings ?? []).count
-        let expectedCounts = expectedArmCounts(for: currentFocus)
-        let armedBindings = hotKeyCommands.isEmpty && savedBindings > 0 ? expectedCounts.armed : hotKeyCommands.count
+        let armedBindings = hotKeyCommands.count
         let withheldBindings = max(0, savedBindings - armedBindings)
-        return "{\"mode\":\"\(mode)\",\"listenerBuild\":\"\(jsonEscape(prfxListenerBuild))\",\"bindings\":\(savedBindings),\"armedBindings\":\(armedBindings),\"withheldBindings\":\(withheldBindings),\"accessibilityTrusted\":\(accessibilityTrusted ? "true" : "false"),\"accessibilityBypassed\":\(prfxBypassAccessibilityFocus ? "true" : "false"),\"catalogCount\":\(commands.count),\"catalogRevision\":\(catalogRevision),\"pendingCommand\":\"\(jsonEscape(pending))\",\"focus\":\"\(jsonEscape(shortcutScopeReason))\",\"paletteFrameSaved\":\(paletteFrameSaved)}"
+        let detection = ",\"timelineRegion\":\"\(jsonEscape(timelineRegionCache.liveRegion.map(NSStringFromRect) ?? ""))\",\"savedTimelineRegion\":\"\(jsonEscape(timelineRegionCache.lastKnownRegion.map(NSStringFromRect) ?? ""))\",\"lastClick\":\"\(jsonEscape(lastClickPoint.map(NSStringFromPoint) ?? ""))\",\"timelineDetection\":\"\(jsonEscape(timelineDetectionDetails))\",\"focusPollingActive\":\(focusPollTimer?.isValid == true),\"lookupAgeSeconds\":\(Date().timeIntervalSince(timelineRegionCache.lastLookupAt))"
+        return "{\"mode\":\"\(mode)\",\"listenerBuild\":\"\(jsonEscape(prfxListenerBuild))\",\"bindings\":\(savedBindings),\"armedBindings\":\(armedBindings),\"withheldBindings\":\(withheldBindings),\"accessibilityTrusted\":\(accessibilityTrusted ? "true" : "false"),\"accessibilityBypassed\":\(prfxBypassAccessibilityFocus ? "true" : "false"),\"catalogCount\":\(commands.count),\"catalogRevision\":\(catalogRevision),\"catalogFingerprint\":\"\(jsonEscape(catalogFingerprint))\",\"pendingCommand\":\"\(jsonEscape(pending))\",\"focus\":\"\(jsonEscape(shortcutScopeReason))\",\"paletteFrameSaved\":\(paletteFrameSaved)\(detection)}"
     }
 
-    // Carbon hotkeys are global by API design and they consume registered keys.
-    // Keep them registered only while Premiere's Timeline/Sequence panel owns
-    // focus, so typing in bins, search fields, and rename fields passes through.
-    // The app is ad-hoc signed, so every rebuild changes its code identity and
-    // macOS discards the previous Accessibility grant. Without that grant the
-    // listener cannot read focus and refuses to arm any shortcut, which looks
-    // exactly like the tool being broken. Ask for it explicitly instead.
+    // Carbon hotkeys are global by API design and consume registered keys.
+    // Modifier-less shortcuts must stay Timeline-aware so typing in bins, search
+    // fields, and rename fields passes through. Modifier shortcuts can degrade
+    // to Premiere-frontmost when Timeline detection is unavailable.
     private func promptForAccessibilityIfNeeded() {
         guard !prfxBypassAccessibilityFocus else {
             listenerLog("Accessibility focus detection bypassed; shortcuts scope to Premiere frontmost.")
             return
         }
         guard !AXIsProcessTrusted() else { return }
-        listenerLog("Accessibility is not granted; prompting. Timeline shortcuts stay disabled until it is enabled.")
+        listenerLog("Accessibility is not granted; prompting. Modifier shortcuts may arm from Premiere, while Shift/plain keys need a saved Timeline region.")
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }
@@ -506,7 +509,7 @@ final class ShortcutListener: NSObject {
             guard let self else { return }
             self.hotKeyRefreshTimer = nil
             self.updateFocusPolling()
-            self.refreshHotKeys()
+            self.updateHotKeyRegistration(force: false)
         }
         hotKeyRefreshTimer = timer
         RunLoop.main.add(timer, forMode: .common)
@@ -1325,16 +1328,13 @@ final class ShortcutListener: NSObject {
     private func observeClicks() {
         guard clickMonitor == nil else { return }
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
             self.lastClickPoint = self.axPointFromScreen(NSEvent.mouseLocation)
-            // Re-arm immediately after the editor clicks back into the
-            // Timeline. Waiting for Premiere's AX notification or the 1s safety
-            // poll made shortcuts feel random when pressed quickly after a
-            // panel click.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
-                self.scheduleHotKeyRefresh()
-            }
+            // Use the known geometry immediately, then re-check after Premiere
+            // has processed the click (including focus entering a text field).
+            // Do not unregister/re-register an unchanged shortcut set per click.
+            self.updateHotKeyRegistration(force: false)
+            self.scheduleHotKeyRefresh()
         }
     }
 
@@ -1347,26 +1347,26 @@ final class ShortcutListener: NSObject {
         // genuinely absent — closed panel, modal dialog, a workspace without it —
         // would re-walk the whole element tree on every focus change and every
         // safety-timer tick, indefinitely.
-        if Date().timeIntervalSince(cachedRegionAt) < 2.0 { return cachedTimelineRegion }
+        if !timelineRegionCache.needsLookup() { return timelineRegionCache.liveRegion }
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         // Scan every window, not just the focused one: editors often tear the
         // Timeline off into its own window on a second display, and it would be
         // invisible to a focused-window-only walk.
         var windows: [AXUIElement] = []
         if let list = axChildren(appElement, kAXWindowsAttribute as CFString) { windows = list }
-        if windows.isEmpty, let focused = axElement(appElement, kAXFocusedWindowAttribute as CFString) {
-            windows = [focused]
+        if let focused = axElement(appElement, kAXFocusedWindowAttribute as CFString) {
+            windows.removeAll { CFEqual($0, focused) }
+            windows.insert(focused, at: 0)
         }
         var region: CGRect?
         for window in windows {
             if let found = timelineRegion(inWindow: window) { region = found; break }
         }
         guard let region else {
-            cachedTimelineRegion = nil
-            cachedRegionAt = Date()
+            timelineRegionCache.recordLookup(nil)
             return nil
         }
-        if cachedTimelineRegion.map({ !$0.equalTo(region) }) ?? true {
+        if timelineRegionCache.lastKnownRegion.map({ !$0.equalTo(region) }) ?? true {
             listenerLog("Timeline region: (\(Int(region.minX)),\(Int(region.minY)) \(Int(region.width))x\(Int(region.height)))")
         }
         cacheTimelineRegion(region)
@@ -1375,8 +1375,7 @@ final class ShortcutListener: NSObject {
 
     private func cacheTimelineRegion(_ region: CGRect) {
         guard isUsableTimelineRegion(region) else { return }
-        cachedTimelineRegion = region
-        cachedRegionAt = Date()
+        timelineRegionCache.recordLookup(region)
         let string = NSStringFromRect(region)
         let existing = (try? String(contentsOf: timelineRegionURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1386,15 +1385,14 @@ final class ShortcutListener: NSObject {
     }
 
     private func savedTimelineRegion() -> CGRect? {
-        if let cached = cachedTimelineRegion, isUsableTimelineRegion(cached) { return cached }
+        if let cached = timelineRegionCache.lastKnownRegion, isUsableTimelineRegion(cached) { return cached }
         if let stored = try? String(contentsOf: timelineRegionURL, encoding: .utf8),
            let region = parseStoredTimelineRegion(stored) {
-            cachedTimelineRegion = region
-            cachedRegionAt = Date()
+            timelineRegionCache.restoreFallback(region)
             return region
         }
         if let region = restoreTimelineRegionFromLog() {
-            cacheTimelineRegion(region)
+            timelineRegionCache.restoreFallback(region)
             listenerLog("Restored Timeline region from listener log")
             return region
         }
@@ -1441,7 +1439,7 @@ final class ShortcutListener: NSObject {
         guard let windowOrigin = axPoint(window, kAXPositionAttribute as CFString),
               let windowSize = axSize(window, kAXSizeAttribute as CFString) else { return nil }
         let windowRect = CGRect(origin: windowOrigin, size: windowSize)
-        var markerUnion: CGRect?
+        var markers: [CGRect] = []
         var tabStrips: [CGRect] = []
         var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
         var scanned = 0
@@ -1458,19 +1456,10 @@ final class ShortcutListener: NSObject {
                   let size = axSize(element, kAXSizeAttribute as CFString) else { continue }
             let rect = CGRect(origin: origin, size: size)
             if description == "UI_TabsContainer" { tabStrips.append(rect); continue }
-            markerUnion = markerUnion.map { $0.union(rect) } ?? rect
+            markers.append(rect)
         }
-        guard var region = markerUnion else { return nil }
-        // Prefer the tab strip directly above the markers and horizontally
-        // overlapping them: that is this panel group's own tab bar.
-        let candidates = tabStrips.filter { $0.minY <= region.minY && $0.maxX > region.minX && $0.minX < region.maxX }
-        if let strip = candidates.max(by: { $0.minY < $1.minY }) {
-            region = CGRect(x: strip.minX, y: strip.minY,
-                            width: strip.width, height: windowRect.maxY - strip.minY)
-        } else {
-            region = CGRect(x: windowRect.minX, y: max(windowRect.minY, region.minY - 30),
-                            width: windowRect.width, height: windowRect.maxY - max(windowRect.minY, region.minY - 30))
-        }
+        let region = TimelinePanelGeometry.region(window: windowRect, markers: markers, tabs: tabStrips)
+        timelineDetectionDetails = "scanned=\(scanned); window=\(NSStringFromRect(windowRect)); markers=\(markers.map(NSStringFromRect).joined(separator: ";")); tabs=\(tabStrips.map(NSStringFromRect).joined(separator: ";")); matched=\(region != nil)"
         return region
     }
 
@@ -1702,12 +1691,12 @@ private final class CommandBridge {
     private var pendingCommand: Command?
     private var pendingCommandName = ""
     private let queue = DispatchQueue(label: "com.prfx.shortcut-listener.bridge")
-    private let catalogHandler: ([Command]) -> Void
+    private let catalogHandler: ([Command], String) -> Void
     private let healthHandler: () -> String
     private let settingsReloadHandler: () -> Void
     private let stateHandler: (NWListener.State) -> Void
 
-    init(catalogHandler: @escaping ([Command]) -> Void, healthHandler: @escaping () -> String, settingsReloadHandler: @escaping () -> Void, stateHandler: @escaping (NWListener.State) -> Void) throws {
+    init(catalogHandler: @escaping ([Command], String) -> Void, healthHandler: @escaping () -> String, settingsReloadHandler: @escaping () -> Void, stateHandler: @escaping (NWListener.State) -> Void) throws {
         self.catalogHandler = catalogHandler
         self.healthHandler = healthHandler
         self.settingsReloadHandler = settingsReloadHandler
@@ -1781,8 +1770,9 @@ private final class CommandBridge {
                 let bodyStart = headerEnd + 4
                 let body = requestData.subdata(in: bodyStart..<totalLength)
                 if let catalog = try? JSONDecoder().decode([Command].self, from: body) {
-                    self.catalogHandler(catalog)
-                    self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
+                    let fingerprint = self.httpHeaderValue("x-prfx-catalog-fingerprint", in: header) ?? self.bodyFingerprint(body)
+                    self.catalogHandler(catalog, fingerprint)
+                    self.respond(connection, status: "200 OK", body: "{\"ok\":true,\"catalogFingerprint\":\"\(self.jsonEscape(fingerprint))\",\"catalogCount\":\(catalog.count)}")
                 } else {
                     self.respond(connection, status: "400 Bad Request", body: "{\"error\":\"invalid catalog\"}")
                 }
@@ -1808,6 +1798,42 @@ private final class CommandBridge {
             }
         }
         return 0
+    }
+
+    private func httpHeaderValue(_ name: String, in header: String) -> String? {
+        let target = name.lowercased()
+        for line in header.components(separatedBy: "\r\n") {
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespaces).lowercased() == target {
+                let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
+    }
+
+    private func bodyFingerprint(_ data: Data) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in data {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return String(format: "fnv1a32-%08x-%d", hash, data.count)
+    }
+
+    private func jsonEscape(_ value: String) -> String {
+        var result = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": result += "\\\""
+            case "\\": result += "\\\\"
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\t": result += "\\t"
+            default: result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
     }
 
     private func respond(_ connection: NWConnection, status: String, body: String) {

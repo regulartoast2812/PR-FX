@@ -58,7 +58,18 @@ Checking with `node`/JavaScriptCore proves nothing: ES5 dropped the ES3 reserved
 words and no modern engine implements E4X. Run this instead, on every host edit:
 
 ```sh
-python3 tools/check-extendscript.py jsx/host.jsx
+./tools/check-extendscript.sh jsx/host.jsx
+```
+
+Use the shell wrapper, not the Python file. Accepting an Xcode licence update
+can disable `/usr/bin/python3` outright (and `swiftc` with it), which silently
+killed this check — and editing `host.jsx` without it is how a parse error takes
+down every command. The wrapper runs a JXA port via `osascript`, which has no
+Xcode dependency. `tools/check-extendscript.py` is kept as the reference
+implementation. If Swift will not build, this is why:
+
+```sh
+sudo xcodebuild -license
 ```
 
 Known killers:
@@ -152,6 +163,15 @@ app.project       applyLumetriPreset(string) -> boolean
   fallback merely changed from "Custom" to "Match Source - Adaptive High
   Bitrate". Worst failure mode available: it looks like success and renders
   wrong. Queue the cuts, then set the format once in AME across all jobs.
+- **No way to create an adjustment layer.** Verified `typeof === 'undefined'` on
+  26.3.0 for `qe.project.newAdjustmentLayer`,
+  `app.project.createNewAdjustmentLayer`,
+  `app.project.rootItem.createAdjustmentLayer` and
+  `sequence.createAdjustmentLayer`. `newTransparentVideo` and `newColorMatte`
+  DO exist but neither affects layers beneath, so they are not substitutes.
+  `Adjustment Layer Over Selection` therefore reuses one the project already
+  has, matching it to the sequence (already-on-this-timeline, then frame size).
+  One layer must be created by hand per frame size, once per project.
 - No undo *grouping* (`beginUndoGroup`). `undoStackIndex()` is the substitute —
   checkpoint before, `undo()` back to it after. See `prfx.undoCheckpoint`.
 - No API for the Effects panel Presets bin, except Lumetri (above).

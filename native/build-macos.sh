@@ -12,8 +12,22 @@ module_cache="${TMPDIR:-/tmp}/prfx-swift-module-cache"
 generated_build_info="$output_dir/PRFXGeneratedBuildInfo.swift"
 build_marker="$output_dir/listener-build.txt"
 build_lock="$output_dir/.listener-build.lock"
-listener_sources=("$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/Info.plist")
+listener_sources=("$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$project_dir/Info.plist")
 can_build_listener=1
+force_rebuild=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --rebuild|--force-rebuild)
+      force_rebuild=1
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      echo "Usage: $0 [--rebuild]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 for source_file in "${listener_sources[@]}"; do
   if [[ ! -f "$source_file" ]]; then
@@ -22,21 +36,6 @@ for source_file in "${listener_sources[@]}"; do
 done
 
 mkdir -p "$output_dir" "$module_cache"
-
-if (( can_build_listener )); then
-  source_hash="$(/usr/bin/shasum -a 256 "${listener_sources[@]}" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1,1,12)}')"
-  # Keep this deterministic for a given listener source. A timestamp here made
-  # every Install / Repair look like a new app to macOS, which in turn made
-  # shortcut state appear random across repairs.
-  build_id="source-$source_hash"
-elif [[ -f "$build_marker" ]]; then
-  # Soft-launch packages can ship a prebuilt app without requiring every tester
-  # machine to have Swift/Xcode. In that case the bundled marker is the expected
-  # install build.
-  build_id="$(<"$build_marker")"
-else
-  build_id=""
-fi
 
 cleanup_staging() {
   rm -f "$build_lock"
@@ -65,14 +64,16 @@ codesign_ok_for_local_install() {
   return 1
 }
 
-if [[ -x "$current_listener_binary" && -f "$app_dir/Contents/Info.plist" && -f "$build_marker" ]]; then
-  existing_build_id="$(<"$build_marker")"
-  if [[ -n "$build_id" && "$existing_build_id" == "$build_id" ]] && codesign_ok_for_local_install "$app_dir"; then
-    echo "Existing listener is current; skipped rebuild."
-    echo "Built: $app_dir"
-    echo "Listener build: $build_id"
-    exit 0
-  fi
+existing_build_id=""
+if [[ -f "$build_marker" ]]; then
+  existing_build_id="$(tr -d '\r\n' < "$build_marker" 2>/dev/null || true)"
+fi
+
+if (( ! force_rebuild )) && [[ -x "$current_listener_binary" && -f "$app_dir/Contents/Info.plist" && -n "$existing_build_id" ]] && codesign_ok_for_local_install "$app_dir"; then
+  echo "Bundled listener is installed; skipped rebuild."
+  echo "Built: $app_dir"
+  echo "Listener build: $existing_build_id"
+  exit 0
 fi
 
 if (( ! can_build_listener )); then
@@ -87,6 +88,18 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 1
 fi
 
+source_hash="$(
+  for source_file in "${listener_sources[@]}"; do
+    print -r -- "FILE:${source_file:t}:$(/usr/bin/stat -f '%z' "$source_file")"
+    /bin/cat "$source_file"
+    print -r -- ""
+  done | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1,1,12)}'
+)"
+# Keep this deterministic for a given listener source. A timestamp here made
+# every Install / Repair look like a new app to macOS, which in turn made
+# shortcut state appear random across repairs.
+build_id="source-$source_hash"
+
 print -r -- "$$" > "$build_lock"
 
 mkdir -p "$staging_app_dir/Contents/MacOS" "$staging_app_dir/Contents/Resources"
@@ -95,7 +108,7 @@ import Foundation
 
 let prfxListenerBuild = "$build_id"
 EOF
-swiftc -D PRFX_GENERATED_BUILD -module-cache-path "$module_cache" "$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$generated_build_info" -o "$staging_listener_binary" -framework AppKit -framework ApplicationServices -framework Carbon -framework Network
+swiftc -D PRFX_GENERATED_BUILD -module-cache-path "$module_cache" "$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$generated_build_info" -o "$staging_listener_binary" -framework AppKit -framework ApplicationServices -framework Carbon -framework Network
 cp "$project_dir/Info.plist" "$staging_app_dir/Contents/Info.plist"
 print -n 'APPL????' > "$staging_app_dir/Contents/PkgInfo"
 print -r -- "$build_id" > "$staging_app_dir/Contents/Resources/listener-build.txt"

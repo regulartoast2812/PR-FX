@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20260903-place-make-room-1';
+prfx.HOST_BUILD = '20260916-hide-system-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -618,6 +618,9 @@ prfx.functions = {
     } },
     'dump-qe-api': { needsSequence: false, run: function () {
         return prfx.dumpQeApi();
+    } },
+    'select-before-playhead': { run: function (publicSequence, qeSequence) {
+        return prfx.selectClipsBeforePlayhead(publicSequence, qeSequence);
     } },
     'adjustment-layer-over-selection': { run: function (publicSequence, qeSequence) {
         return prfx.addAdjustmentLayerOverSelection(publicSequence, qeSequence);
@@ -2095,7 +2098,16 @@ prfx.dumpQeApi = function () {
             ['app.project.createNewSequenceFromClips', function () { return app.project.createNewSequenceFromClips; }],
             ['qe.executeConsoleCommand', function () { return qe.executeConsoleCommand; }],
             ['qe.project.undo', function () { return qe.project.undo; }],
-            ['qe.source.openFilePath', function () { return qe.source.openFilePath; }]
+            ['qe.source.openFilePath', function () { return qe.source.openFilePath; }],
+            ['qe.project.newAdjustmentLayer', function () { return qe.project.newAdjustmentLayer; }],
+            ['qe.project.newTransparentVideo', function () { return qe.project.newTransparentVideo; }],
+            ['qe.project.newColorMatte', function () { return qe.project.newColorMatte; }],
+            ['app.project.createNewAdjustmentLayer', function () { return app.project.createNewAdjustmentLayer; }],
+            ['app.project.rootItem.createAdjustmentLayer', function () { return app.project.rootItem.createAdjustmentLayer; }],
+            ['sequence.createAdjustmentLayer', function () { return app.project.activeSequence.createAdjustmentLayer; }],
+            ['sequence.captionTracks', function () { return app.project.activeSequence.captionTracks; }],
+            ['qe sequence.numCaptionTracks', function () { return qe.project.getActiveSequence().numCaptionTracks; }],
+            ['qe sequence.getCaptionTrackAt', function () { return qe.project.getActiveSequence().getCaptionTrackAt; }]
         ];
         for (var probeIndex = 0; probeIndex < typeofProbes.length; probeIndex++) {
             try {
@@ -4101,7 +4113,8 @@ prfx.appendPlacementTrack = function (staging, kind) {
     if (!prfx.stagingTrackEmpty(live, kind, newIndex)) {
         throw new Error('the ' + kind + ' track Premiere added did not come up empty');
     }
-    staging.extra[kind].push(newIndex);
+    if (!staging.tracks.extra) staging.tracks.extra = { video: [], audio: [] };
+    staging.tracks.extra[kind].push(newIndex);
     return newIndex;
 };
 
@@ -4125,7 +4138,8 @@ prfx.settleCreatedTrackIndexes = function (staging, created) {
 };
 
 prfx.appendedTrackNote = function (staging) {
-    var total = staging.extra.video.length + staging.extra.audio.length;
+    var extra = staging.tracks && staging.tracks.extra;
+    var total = extra ? (extra.video.length + extra.audio.length) : 0;
     if (!total) return '';
     return ' Added ' + total + ' track' + (total === 1 ? '' : 's') + ' to make room.';
 };
@@ -7092,40 +7106,110 @@ prfx.ledgerStatus = function (entry) {
     return 'INTERMITTENT';
 };
 
+// A short stable handle per distinct bug, so a specific one can be referred to
+// ("a3f1 is fixed") instead of pasting the whole message around.
+prfx.entryTag = function (key) {
+    var hash = 0, i;
+    for (i = 0; i < key.length; i++) {
+        hash = ((hash * 31) + key.charCodeAt(i)) % 1048576;
+    }
+    hash = hash.toString(16);
+    while (hash.length < 4) hash = '0' + hash;
+    return hash.substring(hash.length - 4);
+};
+
+prfx.STATUS_ORDER = ['OPEN', 'INTERMITTENT', 'RESOLVED'];
+
+// Grouped by FUNCTION, not by status: after fixing something the question is
+// always "what else has this function hit, and is any of it still open".
+// Functions with no recorded failures are listed too, so the report doubles as
+// a checklist of what has actually been exercised.
 prfx.failureReport = function () {
-    var ledger = prfx.readLedger(), lines = [], groups = { OPEN: [], INTERMITTENT: [], RESOLVED: [] };
-    var key, entry, order = ['OPEN', 'INTERMITTENT', 'RESOLVED'], i, j, list, counts = [];
-    lines.push('PR FX failure report — ' + prfx.nowStamp());
-    lines.push('Host build: ' + prfx.HOST_BUILD + '   on disk: ' + (prfx.onDiskBuild() || '?'));
-    try { lines.push('Premiere: ' + String(app.version) + ' build ' + String(app.build)); } catch (versionError) {}
-    lines.push('');
+    var ledger = prfx.readLedger(), lines = [], byCommand = {}, ids = [], key, entry, id;
+    var i, j, list, status, counts = { OPEN: 0, INTERMITTENT: 0, RESOLVED: 0 };
+    var clean = [], withHistory = [], openFunctions = [];
 
     for (key in ledger.entries) {
         if (!ledger.entries.hasOwnProperty(key)) continue;
         entry = ledger.entries[key];
         entry.key = key;
-        groups[prfx.ledgerStatus(entry)].push(entry);
+        entry.status = prfx.ledgerStatus(entry);
+        entry.tag = prfx.entryTag(key);
+        counts[entry.status]++;
+        id = String(entry.commandId || 'unknown');
+        if (!byCommand[id]) { byCommand[id] = { name: entry.command || id, entries: [] }; ids.push(id); }
+        byCommand[id].entries.push(entry);
     }
-    for (i = 0; i < order.length; i++) {
-        list = groups[order[i]];
-        counts.push(list.length + ' ' + order[i].toLowerCase());
-        lines.push('== ' + order[i] + ' (' + list.length + ') ==');
-        if (!list.length) lines.push('  none');
+    // Every registered function, so ones that have never failed still appear.
+    for (id in prfx.functions) {
+        if (!prfx.functions.hasOwnProperty(id)) continue;
+        if (byCommand[id]) continue;
+        byCommand[id] = { name: id, entries: [] };
+        ids.push(id);
+    }
+
+    for (i = 0; i < ids.length; i++) {
+        list = byCommand[ids[i]].entries;
+        if (!list.length) { clean.push(ids[i]); continue; }
+        status = 'RESOLVED';
         for (j = 0; j < list.length; j++) {
-            entry = list[j];
-            lines.push('  [' + order[i] + '] ' + entry.command);
-            lines.push('      failed ' + entry.failCount + 'x, succeeded ' + Number(entry.successCount || 0) + 'x since');
-            lines.push('      first ' + entry.firstSeen + '   last ' + entry.lastSeen);
-            lines.push('      fail build ' + (entry.lastFailBuild || '?') +
-                '   last success build ' + (entry.lastSuccessBuild || 'never'));
-            if (entry.staleHost) lines.push('      ** RAN ON A STALE HOST (' + entry.staleHost + ') — likely not a real bug **');
-            lines.push('      ' + entry.sample);
-            lines.push('');
+            if (list[j].status === 'OPEN') { status = 'OPEN'; break; }
+            if (list[j].status === 'INTERMITTENT') status = 'INTERMITTENT';
         }
-        lines.push('');
+        if (status === 'RESOLVED') withHistory.push(ids[i]); else openFunctions.push(ids[i]);
     }
+
+    lines.push('PR FX failure report — ' + prfx.nowStamp());
+    lines.push('Host build: ' + prfx.HOST_BUILD + '   on disk: ' + (prfx.onDiskBuild() || '?'));
+    try { lines.push('Premiere: ' + String(app.version) + ' build ' + String(app.build)); } catch (versionError) {}
+    lines.push('Bugs: ' + counts.OPEN + ' open, ' + counts.INTERMITTENT + ' intermittent, ' + counts.RESOLVED + ' resolved');
+    lines.push('Functions: ' + openFunctions.length + ' needing attention, ' + withHistory.length +
+        ' fixed, ' + clean.length + ' with no failures recorded');
+    lines.push('');
+    lines.push('OPEN         still broken; nothing has succeeded since');
+    lines.push('INTERMITTENT failed AND succeeded on the SAME build');
+    lines.push('RESOLVED     succeeded on a newer build than it last failed on');
+    lines.push('');
+
+    lines = lines.concat(prfx.reportFunctionSection('NEEDS ATTENTION', openFunctions, byCommand));
+    lines = lines.concat(prfx.reportFunctionSection('FIXED (history kept)', withHistory, byCommand));
+
+    lines.push('== NO FAILURES RECORDED (' + clean.length + ') ==');
+    lines.push('  Never failed, or never run — the ledger cannot tell these apart.');
+    for (i = 0; i < clean.length; i++) lines.push('  ' + clean[i]);
+    lines.push('');
+
     prfx.writeDiagnostic(prfx.REPORT_FILE, lines);
-    return 'Failure report: ' + counts.join(', ') + '. Written to ' + prfx.logPath(prfx.REPORT_FILE);
+    return 'Failure report: ' + counts.OPEN + ' open, ' + counts.INTERMITTENT + ' intermittent, ' +
+        counts.RESOLVED + ' resolved across ' + (openFunctions.length + withHistory.length) +
+        ' function(s). Written to ' + prfx.logPath(prfx.REPORT_FILE);
+};
+
+prfx.reportFunctionSection = function (title, ids, byCommand) {
+    var lines = [], i, j, list, entry, order, s;
+    lines.push('== ' + title + ' (' + ids.length + ') ==');
+    if (!ids.length) lines.push('  none');
+    for (i = 0; i < ids.length; i++) {
+        lines.push('');
+        lines.push('  ' + byCommand[ids[i]].name + '   [' + ids[i] + ']');
+        list = byCommand[ids[i]].entries;
+        for (s = 0; s < prfx.STATUS_ORDER.length; s++) {
+            order = prfx.STATUS_ORDER[s];
+            for (j = 0; j < list.length; j++) {
+                entry = list[j];
+                if (entry.status !== order) continue;
+                lines.push('    [' + entry.status + ' #' + entry.tag + '] ' +
+                    entry.failCount + ' fail / ' + Number(entry.successCount || 0) + ' ok since');
+                lines.push('        first ' + entry.firstSeen + '   last ' + entry.lastSeen);
+                lines.push('        fail build ' + (entry.lastFailBuild || '?') +
+                    '   last ok build ' + (entry.lastSuccessBuild || 'never'));
+                if (entry.staleHost) lines.push('        ** STALE HOST (' + entry.staleHost + ') — probably not a real bug **');
+                lines.push('        ' + entry.sample);
+            }
+        }
+    }
+    lines.push('');
+    return lines;
 };
 
 prfx.clearFailureLedger = function () {
@@ -7144,6 +7228,188 @@ prfx.clearFailureLedger = function () {
 // It is found from the Timeline first -- isAdjustmentLayer() on a TrackItem is
 // the only reliable test -- then by scanning the bins as a fallback.
 // ---------------------------------------------------------------------------
+// A project can hold several sequences at different frame sizes, and an
+// adjustment layer is built for the size it was created at. Reusing a 1080x1920
+// layer in a 1920x1080 sequence letterboxes it, so "an adjustment layer exists"
+// is not enough -- it has to fit THIS timeline.
+prfx.sequenceFrameSize = function (sequence) {
+    var width = NaN, height = NaN;
+    try { width = Number(sequence.frameSizeHorizontal); } catch (widthError) {}
+    try { height = Number(sequence.frameSizeVertical); } catch (heightError) {}
+    if (!(width > 0) || !(height > 0)) return null;
+    return { width: width, height: height };
+};
+
+// Frame size is not exposed directly on a ProjectItem; it appears in the
+// project metadata as "1080 x 1920". Absent or unparseable means unknown, and
+// unknown must never be treated as a match.
+prfx.projectItemFrameSize = function (item) {
+    var text = '', match;
+    try { text = String(item.getProjectMetadata ? item.getProjectMetadata() : ''); } catch (error) { return null; }
+    if (!text.length) return null;
+    match = text.match(/([0-9]{2,5})\s*[xX\u00d7]\s*([0-9]{2,5})/);
+    if (!match) return null;
+    return { width: Number(match[1]), height: Number(match[2]) };
+};
+
+prfx.frameSizesMatch = function (a, b) {
+    if (!a || !b) return false;
+    return Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1;
+};
+
+// Every adjustment layer in the project, plus whether each is already used in
+// this sequence -- a layer already living on this timeline is proof of fit that
+// no metadata check can beat.
+prfx.collectAdjustmentLayers = function (sequence) {
+    var out = [], seen = {}, tracks, count, t, clips, clipCount, i, clip, item, id;
+    tracks = sequence ? sequence.videoTracks : null;
+    count = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+    for (t = 0; t < count; t++) {
+        try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+        catch (trackError) { clipCount = 0; }
+        for (i = 0; i < clipCount; i++) {
+            try { clip = clips[i]; } catch (clipError) { continue; }
+            try {
+                if (!clip || !clip.isAdjustmentLayer || clip.isAdjustmentLayer() !== true) continue;
+                item = clip.projectItem;
+            } catch (testError) { continue; }
+            if (!item) continue;
+            id = String(item.nodeId || item.name);
+            if (seen[id]) continue;
+            seen[id] = true;
+            out.push({ item: item, inThisSequence: true });
+        }
+    }
+    prfx.collectAdjustmentLayersInBins(app.project.rootItem, 0, out, seen);
+    return out;
+};
+
+prfx.collectAdjustmentLayersInBins = function (bin, depth, out, seen) {
+    var children, count, i, child, path, id;
+    if (depth > 8) return;
+    try { children = bin.children; count = Number(children.numItems || 0); } catch (error) { return; }
+    for (i = 0; i < count; i++) {
+        try { child = children[i]; } catch (childError) { continue; }
+        if (!child) continue;
+        if (prfx.projectItemIsBin(child)) { prfx.collectAdjustmentLayersInBins(child, depth + 1, out, seen); continue; }
+        try { path = String(child.getMediaPath ? child.getMediaPath() : ''); } catch (pathError) { path = ''; }
+        if (path.length) continue;
+        if (prfx.normalizedPitchName(child.name).indexOf('adjustmentlayer') === -1) continue;
+        id = String(child.nodeId || child.name);
+        if (seen[id]) continue;
+        seen[id] = true;
+        out.push({ item: child, inThisSequence: false });
+    }
+};
+
+// Creation is undocumented, so every plausible entry point is tried and the
+// result is confirmed by re-scanning for a layer that was not there before.
+prfx.createAdjustmentLayerItem = function (sequence) {
+    var size = prfx.sequenceFrameSize(sequence), before = {}, existing, i, after, attempt, attempts;
+    existing = prfx.collectAdjustmentLayers(sequence);
+    for (i = 0; i < existing.length; i++) before[String(existing[i].item.nodeId || existing[i].item.name)] = true;
+
+    attempts = [
+        function () { return qe.project.newAdjustmentLayer ? qe.project.newAdjustmentLayer() : null; },
+        function () { return app.project.createNewAdjustmentLayer ? app.project.createNewAdjustmentLayer() : null; },
+        function () { return app.project.rootItem.createAdjustmentLayer ? app.project.rootItem.createAdjustmentLayer() : null; },
+        function () { return sequence.createAdjustmentLayer ? sequence.createAdjustmentLayer() : null; }
+    ];
+    for (i = 0; i < attempts.length; i++) {
+        try { attempt = attempts[i](); } catch (attemptError) { continue; }
+        after = prfx.collectAdjustmentLayers(sequence);
+        for (var j = 0; j < after.length; j++) {
+            if (!before[String(after[j].item.nodeId || after[j].item.name)]) {
+                return { item: after[j].item, created: true, size: size };
+            }
+        }
+    }
+    return null;
+};
+
+// Premiere cannot create an adjustment layer from a script, so when the project
+// has none that fits, they are imported from a template project shipped with the
+// tool. Premiere authored that file; nothing here writes it.
+prfx.adjustmentTemplatePath = function () {
+    var root = prfx.extensionRoot();
+    return root ? root.fsName + '/assets/adjustment-layers.prproj' : '';
+};
+
+prfx.importAdjustmentTemplate = function (sequence) {
+    var path = prfx.adjustmentTemplatePath(), file, before = {}, existing, i, after, attempts, imported = false;
+    if (!path.length) return { ok: false, reason: 'the PR FX extension folder could not be located' };
+    try { file = new File(path); } catch (fileError) { return { ok: false, reason: 'the template path is unreadable' }; }
+    if (!file.exists) {
+        return { ok: false, missingTemplate: true,
+            reason: 'assets/adjustment-layers.prproj is not installed. See assets/README.md for how to make it' };
+    }
+
+    existing = prfx.collectAdjustmentLayers(sequence);
+    for (i = 0; i < existing.length; i++) before[String(existing[i].item.nodeId || existing[i].item.name)] = true;
+
+    // Both import routes are undocumented for .prproj, so each is tried and the
+    // result confirmed by re-scanning rather than by a return value.
+    attempts = [
+        function () { return app.project.importFiles ? app.project.importFiles([path], true, app.project.rootItem, false) : null; },
+        function () { app.enableQE(); return qe.project.importProject ? qe.project.importProject(path) : null; }
+    ];
+    for (i = 0; i < attempts.length; i++) {
+        try { attempts[i](); imported = true; } catch (attemptError) { continue; }
+        after = prfx.collectAdjustmentLayers(sequence);
+        for (var j = 0; j < after.length; j++) {
+            if (!before[String(after[j].item.nodeId || after[j].item.name)]) {
+                return { ok: true, layers: after };
+            }
+        }
+    }
+    return { ok: false, reason: imported
+        ? 'the template imported but produced no adjustment layer items'
+        : 'Premiere refused to import the template project' };
+};
+
+// Ordered by how confident we can be that the layer fits:
+//   1. already on this timeline  2. metadata frame size matches  3. create one
+// A layer of unknown or wrong size is used only as a last resort, and said so.
+prfx.resolveAdjustmentLayer = function (sequence) {
+    var candidates = prfx.collectAdjustmentLayers(sequence), size = prfx.sequenceFrameSize(sequence);
+    var i, itemSize, fallback = null, created, imported;
+    for (i = 0; i < candidates.length; i++) {
+        if (candidates[i].inThisSequence) return { item: candidates[i].item, reason: 'already used in this sequence' };
+    }
+    for (i = 0; i < candidates.length; i++) {
+        itemSize = prfx.projectItemFrameSize(candidates[i].item);
+        if (prfx.frameSizesMatch(itemSize, size)) {
+            return { item: candidates[i].item, reason: 'frame size matches this sequence' };
+        }
+        if (!fallback) fallback = candidates[i].item;
+    }
+    created = prfx.createAdjustmentLayerItem(sequence);
+    if (created) return { item: created.item, reason: 'created for this sequence', created: true };
+
+    // Nothing in the project fits and Premiere will not make one: import the
+    // shipped template and look again for a size that matches.
+    imported = prfx.importAdjustmentTemplate(sequence);
+    if (imported.ok) {
+        for (i = 0; i < imported.layers.length; i++) {
+            itemSize = prfx.projectItemFrameSize(imported.layers[i].item);
+            if (prfx.frameSizesMatch(itemSize, size)) {
+                return { item: imported.layers[i].item, reason: 'imported from the PR FX template', created: true };
+            }
+        }
+        // Imported, but none matched this sequence's frame size.
+        if (imported.layers.length) {
+            return { item: imported.layers[0].item, reason: 'imported from the PR FX template', created: true,
+                warning: 'the template has no layer at ' + (size ? size.width + 'x' + size.height : 'this sequence size') +
+                    ', so the closest available one was used' };
+        }
+    }
+    if (fallback) {
+        return { item: fallback, reason: 'existing layer reused', mismatch: true,
+            warning: 'its frame size could not be confirmed against this sequence' };
+    }
+    return { item: null, importProblem: imported.reason, missingTemplate: imported.missingTemplate === true };
+};
+
 prfx.findAdjustmentLayerItem = function (sequence) {
     var tracks, count, t, clips, clipCount, i, clip;
     tracks = sequence.videoTracks;
@@ -7201,7 +7467,7 @@ prfx.setProjectItemRange = function (item, outSeconds) {
 prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
     var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, false), selected;
     var i, detail, spanStart = NaN, spanEnd = NaN, topTrack = -1, item, savedRange;
-    var checkpoint, staging, live, target, snapshotLive, failure = null, created = [], staged, addError;
+    var checkpoint, staging, live, target, snapshotLive, failure = null, created = [], staged, addError, resolved;
 
     selected = snapshot.selected;
     if (!selected.length) {
@@ -7219,10 +7485,17 @@ prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
         return 'ERROR: Select video clips — an adjustment layer needs a video span to cover.';
     }
 
-    item = prfx.findAdjustmentLayerItem(publicSequence);
-    if (!item) {
-        return 'ERROR: No adjustment layer exists in this project. Premiere gives scripts no way to create one, so make a single Adjustment Layer in the Project panel — PR FX will reuse it from then on.';
+    resolved = prfx.resolveAdjustmentLayer(publicSequence);
+    if (!resolved || !resolved.item) {
+        if (resolved && resolved.missingTemplate) {
+            return 'ERROR: This project has no adjustment layer that fits the sequence, and the PR FX template is not installed. ' +
+                'Either make one Adjustment Layer in the Project panel, or add assets/adjustment-layers.prproj (see assets/README.md).';
+        }
+        return 'ERROR: No adjustment layer fits this sequence and one could not be obtained' +
+            (resolved && resolved.importProblem ? ' - ' + resolved.importProblem : '') +
+            '. Premiere gives scripts no way to create one, so make a single Adjustment Layer in the Project panel; PR FX will reuse it and match it to the right sequence from then on.';
     }
+    item = resolved.item;
 
     checkpoint = prfx.undoCheckpoint();
 
@@ -7279,5 +7552,106 @@ prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
 
     prfx.selectClipRanges(app.project.activeSequence, created);
     return 'Added an adjustment layer on V' + (target + 1) + ' covering ' +
-        (spanEnd - spanStart).toFixed(2) + 's of the selection, reusing the project\'s existing layer.';
+        (spanEnd - spanStart).toFixed(2) + 's of the selection (' + resolved.reason + ').' +
+        (resolved.warning ? ' Note: ' + resolved.warning + '.' : '');
+};
+
+// ---------------------------------------------------------------------------
+// Select everything starting before the playhead
+//
+// "Behind the playhead" means the clip's In point is earlier than the playhead,
+// regardless of where it ends. A clip starting exactly ON the playhead is not
+// behind it and is left out.
+//
+// Caption tracks are not part of the public sequence reflection -- only
+// createCaptionTrack is exposed -- so several accessors are attempted and the
+// result reports whether captions were actually reachable rather than implying
+// they were covered.
+// ---------------------------------------------------------------------------
+prfx.captionTrackList = function (sequence, qeSequence) {
+    var out = [], collection, count, i, track;
+    try {
+        collection = sequence.captionTracks;
+        count = collection ? Number(collection.numTracks || collection.length || 0) : 0;
+        for (i = 0; i < count; i++) {
+            try { track = collection[i]; } catch (indexError) { track = null; }
+            if (track) out.push(track);
+        }
+        if (out.length) return out;
+    } catch (publicError) {}
+    try {
+        count = qeSequence ? Number(qeSequence.numCaptionTracks || 0) : 0;
+        for (i = 0; i < count; i++) {
+            try { track = qeSequence.getCaptionTrackAt(i); } catch (qeIndexError) { track = null; }
+            if (track) out.push(track);
+        }
+    } catch (qeError) {}
+    return out;
+};
+
+prfx.selectClipsBeforePlayhead = function (publicSequence, qeSequence) {
+    var playhead, playheadSeconds, kinds = ['video', 'audio'], k, tracks, trackCount, t, track;
+    var clips, clipCount, i, clip, matched = 0, lockedSkipped = 0, captionMatched = 0;
+    var captionTracks, captionReachable, selectedClips = [], start;
+
+    try { playhead = publicSequence.getPlayerPosition(); } catch (playheadError) { playhead = null; }
+    playheadSeconds = prfx.timeInSeconds(playhead);
+    if (!(playheadSeconds >= 0)) return 'ERROR: Premiere could not read the playhead position.';
+
+    // Clear the whole sequence first: Premiere keeps stale selections on clips
+    // that a previous operation moved, and those would survive into the result.
+    for (k = 0; k < kinds.length; k++) {
+        tracks = kinds[k] === 'audio' ? publicSequence.audioTracks : publicSequence.videoTracks;
+        trackCount = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+        for (t = 0; t < trackCount; t++) {
+            try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+            catch (trackError) { clipCount = 0; }
+            for (i = 0; i < clipCount; i++) {
+                try { clip = clips[i]; if (clip && clip.setSelected) clip.setSelected(false, false); } catch (clearError) {}
+            }
+        }
+    }
+
+    for (k = 0; k < kinds.length; k++) {
+        tracks = kinds[k] === 'audio' ? publicSequence.audioTracks : publicSequence.videoTracks;
+        trackCount = tracks ? Number(tracks.numTracks || tracks.length || 0) : 0;
+        for (t = 0; t < trackCount; t++) {
+            try { track = tracks[t]; } catch (trackReadError) { track = null; }
+            if (!track) continue;
+            // A locked track refuses selection; counting it is more honest than
+            // silently returning fewer clips than the editor can see.
+            if (prfx.moveTrackLocked(track)) { lockedSkipped++; continue; }
+            try { clips = track.clips; clipCount = Number(clips.numItems || clips.length || 0); }
+            catch (clipsError) { clipCount = 0; }
+            for (i = 0; i < clipCount; i++) {
+                try { clip = clips[i]; } catch (clipError) { continue; }
+                if (!clip) continue;
+                start = prfx.timeInSeconds(clip.start);
+                if (!(start < playheadSeconds - 0.000001)) continue;
+                try { clip.setSelected(true, false); matched++; selectedClips.push(clip); } catch (selectError) {}
+            }
+        }
+    }
+
+    captionTracks = prfx.captionTrackList(publicSequence, qeSequence);
+    captionReachable = captionTracks.length > 0;
+    for (t = 0; t < captionTracks.length; t++) {
+        try { clips = captionTracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); }
+        catch (captionClipsError) { clipCount = 0; }
+        for (i = 0; i < clipCount; i++) {
+            try { clip = clips[i]; } catch (captionClipError) { continue; }
+            if (!clip) continue;
+            start = prfx.timeInSeconds(clip.start);
+            if (!(start < playheadSeconds - 0.000001)) continue;
+            try { clip.setSelected(true, false); captionMatched++; } catch (captionSelectError) {}
+        }
+    }
+
+    if (!matched && !captionMatched) {
+        return 'Nothing starts before the playhead' + (lockedSkipped ? ' on an unlocked track' : '') + '.';
+    }
+    return 'Selected ' + matched + ' clip' + (matched === 1 ? '' : 's') + ' starting before the playhead' +
+        (captionMatched ? ', plus ' + captionMatched + ' caption' + (captionMatched === 1 ? '' : 's') : '') +
+        (captionReachable ? '' : ' (caption tracks are not reachable from scripting on this Premiere version, so none were included)') +
+        (lockedSkipped ? '. Skipped ' + lockedSkipped + ' locked track' + (lockedSkipped === 1 ? '' : 's') : '') + '.';
 };

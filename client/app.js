@@ -6,9 +6,9 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260903-place-make-room-1';
+  var PRFX_HOST_BUILD = '20260916-hide-system-1';
   var RETIRED_COMMAND_IDS = { 'stretch-speed-to-playhead': true };
-  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', bindings: [], folderSyncsByProject: {} };
+  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', showSystemCommands: false, bindings: [], folderSyncsByProject: {} };
   var commands = [
     { type: 'custom', id: 'dump-qe-api', name: '[System] Dump QE + DOM API' },
     { type: 'custom', id: 'inspect-selected-clip', name: '[System] Inspect Selected Clip' },
@@ -27,6 +27,7 @@
     { type: 'custom', id: 'undo-last-prfx-action', name: 'Undo Last PR FX Action (Any)' },
     { type: 'custom', id: 'undo-last-arrange', name: 'Undo Last PR FX Arrange Action' },
     { type: 'custom', id: 'redo-last-arrange', name: 'Redo Last PR FX Arrange Action' },
+    { type: 'custom', id: 'select-before-playhead', name: 'Select Everything Starting Before Playhead' },
     { type: 'custom', id: 'adjustment-layer-over-selection', name: 'Adjustment Layer Over Selection' },
     { type: 'custom', id: 'perfect-pitch', name: 'Perfect Pitch (Correct Speed Transposition)' },
     { type: 'custom', id: 'place-source-clip', name: 'Place Source Monitor Clip at Playhead' },
@@ -101,6 +102,7 @@
   var mergeTouchingInput = document.getElementById('merge-touching-source');
   var nameToleranceInput = document.getElementById('name-tolerance');
   var failurePolicyInput = document.getElementById('failure-policy');
+  var showSystemInput = document.getElementById('show-system-commands');
   var managerSearch = document.getElementById('command-manager-search');
   var managerTypeFilter = document.getElementById('command-type-filter');
   var managerList = document.getElementById('command-manager-list');
@@ -121,6 +123,8 @@
   var syncStatus = document.getElementById('sync-status');
   var syncProjectNote = document.getElementById('sync-project-note');
   var lastBridgeCatalogSync = 0;
+  var bridgeCatalogSyncInFlight = false;
+  var lastSentBridgeCatalogFingerprint = '';
   var bridgeOnline = false;
   var lastBridgePayload = null;
   var expectedListenerBuild = '';
@@ -159,6 +163,38 @@
   }
   function safeRun(label, task) {
     try { task(); } catch (error) { rememberPanelError(label, error); }
+  }
+
+  function textFingerprint(text) {
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+    return 'fnv1a32-' + ('00000000' + (hash >>> 0).toString(16)).slice(-8) + '-' + text.length;
+  }
+
+  // [System] entries are diagnostics — dumps, ledgers, clip inspection. They are
+  // useless to an editor and destructive-looking in a palette, so they are
+  // hidden unless the toggle in General is on. One predicate feeds the CEP
+  // palette, the command manager AND the catalog synced to the native palette,
+  // so the setting cannot apply to one surface and not another.
+  function isSystemCommand(command) {
+    return String(command && command.name || '').indexOf('[System]') === 0;
+  }
+  function commandIsVisible(command) {
+    return settings.showSystemCommands === true || !isSystemCommand(command);
+  }
+  function visibleCommands() {
+    return commands.filter(commandIsVisible);
+  }
+
+  function currentCatalogBody() {
+    return JSON.stringify(visibleCommands());
+  }
+
+  function currentCatalogFingerprint() {
+    return textFingerprint(currentCatalogBody());
   }
 
   window.addEventListener('error', function (event) {
@@ -217,6 +253,7 @@
     if (mergeTouchingInput) mergeTouchingInput.checked = settings.mergeTouchingSameSource === true;
     if (nameToleranceInput) nameToleranceInput.value = settings.nameTolerance || 'normalized';
     if (failurePolicyInput) failurePolicyInput.value = settings.failurePolicy || 'rollback';
+    if (showSystemInput) showSystemInput.checked = settings.showSystemCommands === true;
     renderManager();
     renderFolderSyncs();
   }
@@ -235,6 +272,7 @@
     var typeFilter = managerTypeFilter.value;
     var available = commands.filter(function (command) {
       var binding = bindingFor(command);
+      if (!commandIsVisible(command)) return false;
       if (query && (command.name + ' ' + command.type).toLowerCase().indexOf(query) === -1) return false;
       if (typeFilter !== 'all' && command.type !== typeFilter) return false;
       if (managerAssignmentFilter === 'assigned' && !binding) return false;
@@ -247,7 +285,7 @@
     managerList.innerHTML = available.map(function (command) {
       var binding = bindingFor(command);
       var type = command.type === 'custom' ? 'function' : command.type;
-      return '<div class="manager-row' + (selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand) ? ' is-active' : '') + '" data-command="' + escapeHtml(commandKey(command)) + '"><span class="manager-name">' + escapeHtml(command.name) + '</span><span class="manager-kind ' + escapeHtml(command.type) + '">' + escapeHtml(type) + '</span><span class="manager-shortcut">' + escapeHtml(binding ? displayShortcut(binding.shortcut) : '—') + '</span></div>';
+      return '<div class="manager-row' + (selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand) ? ' is-active' : '') + '" data-command="' + escapeHtml(commandKey(command)) + '"><span class="manager-name" title="' + escapeHtml(command.name) + '">' + escapeHtml(command.name) + '</span><span class="manager-kind ' + escapeHtml(command.type) + '">' + escapeHtml(type) + '</span><span class="manager-shortcut">' + escapeHtml(binding ? displayShortcut(binding.shortcut) : '—') + '</span></div>';
     }).join('');
     var binding = selectedManagerCommand && bindingFor(selectedManagerCommand);
     document.getElementById('manager-command-name').textContent = selectedManagerCommand ? selectedManagerCommand.name : 'Select a command';
@@ -267,7 +305,8 @@
       (listenerLabel ? ' · listener ' + shortBuild(listenerLabel) : '');
   }
   function syncListenerSettings() {
-    // The native listener reads this file so it can receive shortcuts while Premiere is frontmost.
+    // The native listener reads this file so saved shortcuts keep working even
+    // when the CEP settings panel is not focused.
     try {
       if (typeof require !== 'function') return;
       var fs = require('fs');
@@ -642,7 +681,7 @@
     var steps = [];
     if (node.fs.existsSync(root + '/native/build-macos.sh')) {
       // On soft-launch machines this validates and uses the bundled app. On a
-      // dev machine it can still rebuild when the bundled app is missing/stale.
+      // dev machine it can still rebuild when the bundled app is missing.
       steps.push({ label: 'checking the bundled listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
     }
     // The app arrives inside the extension rather than as a download, but
@@ -656,7 +695,7 @@
     function next() {
       if (index >= steps.length) {
         setupInstallButton.disabled = false;
-        setSetupDetail('Installed. Shortcuts arm when Premiere is frontmost; restart Premiere if the running listener is stale.');
+        setSetupDetail('Installed. Ctrl/Option/Cmd shortcuts arm while Premiere is frontmost; Shift-only and plain-key shortcuts arm after the Timeline/Sequence panel is clicked.');
         window.setTimeout(refreshSetupStatus, 1200);
         if (done) done('');
         return;
@@ -683,7 +722,7 @@
   if (setupAccessibilityButton) setupAccessibilityButton.addEventListener('click', function () {
     runSetupStep('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], function (error) {
       if (error) setSetupDetail('Could not open System Settings: ' + error);
-      else setSetupDetail('Accessibility is optional now. Shortcuts use Premiere-frontmost mode even if macOS reports the listener as untrusted.');
+      else setSetupDetail('Accessibility lets PR FX confirm Timeline focus. Without it, Ctrl/Option/Cmd shortcuts can still work from Premiere, but Shift-only/plain-key shortcuts need a saved Timeline click region.');
     });
   });
 
@@ -721,9 +760,9 @@
       var withheldBindings = Number(payload.withheldBindings);
       if (isNaN(withheldBindings)) withheldBindings = Math.max(0, savedBindings - armedBindings);
       var shortcutWord = savedBindings === 1 ? 'shortcut' : 'shortcuts';
-      if (payload.accessibilityTrusted === false && payload.accessibilityBypassed !== true && savedBindings > 0 && payload.mode !== 'active') {
-        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Needs Accessibility';
-        bridgeDetail.textContent = 'Ctrl+Space can open the palette, but ' + savedBindings + ' saved command ' + shortcutWord + ' are paused until macOS Accessibility is enabled for PR FX Shortcut Listener.';
+      if (payload.accessibilityTrusted === false && payload.accessibilityBypassed !== true && savedBindings > 0 && payload.mode !== 'active' && payload.mode !== 'modifier-only') {
+        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Needs Timeline';
+        bridgeDetail.textContent = 'Ctrl+Space can open the palette, but saved command shortcuts are paused until PR FX can confirm the Timeline/Sequence panel. Grant Accessibility or click the Timeline once after it has been detected.';
       } else if (payload.mode === 'active') {
         if (hostResponsive) {
           bridgeState.className = 'bridge-state is-active'; bridgeState.innerHTML = '<i></i>Active';
@@ -741,7 +780,7 @@
         bridgeDetail.textContent = 'Listener is healthy. Ctrl/Option/Cmd command shortcuts are armed: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + '. Shift-only and plain-key shortcuts stay paused until the Timeline/Sequence panel is clicked, so typing in bins is safe. Repair will not change this state.';
       } else if (payload.mode === 'palette-only') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Palette only';
-        bridgeDetail.textContent = payload.accessibilityBypassed === true ? 'Ctrl+Space can open the palette while Premiere is frontmost.' : 'Ctrl+Space can open the palette while Premiere is frontmost. Command shortcuts are paused until Accessibility is enabled.';
+        bridgeDetail.textContent = payload.accessibilityBypassed === true ? 'Ctrl+Space can open the palette while Premiere is frontmost.' : 'Ctrl+Space can open the palette while Premiere is frontmost. Command shortcuts are waiting for Timeline/Sequence focus.';
       } else if (payload.mode === 'paused') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Paused';
         bridgeDetail.textContent = payload.focus || 'Shortcuts activate only while the Timeline/Sequence panel is focused.';
@@ -757,7 +796,7 @@
           ' · listener ' + shortBuild(payload.listenerBuild || expectedBuild || 'unknown') +
           (savedBindings ? ' · ' + armedBindings + '/' + savedBindings + ' shortcuts armed' : '');
       }
-      if (catalogReady && Number(payload.catalogCount) !== commands.length && Date.now() - lastBridgeCatalogSync > 900) syncBridgeCatalog();
+      if (catalogReady && payload.catalogFingerprint !== currentCatalogFingerprint() && Date.now() - lastBridgeCatalogSync > 5000) syncBridgeCatalog();
     };
     request.ontimeout = request.onerror = function () { bridgeOnline = false; lastBridgePayload = null; bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Offline'; bridgeDetail.textContent = 'The native listener is not responding.'; };
     try { request.send(); } catch (_) {}
@@ -853,13 +892,26 @@
     // CEP owns the complete registry: functions plus Premiere's live FX catalog.
     // The native palette receives this exact list and never builds its own subset.
     if (!catalogReady) return;
+    if (bridgeCatalogSyncInFlight) return;
     try {
+      var body = currentCatalogBody();
+      var fingerprint = textFingerprint(body);
+      if (lastBridgePayload && lastBridgePayload.catalogFingerprint === fingerprint && lastSentBridgeCatalogFingerprint === fingerprint) return;
+      bridgeCatalogSyncInFlight = true;
       var request = new XMLHttpRequest();
       request.open('POST', 'http://127.0.0.1:27389/catalog', true);
+      request.timeout = 5000;
       request.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
-      request.send(JSON.stringify(commands));
+      request.setRequestHeader('X-PRFX-Catalog-Fingerprint', fingerprint);
+      request.onreadystatechange = function () {
+        if (request.readyState !== 4) return;
+        bridgeCatalogSyncInFlight = false;
+        if (request.status >= 200 && request.status < 300) lastSentBridgeCatalogFingerprint = fingerprint;
+      };
+      request.ontimeout = request.onerror = function () { bridgeCatalogSyncInFlight = false; };
+      request.send(body);
       lastBridgeCatalogSync = Date.now();
-    } catch (_) {}
+    } catch (_) { bridgeCatalogSyncInFlight = false; }
   }
   function restartNativeListener(complete) {
     var node = nodeModules();
@@ -1060,9 +1112,8 @@
       setStatus('Use Space, a letter, or a number with modifiers.', true);
       return;
     }
-    // Modifier-less keys are allowed in the Accessibility-free mode. They can
-    // fire anywhere Premiere is frontmost, so the UI needs to be honest about
-    // that instead of promising Timeline-only protection.
+    // Shift-only/plain keys are allowed as bindings, but the native listener
+    // only arms them after it can confirm the Timeline/Sequence panel.
     var bareKey = !candidate.ctrl && !candidate.alt && !candidate.meta;
     var shortcut = captureShortcut(event, target);
     if (!shortcut) {
@@ -1076,7 +1127,7 @@
       shortcutInput.blur();
     } else {
       setStatus(bareKey
-        ? 'Shortcut captured. Click Save shortcut. Plain/Shift-only keys fire while Premiere is frontmost.'
+        ? 'Shortcut captured. Click Save shortcut. Plain/Shift-only keys arm only after the Timeline/Sequence panel is clicked.'
         : 'Shortcut captured. Click Save shortcut.');
     }
     heldCaptureModifiers = { ctrl: false, alt: false, shift: false, meta: false };
@@ -1101,7 +1152,7 @@
     if (pendingMoveCommand) return MOVE_MODES;
     if (pendingStaggerCommand) return staggerFrameOptions();
     var query = search.value.toLowerCase().trim();
-    return commands.filter(function (command) { return !query || (command.name + ' ' + command.type).toLowerCase().indexOf(query) !== -1; });
+    return visibleCommands().filter(function (command) { return !query || (command.name + ' ' + command.type).toLowerCase().indexOf(query) !== -1; });
   }
   function renderCommands() {
     var available = filteredCommands();
@@ -1277,6 +1328,16 @@
   durationInput.addEventListener('change', function () { settings.transitionFrames = Math.max(1, Math.min(300, Number(durationInput.value) || 30)); saveSettings(); });
   staggerFramesInput.addEventListener('change', function () { settings.staggerFrames = Math.max(0, Math.min(9999, Math.round(Number(staggerFramesInput.value) || 0))); saveSettings(); });
   staggerGroupInput.addEventListener('change', function () { settings.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(staggerGroupInput.value) || 1))); saveSettings(); });
+  if (showSystemInput) showSystemInput.addEventListener('change', function () {
+    settings.showSystemCommands = showSystemInput.checked === true;
+    saveSettings();
+    renderManager();
+    // Force a re-send: the native palette caches by fingerprint, so without
+    // clearing it the change would not reach the standalone palette until some
+    // other catalog change happened to occur.
+    lastSentBridgeCatalogFingerprint = '';
+    syncBridgeCatalog();
+  });
   if (failurePolicyInput) failurePolicyInput.addEventListener('change', function () {
     settings.failurePolicy = failurePolicyInput.value === 'keep' ? 'keep' : 'rollback';
     saveSettings();

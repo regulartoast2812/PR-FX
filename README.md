@@ -6,17 +6,17 @@ macOS is the currently supported target. Windows listener work is tracked in [WI
 
 ## Use in Premiere
 
-1. On macOS, build and open the listener. Keep it running:
+1. On macOS, copy the whole `PR FX` folder into Premiere's CEP extensions folder, then open **Window → Extensions → PR FX Palette Settings** and press **Install / Repair** in General.
 
-   - macOS: `./native/run-macos.sh` (rebuilds and restarts the listener)
+   - For development only: `./native/run-macos.sh` forces a rebuild and restarts the listener.
 
 2. Restart Premiere Pro, then open **Window → Extensions → PR FX Palette Settings** once. The panel listens for commands from the native listener and applies them to the selected Timeline clips.
-3. In the settings panel, set the shortcut and default transition duration. Changes reload into the listener automatically. Supported trigger keys: Space, A–Z, and 0–9, with or without modifiers. A key with no modifier works only while the Timeline is the active panel, so add Ctrl, Option, or Command to anything destructive.
+3. In the settings panel, set the shortcut and default transition duration. Changes reload into the listener automatically. Supported trigger keys: Space, A–Z, and 0–9, with or without modifiers. Ctrl/Option/Cmd shortcuts can stay armed while Premiere is frontmost; Shift-only and plain-key shortcuts arm only after PR FX can confirm the Timeline/Sequence panel.
 4. Click/select clips in an active Timeline and invoke the shortcut. The standalone palette opens over Premiere; type, then press Enter.
 
 Pressing **Enter** applies the highlighted item to every compatible selected Timeline clip: video effects use selected video clips; transitions and audio fades apply to both the In and Out of compatible selected clips. Use Up/Down to change the highlighted result and Escape to cancel.
 
-The palette lists PR FX's own functions alongside every video effect, video transition, and audio transition your Premiere installation actually has. The settings panel reads that catalog from Premiere and syncs it to the listener, which caches it so the palette still opens before Premiere has connected. PR FX functions are defined in `client/app.js`; effects and transitions come from Premiere and need no configuration.
+The palette lists PR FX's own functions alongside installed video effects, saved effect presets, video transitions, and audio transitions from Premiere. The settings panel reads that catalog from Premiere and syncs it to the listener, which caches it so the palette still opens before Premiere has connected. PR FX functions are defined in `client/app.js`; effects, presets, and transitions come from Premiere and need no configuration.
 
 ## Major features
 
@@ -24,7 +24,7 @@ The palette lists PR FX's own functions alongside every video effect, video tran
 
 ## Why there is a listener
 
-Premiere does not let CEP or UXP extensions register a shortcut in the Timeline context. The included **PR FX Shortcut Listener** uses the same essential architecture as Excalibur’s companion shortcut listener: it owns the hotkey at the operating-system level but only responds while **Adobe Premiere Pro** is frontmost. This means Ctrl + Space works while the Timeline has focus—without first focusing a CEP panel.
+Premiere does not let CEP or UXP extensions register a shortcut in the Timeline context. The included **PR FX Shortcut Listener** owns the hotkey at the operating-system level, then scopes it back down so typing in bins/search/rename fields is not stolen. This means Ctrl + Space can open the palette while Premiere is frontmost without first focusing a CEP panel, while command shortcuts stay Timeline-aware.
 
 The app is built and signed locally on macOS. If Ctrl + Space is already used by Premiere or another app, choose a different combination in the settings panel.
 
@@ -32,18 +32,18 @@ The app is built and signed locally on macOS. If Ctrl + Space is already used by
 
 Premiere doesn't tell us which panel has focus — the Accessibility API reports a generic placeholder in every state and exposes no panel containers. It does expose individual controls with screen positions, so PR FX works out where the Timeline is and whether you're working in it.
 
-Shortcuts are registered only when all of the following hold:
+The palette shortcut and command shortcuts use slightly different safety rules:
 
-- Premiere is the frontmost application
-- Accessibility permission is granted (required — without it, nothing is armed)
-- No text field has focus
-- Your last mouse click landed inside the Timeline panel
+- The palette shortcut can arm while Premiere is frontmost if it uses Ctrl, Option, or Command.
+- Command shortcuts with Ctrl, Option, or Command can degrade to Premiere-frontmost when the Timeline cannot be located.
+- Shift-only and plain-key command shortcuts arm only when the Timeline/Sequence panel is confirmed.
+- Text fields are denied when Accessibility can see them, so typing in bins/search/rename fields passes through.
 
 The Timeline's rectangle is derived by finding controls that exist only in that panel — track lock, mute, solo, snap — and extending their bounds to the panel's tab bar and the bottom of the window. It's recomputed as focus changes and re-checked on every keypress, so shortcuts release the moment you click into another panel.
 
-Because this follows your last click rather than true focus, it can be wrong if you switch panels by menu or keyboard without clicking, or if Premiere moves focus itself. Adding a modifier to a binding sidesteps that entirely, which is worth doing for anything destructive.
+Because this follows your last click rather than true focus, it can be wrong if you switch panels by menu or keyboard without clicking, or if Premiere moves focus itself. Adding Ctrl, Option, or Command to a binding gives the listener a safe fallback, which is worth doing for anything destructive.
 
-**Accessibility permission is required.** Grant it under System Settings → Privacy & Security → Accessibility. Without it the listener cannot locate the Timeline, refuses to arm any shortcut, and neither the palette nor mapped keys will respond.
+**Accessibility permission is strongly recommended.** Grant it under System Settings → Privacy & Security → Accessibility for **PR FX Shortcut Listener**. Without it, PR FX can still use the last saved Timeline click region for some shortcuts, but it cannot reliably detect text fields or newly moved Timeline panels.
 
 ## Development installation
 
@@ -52,7 +52,7 @@ This folder is already in Premiere's CEP extensions directory. Build the listene
 ### macOS
 
 ```sh
-./native/build-macos.sh
+./native/build-macos.sh --rebuild
 open "native/build/PR FX Shortcut Listener.app"
 ```
 

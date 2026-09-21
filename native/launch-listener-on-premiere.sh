@@ -7,8 +7,10 @@ LISTENER_BUILD_FILE="$SCRIPT_DIR/build/listener-build.txt"
 BUILD_LOCK="$SCRIPT_DIR/build/.listener-build.lock"
 START_LISTENER="$SCRIPT_DIR/start-listener-macos.sh"
 STOP_LISTENER="$SCRIPT_DIR/stop-listener-macos.sh"
-HEALTH_URL="http://127.0.0.1:27389/health"
+BRIDGE_PORT="27389"
+HEALTH_URL="http://127.0.0.1:$BRIDGE_PORT/health"
 LOG_FILE="/tmp/prfx-listener-launcher.log"
+last_unverified_bridge_log_at=0
 
 log_message() {
   print -r -- "$(date -u '+%Y-%m-%dT%H:%M:%SZ') watcher: $*" >> "$LOG_FILE"
@@ -26,11 +28,26 @@ listener_health() {
   /usr/bin/curl -fsS --max-time 0.6 "$HEALTH_URL" 2>/dev/null || true
 }
 
-listener_matches_installed_build() {
+bridge_is_listening() {
+  local output
+  output="$(/usr/sbin/lsof -nP -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  [[ "$output" == *"PRFXShort"* || "$output" == *"PRFXShortcutListener"* || "$output" == *"PR FX Shortcut Listener"* ]]
+}
+
+health_matches_installed_build() {
   local expected health
+  health="$1"
   expected="$(expected_listener_build)" || return 0
-  health="$(listener_health)"
-  [[ -n "$health" && "$health" == *"\"listenerBuild\":\"$expected\""* ]]
+  [[ "$health" == *"\"listenerBuild\":\"$expected\""* ]]
+}
+
+log_unverified_bridge_once() {
+  local now
+  now="$(date +%s)"
+  if (( now - last_unverified_bridge_log_at >= 60 )); then
+    log_message "Listener bridge is listening on port $BRIDGE_PORT, but health is not readable; leaving it running."
+    last_unverified_bridge_log_at="$now"
+  fi
 }
 
 build_in_progress() {
@@ -59,10 +76,13 @@ while true; do
     continue
   fi
   if [[ -d "$LISTENER_APP" ]]; then
-    if ! listener_matches_installed_build; then
+    health="$(listener_health)"
+    if [[ -n "$health" ]] && ! health_matches_installed_build "$health"; then
       log_message "Listener health is missing or stale; restarting current app bundle."
       restart_listener
-    elif [[ -z "$(listener_health)" ]]; then
+    elif [[ -z "$health" ]] && bridge_is_listening; then
+      log_unverified_bridge_once
+    elif [[ -z "$health" ]]; then
       log_message "Listener health is offline; starting current app bundle."
       /bin/zsh "$START_LISTENER"
     fi

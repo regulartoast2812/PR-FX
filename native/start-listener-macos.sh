@@ -5,7 +5,8 @@ SCRIPT_DIR="${0:A:h}"
 LISTENER_APP="$SCRIPT_DIR/build/PR FX Shortcut Listener.app"
 LISTENER_BINARY="$LISTENER_APP/Contents/MacOS/PRFXShortcutListener"
 BUILD_LOCK="$SCRIPT_DIR/build/.listener-build.lock"
-HEALTH_URL="http://127.0.0.1:27389/health"
+BRIDGE_PORT="27389"
+HEALTH_URL="http://127.0.0.1:$BRIDGE_PORT/health"
 LOG_FILE="/tmp/prfx-listener-launcher.log"
 
 log_message() {
@@ -16,10 +17,20 @@ health_ok() {
   /usr/bin/curl -fsS --max-time 0.5 "$HEALTH_URL" >/dev/null 2>&1
 }
 
-wait_for_health() {
+bridge_is_listening() {
+  local output
+  output="$(/usr/sbin/lsof -nP -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  [[ "$output" == *"PRFXShort"* || "$output" == *"PRFXShortcutListener"* || "$output" == *"PR FX Shortcut Listener"* ]]
+}
+
+wait_for_ready() {
   local attempt
   for attempt in {1..25}; do
     if health_ok; then
+      return 0
+    fi
+    if bridge_is_listening; then
+      log_message "Listener bridge is listening on port $BRIDGE_PORT; health probe did not answer yet."
       return 0
     fi
     sleep 0.2
@@ -44,6 +55,10 @@ if health_ok; then
   log_message "Listener health already OK."
   exit 0
 fi
+if bridge_is_listening; then
+  log_message "Listener bridge is already listening on port $BRIDGE_PORT; health probe did not answer."
+  exit 0
+fi
 
 if [[ ! -d "$LISTENER_APP" ]]; then
   log_message "Listener app missing: $LISTENER_APP"
@@ -53,8 +68,8 @@ fi
 
 log_message "Launching listener through LaunchServices: $LISTENER_APP"
 if /usr/bin/open -gj "$LISTENER_APP" >> "$LOG_FILE" 2>&1; then
-  if wait_for_health; then
-    log_message "Listener health OK after LaunchServices launch."
+  if wait_for_ready; then
+    log_message "Listener ready after LaunchServices launch."
     exit 0
   fi
   log_message "LaunchServices returned success, but health did not become ready."
@@ -62,16 +77,16 @@ else
   log_message "LaunchServices failed to open listener."
 fi
 
-if wait_for_health; then
-  log_message "Listener health OK after delayed LaunchServices startup."
+if wait_for_ready; then
+  log_message "Listener ready after delayed LaunchServices startup."
   exit 0
 fi
 
 if [[ -x "$LISTENER_BINARY" ]]; then
   log_message "Launching listener binary directly as fallback: $LISTENER_BINARY"
   "$LISTENER_BINARY" >> "$LOG_FILE" 2>&1 &
-  if wait_for_health; then
-    log_message "Listener health OK after direct binary fallback."
+  if wait_for_ready; then
+    log_message "Listener ready after direct binary fallback."
     exit 0
   fi
   log_message "Direct binary fallback started, but health did not become ready."
@@ -79,7 +94,7 @@ else
   log_message "Listener binary missing or not executable: $LISTENER_BINARY"
 fi
 
-if health_ok; then
+if health_ok || bridge_is_listening; then
   exit 0
 fi
 
