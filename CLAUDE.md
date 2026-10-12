@@ -120,6 +120,22 @@ and hit-tests the last mouse-down against it. See `timelineShortcutFocus` and
 `timelineRegion`. Diagnostics: create `~/Library/Application Support/PR FX Palette/ax-probe`
 or `ax-diagnostic`, output goes to `~/Library/Logs/PR FX Shortcut Listener.log`.
 
+Shortcut reliability (2026-09-22): failed Carbon registrations retry every two
+seconds while their scope remains eligible, without unregistering healthy keys.
+Focus/activation changes and the delayed click refresh invalidate the live
+geometry cache while retaining fallback geometry. The command bridge uses a
+32-entry FIFO instead of a single overwritable slot; pending commands expire
+after five seconds to prevent old edits replaying after a CEP stall. Health
+reports `failedRegistrations`, `queuedCommands`, and `droppedCommands`.
+These changes do not guarantee delivery after a failed `/next` HTTP response,
+nor prove focus detection in every Premiere workspace.
+
+Regression checks:
+```sh
+swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXTimelineRegionCache.swift tools/check-shortcut-detection.swift -o /tmp/prfx-check-shortcut-detection && /tmp/prfx-check-shortcut-detection
+swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXPendingCommands.swift tools/check-shortcut-queue.swift -o /tmp/prfx-check-shortcut-queue && /tmp/prfx-check-shortcut-queue
+```
+
 ---
 
 ## Premiere scripting API — verified capabilities

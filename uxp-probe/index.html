@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 12px -apple-system, system-ui, sans-serif; margin: 0; padding: 12px; color: #d8d8dd; background: #1f1f22; }
+    h1 { font-size: 13px; margin: 0 0 4px; }
+    p.help { color: #9a9aa2; margin: 0 0 10px; line-height: 1.4; }
+    button { font: inherit; padding: 6px 12px; margin-right: 6px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #161619; padding: 8px; border-radius: 4px; max-height: 60vh; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>PR FX UXP Probe</h1>
+  <p class="help">Enumerates the Premiere UXP API and checks it against the primitives PR FX depends on today. Reports what exists — it never assumes.</p>
+  <button id="run">Run probe</button>
+  <button id="save">Save report…</button>
+  <pre id="out">Not run yet.</pre>
+  <script src="index.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20260916-hide-system-1';
+prfx.HOST_BUILD = '20260930-no-legacy-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -58,6 +58,10 @@ prfx.getCatalog = function (extensionRoot) {
     }
 };
 
+prfx.isLegacyEffectName = function (name) {
+    return String(name || '').toLowerCase().indexOf('(legacy)') !== -1;
+};
+
 prfx.safeAppendCatalog = function (target, type, methodName) {
     var source, count, entry, name, i;
     try {
@@ -71,7 +75,12 @@ prfx.safeAppendCatalog = function (target, type, methodName) {
             if (!entry) continue;
             try { name = String(typeof entry === 'string' ? entry : (entry.name || entry.displayName || '')); } catch (nameError) { name = ''; }
             name = name.replace(/^\s+|\s+$/g, '');
-            if (name) target.push({ type: type, name: name, transitionFrames: 30 });
+            // Premiere keeps deprecated effects in the list marked "(Legacy)".
+            // They are superseded by a GPU equivalent and only clutter a search
+            // — "blur" returned three legacy hits before the current ones.
+            if (name && !prfx.isLegacyEffectName(name)) {
+                target.push({ type: type, name: name, transitionFrames: 30 });
+            }
         }
     } catch (ignore) {}
 };
@@ -734,6 +743,7 @@ prfx.apply = function (payload) {
     }
 
     prfx.failurePolicy = String(command.failurePolicy || 'rollback');
+    prfx.syntheticSeconds = Number(command.syntheticSeconds) > 0 ? Number(command.syntheticSeconds) : 5;
     before = prfx.undoCheckpoint();
     result = prfx.applyCommand(payload);
     prfx.recordOutcome(command, result);
@@ -4061,8 +4071,59 @@ prfx.selectedProjectItems = function () {
     return items;
 };
 
+// "Can this be dropped on a timeline?" and "is this real footage?" are two
+// different questions, and answering both with one test is why adjustment
+// layers, colour mattes, bars, black video and transparent video could not be
+// placed: they are perfectly placeable but have no media file behind them.
+//
+// Placing accepts anything that is not a bin and not a sequence. Replace and
+// bulk-match keep the stricter media test, because swapping a shot for a colour
+// matte is nonsense and the name matching works off real filenames.
 prfx.projectItemIsPlaceable = function (item) {
+    if (!item) return false;
+    if (prfx.projectItemIsBin(item)) return false;
+    // Nesting is a different operation with its own recursion hazards; left out
+    // deliberately rather than by accident.
+    try { if (item.isSequence && item.isSequence()) return false; } catch (sequenceError) {}
+    return true;
+};
+
+// Synthetics (adjustment layers, mattes, bars, graphics) come in at whatever
+// Premiere's "still image default duration" preference says — 50s on some
+// installs — which is never what anyone wants when placing one. The editor sets
+// the length they actually use, and the bin item is restored straight after so
+// the preference itself is left alone.
+// Only things that HAVE no inherent duration take the default: synthetics and
+// still images. Video and audio carry their own length and must keep it, marked
+// in/out or not.
+//
+// Deliberately keyed on media type rather than "has a media path" — that earlier
+// test treated anything whose path did not resolve, offline clips included, as
+// synthetic and truncated real footage to the default.
+prfx.itemUsesDefaultDuration = function (item) {
+    var category = prfx.mediaCategoryOf(prfx.projectItemExtension(item));
+    if (category === 'video' || category === 'audio') return false;
+    return true;
+};
+
+prfx.applySyntheticDuration = function (item) {
+    var saved;
+    if (!(Number(prfx.syntheticSeconds) > 0)) return null;
+    if (!prfx.itemUsesDefaultDuration(item)) return null;
+    saved = prfx.projectItemRange(item);
+    if (!saved) return null;
+    if (!prfx.setProjectItemRange(item, Number(prfx.syntheticSeconds))) return null;
+    return saved;
+};
+
+prfx.restoreSyntheticDuration = function (item, saved) {
+    if (!saved) return;
+    prfx.restoreProjectItemRange(item, { saved: saved, expanded: true });
+};
+
+prfx.projectItemIsMedia = function (item) {
     var path = '';
+    if (!item) return false;
     try { if (item.isSequence && item.isSequence()) return false; } catch (sequenceError) {}
     try { path = String(item.getMediaPath ? item.getMediaPath() : ''); } catch (pathError) { path = ''; }
     return path.length > 0;
@@ -4194,14 +4255,14 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
     var items = prfx.selectedProjectItems(), placeable = [], i, skipped = 0;
     var checkpoint, staging, live, playhead, cursor, clip;
     var videoTarget = null, audioTarget = null, failure = null, snapshot, created = [];
-    var staged, kind, fromIndex, target, span, placedAudio, j;
+    var staged, kind, fromIndex, target, span, placedAudio, j, syntheticSaved;
 
     if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
     for (i = 0; i < items.length; i++) {
         if (prfx.projectItemIsPlaceable(items[i])) placeable.push(items[i]);
         else skipped++;
     }
-    if (!placeable.length) return 'ERROR: None of the selected Project items are placeable media. Sequences and bins cannot be placed.';
+    if (!placeable.length) return 'ERROR: Nothing in the Project selection can be placed — bins and sequences are the only things PR FX will not place.';
 
     try { playhead = publicSequence.getPlayerPosition(); } catch (playheadError) { playhead = null; }
     cursor = prfx.timeInSeconds(playhead);
@@ -4222,7 +4283,9 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
         for (i = 0; i < placeable.length; i++) {
             // keepRange: place what the editor marked. Widening is a Replace
             // concern, and here it produced ten-hour clips running past the media.
-            staged = prfx.stageOneProjectItem(staging.tracks, placeable[i], cursor, true);
+            syntheticSaved = prfx.applySyntheticDuration(placeable[i]);
+            try { staged = prfx.stageOneProjectItem(staging.tracks, placeable[i], cursor, true); }
+            finally { prfx.restoreSyntheticDuration(placeable[i], syntheticSaved); }
             kind = staged.audioOnly ? 'audio' : 'video';
             fromIndex = staged.fromTrackIndex;
 
@@ -4284,7 +4347,7 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
         (videoTarget !== null && videoTarget !== undefined ? ' on V' + (videoTarget + 1) : '') +
         (audioTarget !== null && audioTarget !== undefined ? (videoTarget !== null && videoTarget !== undefined ? ' and' : ' on') + ' A' + (audioTarget + 1) : '') + '.' +
         prfx.appendedTrackNote(staging) +
-        (skipped ? ' Skipped ' + skipped + ' non-media item' + (skipped === 1 ? '' : 's') + '.' : '');
+        (skipped ? ' Skipped ' + skipped + ' bin/sequence' + (skipped === 1 ? '' : 's') + '.' : '');
 };
 
 // overwriteClip writes the project item's CURRENT bin in/out range, not the
@@ -4635,14 +4698,14 @@ prfx.trackHasRoom = function (snapshot, kind, trackIndex, start, end, ignoreRang
 prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
     var items = prfx.selectedProjectItems(), placeable = [], i, skipped = 0;
     var checkpoint, staging, live, playhead, atSeconds, failure = null, used = {}, created = [];
-    var stagedClip, snapshot, trackIndex, target, laneCount, clip, kind, fromIndex, placedAudio, j;
+    var stagedClip, snapshot, trackIndex, target, laneCount, clip, kind, fromIndex, placedAudio, j, syntheticSaved;
 
     if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
     for (i = 0; i < items.length; i++) {
         if (prfx.projectItemIsPlaceable(items[i])) placeable.push(items[i]);
         else skipped++;
     }
-    if (!placeable.length) return 'ERROR: None of the selected Project items are placeable media. Sequences and bins cannot be placed.';
+    if (!placeable.length) return 'ERROR: Nothing in the Project selection can be placed — bins and sequences are the only things PR FX will not place.';
 
     try { playhead = publicSequence.getPlayerPosition(); } catch (playheadError) { playhead = null; }
     atSeconds = prfx.timeInSeconds(playhead);
@@ -4660,7 +4723,9 @@ prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
             // One at a time: stage it, move it off, leaving the staging track
             // empty again for the next. Two clips on one staging track at the
             // same start would overwrite each other.
-            stagedClip = prfx.stageOneProjectItem(staging.tracks, placeable[i], atSeconds, true);
+            syntheticSaved = prfx.applySyntheticDuration(placeable[i]);
+            try { stagedClip = prfx.stageOneProjectItem(staging.tracks, placeable[i], atSeconds, true); }
+            finally { prfx.restoreSyntheticDuration(placeable[i], syntheticSaved); }
             // Audio-only files have no video stream to stack, so they take their
             // own column on the audio side.
             kind = stagedClip.audioOnly ? 'audio' : 'video';
@@ -4710,7 +4775,7 @@ prfx.placeSelectedProjectItemsAsColumn = function (publicSequence, qeSequence) {
 
     return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' as a column at the playhead, one per video track.' +
         prfx.appendedTrackNote(staging) +
-        (skipped ? ' Skipped ' + skipped + ' non-media item' + (skipped === 1 ? '' : 's') + '.' : '');
+        (skipped ? ' Skipped ' + skipped + ' bin/sequence' + (skipped === 1 ? '' : 's') + '.' : '');
 };
 
 // ---------------------------------------------------------------------------
@@ -5396,7 +5461,7 @@ prfx.replaceSelectedClipsFromBin = function (publicSequence, qeSequence) {
     var items = prfx.selectedProjectItems(), source = null, i, collected, sourceCategory;
     prfx.lastSelectedCount = 0;
     prfx.lastSkipNotes = [];
-    for (i = 0; i < items.length; i++) if (prfx.projectItemIsPlaceable(items[i])) { source = items[i]; break; }
+    for (i = 0; i < items.length; i++) if (prfx.projectItemIsMedia(items[i])) { source = items[i]; break; }
     if (!source) return 'ERROR: Select one media clip in the Project panel to replace with.';
     if (items.length > 1) return 'ERROR: Select exactly one Project panel clip to replace with - ' + items.length + ' are selected.';
 
@@ -5476,7 +5541,7 @@ prfx.collectBinMedia = function (bin, out, depth) {
         try { child = children[i]; } catch (childError) { child = null; }
         if (!child) continue;
         if (prfx.projectItemIsBin(child)) prfx.collectBinMedia(child, out, depth + 1);
-        else if (prfx.projectItemIsPlaceable(child)) out.push(child);
+        else if (prfx.projectItemIsMedia(child)) out.push(child);
     }
     return out;
 };
@@ -6722,11 +6787,11 @@ prfx.sourceMonitorItem = function () {
 
 prfx.placeSourceMonitorClip = function (publicSequence, qeSequence) {
     var item = prfx.sourceMonitorItem(), checkpoint, staging, live, playhead, atSeconds;
-    var staged, snapshot, videoTarget, audioTarget, failure = null, created = [], spans, clip, marked, placedAudio, j;
+    var staged, snapshot, videoTarget, audioTarget, failure = null, created = [], spans, clip, marked, placedAudio, j, syntheticSaved;
 
     if (!item) return 'ERROR: Load a clip into the Source monitor first - PR FX places whatever is open there.';
     if (!prfx.projectItemIsPlaceable(item)) {
-        return 'ERROR: "' + String(item.name) + '" is not placeable media. Sequences and synthetics cannot be placed.';
+        return 'ERROR: "' + String(item.name) + '" cannot be placed. Bins and sequences are not placeable.';
     }
 
     try { playhead = publicSequence.getPlayerPosition(); } catch (playheadError) { playhead = null; }
@@ -6743,7 +6808,9 @@ prfx.placeSourceMonitorClip = function (publicSequence, qeSequence) {
 
     try {
         // keepRange: the Source monitor In/Out is the whole point here.
-        staged = prfx.stageOneProjectItem(staging.tracks, item, atSeconds, true);
+        syntheticSaved = prfx.applySyntheticDuration(item);
+        try { staged = prfx.stageOneProjectItem(staging.tracks, item, atSeconds, true); }
+        finally { prfx.restoreSyntheticDuration(item, syntheticSaved); }
         spans = [{ start: staged.start, end: staged.end }];
         if (staged.audioOnly) {
             // Music loaded in the Source monitor is the common case here.
@@ -6980,6 +7047,7 @@ prfx.applyPerfectPitch = function (publicSequence, qeSequence) {
 // Either way the universal undo checkpoint is still recorded, so "keep" is
 // recoverable rather than final.
 if (prfx.failurePolicy === undefined) prfx.failurePolicy = 'rollback';
+if (prfx.syntheticSeconds === undefined) prfx.syntheticSeconds = 5;
 
 prfx.revertUnlessKeeping = function (checkpoint, maxSteps) {
     if (prfx.failurePolicy === 'keep') {

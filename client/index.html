@@ -52,6 +52,11 @@
         <label for="show-system-commands" class="checkbox-row"><input id="show-system-commands" type="checkbox"><span>Show <code>[System]</code> diagnostic commands</span></label>
         <p class="help">Off by default. These are developer tools — API dumps, clip inspection, the failure ledger — and they do nothing useful in an edit. Turning this on shows them in the palette and the command list.</p>
       </section>
+      <section class="card">
+        <label for="synthetic-duration">Default length for stills, adjustment layers &amp; graphics</label>
+        <div class="duration-control"><input id="synthetic-duration" type="number" min="0.5" max="600" step="0.5" value="5"><span>seconds</span></div>
+        <p class="help">Applies only to things with no length of their own — images, adjustment layers, mattes, bars, graphics. Video and audio always keep their own duration. Premiere's own preference is left untouched.</p>
+      </section>
       <section class="card setup-card">
           <span class="card-title">Setup</span>
           <ul id="setup-status" class="setup-status">

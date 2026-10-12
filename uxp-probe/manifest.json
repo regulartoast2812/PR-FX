@@ -1,0 +1,24 @@
+{
+  "id": "com.prfx.uxpprobe",
+  "name": "PR FX UXP Probe",
+  "version": "1.0.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": [
+    { "app": "premierepro", "minVersion": "25.0.0" }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "prfxUxpProbe",
+      "label": { "default": "PR FX UXP Probe" },
+      "minimumSize": { "width": 320, "height": 300 },
+      "preferredDockedSize": { "width": 420, "height": 520 }
+    }
+  ],
+  "requiredPermissions": {
+    "localFileSystem": "fullAccess",
+    "allowCodeGenerationFromStrings": false
+  },
+  "icons": []
+}

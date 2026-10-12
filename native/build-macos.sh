@@ -12,7 +12,7 @@ module_cache="${TMPDIR:-/tmp}/prfx-swift-module-cache"
 generated_build_info="$output_dir/PRFXGeneratedBuildInfo.swift"
 build_marker="$output_dir/listener-build.txt"
 build_lock="$output_dir/.listener-build.lock"
-listener_sources=("$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$project_dir/Info.plist")
+listener_sources=("$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$project_dir/PRFXPendingCommands.swift" "$project_dir/Info.plist")
 can_build_listener=1
 force_rebuild=0
 
@@ -108,7 +108,7 @@ import Foundation
 
 let prfxListenerBuild = "$build_id"
 EOF
-swiftc -D PRFX_GENERATED_BUILD -module-cache-path "$module_cache" "$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$generated_build_info" -o "$staging_listener_binary" -framework AppKit -framework ApplicationServices -framework Carbon -framework Network
+swiftc -D PRFX_GENERATED_BUILD -module-cache-path "$module_cache" "$project_dir/PRFXShortcutListener.swift" "$project_dir/PRFXAccessibilityProbe.swift" "$project_dir/PRFXTimelineRegionCache.swift" "$project_dir/PRFXPendingCommands.swift" "$generated_build_info" -o "$staging_listener_binary" -framework AppKit -framework ApplicationServices -framework Carbon -framework Network
 cp "$project_dir/Info.plist" "$staging_app_dir/Contents/Info.plist"
 print -n 'APPL????' > "$staging_app_dir/Contents/PkgInfo"
 print -r -- "$build_id" > "$staging_app_dir/Contents/Resources/listener-build.txt"

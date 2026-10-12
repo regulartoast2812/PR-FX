@@ -176,6 +176,36 @@ private let shortcutListenerFocusChanged: AXObserverCallback = { _, _, _, contex
 
 private let paletteFallbackScopeRank = -2
 
+// This accessory app has no main Edit menu. Route its standard equivalents to
+// the active field editor instead of letting NSApplication discard them.
+private final class PalettePanel: NSPanel {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let editor = firstResponder as? NSTextView,
+              editor.isFieldEditor, editor.isEditable else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if modifiers == [.command] {
+            switch key {
+            case "a": editor.selectAll(nil)
+            case "c": editor.copy(nil)
+            case "x": editor.cut(nil)
+            case "v": editor.paste(nil)
+            case "z":
+                if editor.undoManager?.canUndo == true { editor.undoManager?.undo() }
+            default: return super.performKeyEquivalent(with: event)
+            }
+            return true
+        }
+        if modifiers == [.command, .shift], key == "z" {
+            if editor.undoManager?.canRedo == true { editor.undoManager?.redo() }
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 final class ShortcutListener: NSObject {
     let settingsURL: URL
     private let catalogURL: URL
@@ -189,6 +219,8 @@ final class ShortcutListener: NSObject {
     // Which shortcut each id was registered for, so the scope can be re-checked
     // against THAT key when it fires rather than against "any key at all".
     private var hotKeyShortcuts: [UInt32: Shortcut] = [:]
+    private var failedHotKeyIDs: Set<UInt32> = []
+    private var lastHotKeyRetryAt = Date.distantPast
     private var eventHandler: EventHandlerRef?
     private var panel: NSPanel?
     private var searchField: NSSearchField?
@@ -465,8 +497,9 @@ final class ShortcutListener: NSObject {
         let savedBindings = (settings.bindings ?? []).count
         let armedBindings = hotKeyCommands.count
         let withheldBindings = max(0, savedBindings - armedBindings)
+        let transport = (commandBridge?.queueHealth() ?? "") + ",\"failedRegistrations\":\(failedHotKeyIDs.count)"
         let detection = ",\"timelineRegion\":\"\(jsonEscape(timelineRegionCache.liveRegion.map(NSStringFromRect) ?? ""))\",\"savedTimelineRegion\":\"\(jsonEscape(timelineRegionCache.lastKnownRegion.map(NSStringFromRect) ?? ""))\",\"lastClick\":\"\(jsonEscape(lastClickPoint.map(NSStringFromPoint) ?? ""))\",\"timelineDetection\":\"\(jsonEscape(timelineDetectionDetails))\",\"focusPollingActive\":\(focusPollTimer?.isValid == true),\"lookupAgeSeconds\":\(Date().timeIntervalSince(timelineRegionCache.lastLookupAt))"
-        return "{\"mode\":\"\(mode)\",\"listenerBuild\":\"\(jsonEscape(prfxListenerBuild))\",\"bindings\":\(savedBindings),\"armedBindings\":\(armedBindings),\"withheldBindings\":\(withheldBindings),\"accessibilityTrusted\":\(accessibilityTrusted ? "true" : "false"),\"accessibilityBypassed\":\(prfxBypassAccessibilityFocus ? "true" : "false"),\"catalogCount\":\(commands.count),\"catalogRevision\":\(catalogRevision),\"catalogFingerprint\":\"\(jsonEscape(catalogFingerprint))\",\"pendingCommand\":\"\(jsonEscape(pending))\",\"focus\":\"\(jsonEscape(shortcutScopeReason))\",\"paletteFrameSaved\":\(paletteFrameSaved)\(detection)}"
+        return "{\"mode\":\"\(mode)\",\"listenerBuild\":\"\(jsonEscape(prfxListenerBuild))\",\"bindings\":\(savedBindings),\"armedBindings\":\(armedBindings),\"withheldBindings\":\(withheldBindings),\"accessibilityTrusted\":\(accessibilityTrusted ? "true" : "false"),\"accessibilityBypassed\":\(prfxBypassAccessibilityFocus ? "true" : "false"),\"catalogCount\":\(commands.count),\"catalogRevision\":\(catalogRevision),\"catalogFingerprint\":\"\(jsonEscape(catalogFingerprint))\",\"pendingCommand\":\"\(jsonEscape(pending))\",\"focus\":\"\(jsonEscape(shortcutScopeReason))\",\"paletteFrameSaved\":\(paletteFrameSaved)\(detection)\(transport)}"
     }
 
     // Carbon hotkeys are global by API design and consume registered keys.
@@ -493,8 +526,9 @@ final class ShortcutListener: NSObject {
 
     @objc private func frontmostApplicationChanged(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
+            self?.timelineRegionCache.invalidate()
             self?.updateFocusPolling()
-            self?.refreshHotKeys()
+            self?.updateHotKeyRegistration(force: false)
         }
     }
 
@@ -508,6 +542,7 @@ final class ShortcutListener: NSObject {
             timer.invalidate()
             guard let self else { return }
             self.hotKeyRefreshTimer = nil
+            self.timelineRegionCache.invalidate()
             self.updateFocusPolling()
             self.updateHotKeyRegistration(force: false)
         }
@@ -598,6 +633,7 @@ final class ShortcutListener: NSObject {
     }
 
     fileprivate func focusChangedFromObserver() {
+        timelineRegionCache.invalidate()
         updateHotKeyRegistration(force: false)
     }
 
@@ -618,7 +654,10 @@ final class ShortcutListener: NSObject {
         }
         guard focus.armsAnything else {
             if canArmPaletteWithoutAccessibility() {
-                if !shouldForce && registeredScopeRank == paletteFallbackScopeRank { return }
+                if !shouldForce && registeredScopeRank == paletteFallbackScopeRank {
+                    retryFailedHotKeys()
+                    return
+                }
                 unregisterHotKeys()
                 installHotKeyHandler()
                 registerHotKey(settings.shortcut, id: 1, command: nil)
@@ -635,7 +674,10 @@ final class ShortcutListener: NSObject {
         // Re-register when the set of armable shortcuts changes, not merely when
         // the reason text does. unregisterHotKeys() resets the rank, so an
         // explicit release always re-arms on the next evaluation.
-        if !shouldForce && registeredScopeRank == focus.rank { return }
+        if !shouldForce && registeredScopeRank == focus.rank {
+            retryFailedHotKeys()
+            return
+        }
         unregisterHotKeys()
         installHotKeyHandler()
         var armed = 0
@@ -683,9 +725,12 @@ final class ShortcutListener: NSObject {
         let eventID = EventHotKeyID(signature: OSType(0x50524658), id: id)
         let result = RegisterEventHotKey(keyCode(for: shortcut.code), carbonModifiers(for: shortcut), eventID, GetApplicationEventTarget(), 0, &reference)
         guard result == noErr, let reference else {
+            failedHotKeyIDs.insert(id)
+            lastHotKeyRetryAt = Date()
             listenerLog("Shortcut registration failed for \(display(shortcut)) (OSStatus \(result))")
             return
         }
+        failedHotKeyIDs.remove(id)
         hotKeyRefs.append(reference)
         hotKeyShortcuts[id] = shortcut
         if let command { hotKeyCommands[id] = command }
@@ -698,6 +743,20 @@ final class ShortcutListener: NSObject {
         hotKeyShortcuts.removeAll()
         registeredScopeRank = -1
         hotKeyCommands.removeAll()
+        failedHotKeyIDs.removeAll()
+    }
+
+    private func retryFailedHotKeys() {
+        guard !failedHotKeyIDs.isEmpty,
+              Date().timeIntervalSince(lastHotKeyRetryAt) >= 2 else { return }
+        lastHotKeyRetryAt = Date()
+        // Retry only failed registrations; don't interrupt working shortcuts.
+        let ids = failedHotKeyIDs
+        if ids.contains(1) { registerHotKey(settings.shortcut, id: 1, command: nil) }
+        for (offset, binding) in (settings.bindings ?? []).enumerated() {
+            let id = UInt32(offset + 2)
+            if ids.contains(id) { registerHotKey(binding.shortcut, id: id, command: binding.command) }
+        }
     }
 
     private func shortcutCanArmWithoutTimelineDetection(_ shortcut: Shortcut) -> Bool {
@@ -797,7 +856,7 @@ final class ShortcutListener: NSObject {
     }
 
     private func makePalette() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 350, height: 276), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView], backing: .buffered, defer: false)
+        let panel = PalettePanel(contentRect: NSRect(x: 0, y: 0, width: 350, height: 276), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView], backing: .buffered, defer: false)
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
@@ -1559,6 +1618,10 @@ extension ShortcutListener: NSTableViewDataSource, NSTableViewDelegate {
 }
 
 extension ShortcutListener: NSSearchFieldDelegate {
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        (searchField?.currentEditor() as? NSTextView)?.allowsUndo = true
+    }
+
     func controlTextDidChange(_ notification: Notification) {
         let isOptionPane = pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil
         filterCommands(resetSelection: !isOptionPane)
@@ -1688,8 +1751,7 @@ private final class CommandRowView: NSTableCellView {
 private final class CommandBridge {
     private let listener: NWListener
     private let lock = NSLock()
-    private var pendingCommand: Command?
-    private var pendingCommandName = ""
+    private var pendingCommands = PendingCommands<Command>()
     private let queue = DispatchQueue(label: "com.prfx.shortcut-listener.bridge")
     private let catalogHandler: ([Command], String) -> Void
     private let healthHandler: () -> String
@@ -1711,17 +1773,28 @@ private final class CommandBridge {
 
     func enqueue(_ command: Command) {
         lock.lock()
-        pendingCommand = command
-        pendingCommandName = command.name
+        let accepted = pendingCommands.append(command)
         lock.unlock()
+        guard accepted else {
+            listenerLog("Shortcut queue full; rejected: \(command.name)")
+            return
+        }
         listenerLog("Queued palette command: \(command.name) [placement: \(command.transitionPlacement ?? "default"), move: \(command.moveMode ?? "default")]")
     }
 
     func pendingName() -> String {
         lock.lock()
-        let name = pendingCommandName
+        pendingCommands.expire()
+        let name = pendingCommands.first?.name ?? ""
         lock.unlock()
         return name
+    }
+
+    func queueHealth() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingCommands.expire()
+        return ",\"queuedCommands\":\(pendingCommands.count),\"droppedCommands\":\(pendingCommands.dropped)"
     }
 
     private func receive(_ connection: NWConnection) {
@@ -1757,9 +1830,7 @@ private final class CommandBridge {
             let request = String(data: requestData.subdata(in: 0..<min(requestData.count, totalLength)), encoding: .utf8) ?? ""
             if request.hasPrefix("GET /next ") {
                 self.lock.lock()
-                let command = self.pendingCommand
-                self.pendingCommand = nil
-                self.pendingCommandName = ""
+                let command = self.pendingCommands.take()
                 self.lock.unlock()
                 if let command { listenerLog("CEP collected palette command: \(command.name) [placement: \(command.transitionPlacement ?? "default"), move: \(command.moveMode ?? "default")]") }
                 let body = String(data: (try? JSONEncoder().encode(command)) ?? Data("null".utf8), encoding: .utf8) ?? "null"

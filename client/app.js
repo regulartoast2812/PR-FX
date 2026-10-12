@@ -6,9 +6,9 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260916-hide-system-1';
+  var PRFX_HOST_BUILD = '20260930-no-legacy-1';
   var RETIRED_COMMAND_IDS = { 'stretch-speed-to-playhead': true };
-  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', showSystemCommands: false, bindings: [], folderSyncsByProject: {} };
+  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', showSystemCommands: false, syntheticSeconds: 5, bindings: [], folderSyncsByProject: {} };
   var commands = [
     { type: 'custom', id: 'dump-qe-api', name: '[System] Dump QE + DOM API' },
     { type: 'custom', id: 'inspect-selected-clip', name: '[System] Inspect Selected Clip' },
@@ -103,6 +103,7 @@
   var nameToleranceInput = document.getElementById('name-tolerance');
   var failurePolicyInput = document.getElementById('failure-policy');
   var showSystemInput = document.getElementById('show-system-commands');
+  var syntheticDurationInput = document.getElementById('synthetic-duration');
   var managerSearch = document.getElementById('command-manager-search');
   var managerTypeFilter = document.getElementById('command-type-filter');
   var managerList = document.getElementById('command-manager-list');
@@ -182,7 +183,14 @@
   function isSystemCommand(command) {
     return String(command && command.name || '').indexOf('[System]') === 0;
   }
+  // Filtered here as well as in the host: a catalog cached before the host
+  // filter existed would otherwise keep showing legacy entries until something
+  // forced a refresh.
+  function isLegacyCommand(command) {
+    return String(command && command.name || '').toLowerCase().indexOf('(legacy)') !== -1;
+  }
   function commandIsVisible(command) {
+    if (isLegacyCommand(command)) return false;
     return settings.showSystemCommands === true || !isSystemCommand(command);
   }
   function visibleCommands() {
@@ -254,6 +262,7 @@
     if (nameToleranceInput) nameToleranceInput.value = settings.nameTolerance || 'normalized';
     if (failurePolicyInput) failurePolicyInput.value = settings.failurePolicy || 'rollback';
     if (showSystemInput) showSystemInput.checked = settings.showSystemCommands === true;
+    if (syntheticDurationInput) syntheticDurationInput.value = settings.syntheticSeconds || 5;
     renderManager();
     renderFolderSyncs();
   }
@@ -791,6 +800,13 @@
       if (payload.pendingCommand) {
         bridgeDetail.textContent = 'Waiting for CEP to run “' + payload.pendingCommand + '”.';
       }
+      if (Number(payload.failedRegistrations) > 0) {
+        bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Shortcut conflict';
+        bridgeDetail.textContent += ' ' + payload.failedRegistrations + ' shortcut registration(s) failed; the listener is retrying. Another app or binding may be using those keys.';
+      }
+      if (Number(payload.droppedCommands) > 0) {
+        bridgeDetail.textContent += ' ' + payload.droppedCommands + ' command(s) expired or exceeded the queue limit during this listener session.';
+      }
       if (expectedBuild || payload.listenerBuild) {
         catalogHealth.textContent = (catalogReady ? commands.length + ' live/cached commands ready' : commands.length + ' fallback commands only') +
           ' · listener ' + shortBuild(payload.listenerBuild || expectedBuild || 'unknown') +
@@ -828,7 +844,7 @@
             window.__prfxApplying = false;
             setStatus('Premiere did not answer the palette command in time. It may still be running — check the Timeline before retrying.', true);
           }, LONG_RUNNING_COMMANDS[command && command.id] ? 600000 : 12000);
-          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback' });
+          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
           dispatchPremiereApply(payload, function (result) {
             if (completed) return;
             completed = true;
@@ -1237,7 +1253,7 @@
       } else closePalette();
     }
     setStatus('Applying ' + command.name + '…');
-    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback' });
+    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
     // Bulk replace and the place functions work clip by clip and legitimately
     // run for minutes. Timing them out at 12s reports failure for work that is
     // still running and will complete.
@@ -1328,6 +1344,12 @@
   durationInput.addEventListener('change', function () { settings.transitionFrames = Math.max(1, Math.min(300, Number(durationInput.value) || 30)); saveSettings(); });
   staggerFramesInput.addEventListener('change', function () { settings.staggerFrames = Math.max(0, Math.min(9999, Math.round(Number(staggerFramesInput.value) || 0))); saveSettings(); });
   staggerGroupInput.addEventListener('change', function () { settings.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(staggerGroupInput.value) || 1))); saveSettings(); });
+  if (syntheticDurationInput) syntheticDurationInput.addEventListener('change', function () {
+    var value = Number(syntheticDurationInput.value);
+    settings.syntheticSeconds = value > 0 ? Math.min(600, value) : 5;
+    syntheticDurationInput.value = settings.syntheticSeconds;
+    saveSettings();
+  });
   if (showSystemInput) showSystemInput.addEventListener('change', function () {
     settings.showSystemCommands = showSystemInput.checked === true;
     saveSettings();

@@ -21,6 +21,11 @@ struct TimelineRegionCache {
     mutating func restoreFallback(_ region: CGRect) {
         lastKnownRegion = region
     }
+
+    mutating func invalidate() {
+        liveRegion = nil
+        lastLookupAt = .distantPast
+    }
 }
 
 enum TimelinePanelGeometry {

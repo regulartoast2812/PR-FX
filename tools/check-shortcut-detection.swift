@@ -33,6 +33,12 @@ enum ShortcutDetectionChecks {
         precondition(cache.liveRegion == movedPanel)
         precondition(cache.lastKnownRegion == movedPanel)
 
+        cache.invalidate()
+        precondition(cache.needsLookup(at: start.addingTimeInterval(4.1)),
+                     "A focus/layout change must not wait for the two-second cache TTL")
+        precondition(cache.liveRegion == nil && cache.lastKnownRegion == movedPanel)
+        cache.recordLookup(movedPanel, at: start.addingTimeInterval(4))
+
         // Continued failures are throttled but keep retrying every two seconds.
         for offset in stride(from: 6.0, through: 14.0, by: 2.0) {
             let now = start.addingTimeInterval(offset)
