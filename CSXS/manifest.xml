@@ -30,8 +30,13 @@
             <Parameter>--allow-file-access-from-files</Parameter>
           </CEFCommandLine>
         </Resources>
+        <!-- Starts with Premiere, unseen: it loads host.jsx and keeps the
+             palette's catalog current, but it doesn't pop up. Shown when you open
+             Window > Extensions > Edie, or where a workspace has it docked.
+             AutoVisible true made it float over Premiere's Home screen at every
+             launch (2026-11-21, Windows). -->
         <Lifecycle>
-          <AutoVisible>true</AutoVisible>
+          <AutoVisible>false</AutoVisible>
           <StartOn>
             <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
           </StartOn>
