@@ -86,17 +86,28 @@ namespace PrFxShortcutListener
             var headroom = (int)Math.Ceiling(Headroom * scale);
             var region = next.Region;
             placed = new Rectangle(region.Left, region.Top - headroom, region.Right - region.Left, region.Bottom - region.Top + headroom);
-            if (owner != next.Owner)
-            {
-                owner = next.Owner;
-                Native.SetWindowLongPtr(Handle, Native.GWLP_HWNDPARENT, owner);
-            }
+            owner = next.Owner;
             if (!Visible)
             {
                 Show();
                 Log.Write("Timeline highlight shown over " + placed);
             }
+            KeepJustAbove(owner);
             Render(force: false);
+        }
+
+        // Keeps this window directly above Premiere's in the z-order: on Premiere, under any other app in front of
+        // it. NOT by making Premiere its owner: an owner in another process joins the two programs' input queues,
+        // and clicks in the Timeline then fell through to the app behind Premiere (2026-11-21, seen: VS Code and
+        // Opera took the front, Premiere lost it, and with it every shortcut).
+        private void KeepJustAbove(IntPtr premiere)
+        {
+            var above = Native.GetWindow(premiere, Native.GW_HWNDPREV);
+            if (above == Handle) return;
+            // Placed after the window just above Premiere, it lands right on top of Premiere. A topmost window
+            // there would make this one topmost too, so then it goes to the top of the ordinary windows instead.
+            var after = above == IntPtr.Zero || (Native.GetWindowLong(above, Native.GWL_EXSTYLE) & Native.WS_EX_TOPMOST) != 0 ? Native.HWND_TOP : above;
+            Native.SetWindowPos(Handle, after, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
         }
 
         public void HideHighlight()
@@ -203,7 +214,7 @@ namespace PrFxShortcutListener
             if (speech != null && spoken is double e) DrawSpeech(g, speech, e, edieX - 3 * scale, rect.Top - 12 * scale);
             else if (workingName != null)
                 DrawNote(g, "Working on " + workingName + " · " + Math.Max(0, (int)(now - workingStarted).TotalSeconds) + "s", edieX - 6 * scale, rect.Top - 9 * scale);
-            else if (!s.Armed) DrawNote(g, ShortReason(s.Reason), edieX - 6 * scale, rect.Top - 9 * scale);
+            else if (!s.Armed && ShortReason(s.Reason).Length > 0) DrawNote(g, ShortReason(s.Reason), edieX - 6 * scale, rect.Top - 9 * scale);
         }
 
         public static string ShortReason(string reason)
@@ -213,6 +224,8 @@ namespace PrFxShortcutListener
             if (lower.Contains("text input")) return "Typing in a field";
             if (lower.Contains("menu")) return "Menu open";
             if (lower.Contains("bridge")) return "Edie bridge offline";
+            // Working in another app: he dozes, with nothing to say about it.
+            if (lower.Contains("not frontmost")) return "";
             return reason;
         }
 

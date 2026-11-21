@@ -98,6 +98,13 @@ namespace PrFxShortcutListener
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int InternalGetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
         public const uint PW_RENDERFULLCONTENT = 2;
+        public static readonly IntPtr HWND_TOP = IntPtr.Zero;
+        public const uint SWP_NOOWNERZORDER = 0x200;
+        public const uint GW_HWNDPREV = 3;
+        public const int GWL_EXSTYLE = -20;
+        [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
+        [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int index);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int maxCount);
         public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr lParam);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr hWnd);
@@ -113,9 +120,6 @@ namespace PrFxShortcutListener
             if (!GetLastInputInfo(ref info)) return 0;
             return unchecked((uint)Environment.TickCount - info.dwTime) / 1000.0;
         }
-        // Owner: an owned window stays just above its owner and goes behind whatever covers it.
-        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value);
-        public const int GWLP_HWNDPARENT = -8;
         public const int WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20;
         [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
         [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int Cx, Cy; }

@@ -48,6 +48,8 @@ namespace PrFxShortcutListener
         public bool Installed => keyHook != IntPtr.Zero;
         public Action<bool>? ForegroundChanged;
         public Action<string>? Log;
+        public volatile bool LogKeys;
+        public volatile bool AcceptInjected;
 
         public KeyboardHook(KeyDecision decide)
         {
@@ -130,7 +132,16 @@ namespace PrFxShortcutListener
                 if (!wasPremiere) Install();
             }
             swallowed.Clear();
-            if (isPremiere != wasPremiere) ForegroundChanged?.Invoke(isPremiere);
+            if (isPremiere != wasPremiere)
+            {
+                // Which window took the front, so a wrong "Premiere is not frontmost" can be traced.
+                var image = pid == 0 ? "" : System.IO.Path.GetFileName(Native.ProcessImagePath(pid));
+                var cls = new System.Text.StringBuilder(128);
+                if (hwnd != IntPtr.Zero) Native.GetClassName(hwnd, cls, cls.Capacity);
+                var line = "Foreground: " + (isPremiere ? "Premiere" : "not Premiere") + " (" + image + ", class " + cls + ")";
+                ThreadPool.QueueUserWorkItem(_ => Log?.Invoke(line));
+                ForegroundChanged?.Invoke(isPremiere);
+            }
         }
 
         // "Adobe Premiere Pro.exe" on every release so far, and "Adobe Premiere
@@ -151,10 +162,18 @@ namespace PrFxShortcutListener
         {
             if (nCode < 0) return Native.CallNextHookEx(keyHook, nCode, wParam, lParam);
             var info = Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
-            // Our own menu-mask taps, and anything another tool synthesises.
-            if ((info.flags & Native.LLKHF_INJECTED) != 0) return Native.CallNextHookEx(keyHook, nCode, wParam, lParam);
             var message = wParam.ToInt32();
             var vk = info.vkCode;
+            // Diagnostics (files in the support folder, read at start): "log-keys" logs keys pressed in Premiere (never in other apps),
+            // "accept-injected" lets synthesised keys through for testing.
+            if (LogKeys && premiereFrontmost && (message == Native.WM_KEYDOWN || message == Native.WM_SYSKEYDOWN))
+            {
+                var line = "Key seen: vk=0x" + vk.ToString("X2") + " flags=0x" + info.flags.ToString("X") + " ctrl=" + Native.IsDown(Native.VK_CONTROL) + " premiereFrontmost=" + premiereFrontmost;
+                ThreadPool.QueueUserWorkItem(_ => Log?.Invoke(line));
+            }
+            // Our own menu-mask taps, and anything another tool synthesises.
+            if ((info.flags & Native.LLKHF_INJECTED) != 0 && !(AcceptInjected && vk != Native.VK_MENU_MASK))
+                return Native.CallNextHookEx(keyHook, nCode, wParam, lParam);
             if (message == Native.WM_KEYUP || message == Native.WM_SYSKEYUP)
             {
                 if (swallowed.Remove(vk)) return new IntPtr(1);

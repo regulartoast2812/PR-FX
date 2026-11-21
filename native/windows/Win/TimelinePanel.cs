@@ -66,8 +66,10 @@ namespace PrFxShortcutListener
         // is known and visible, every visible panel is looked at, at most every 3 s.
         public void Refresh(uint premiereThread, IntPtr premiereWindow)
         {
+            // The focused panel only while Premiere is in front (premiereThread 0 otherwise); where the Timeline
+            // is, always, so the highlight follows it with Premiere behind another app too.
             var info = new Native.GUITHREADINFO { cbSize = Marshal.SizeOf(typeof(Native.GUITHREADINFO)) };
-            if (premiereThread == 0 || !Native.GetGUIThreadInfo(premiereThread, ref info)) return;
+            if (premiereThread == 0 || !Native.GetGUIThreadInfo(premiereThread, ref info)) info.hwndFocus = IntPtr.Zero;
             Prune();
             var panel = TabPanelOf(info.hwndFocus);
             if (panel != IntPtr.Zero)

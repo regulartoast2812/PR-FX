@@ -23,8 +23,14 @@ using it.
     3 s while focused). A Timeline verdict stays for as long as the panel's window exists.
 - **Timeline highlight with Edie sitting on it** (`Win/TimelineHighlight.cs`, setting `timelineHighlight`, off by
   default), with his moods: awake and armed, dozing with "Click the Timeline to arm", grinning when a key fires,
-  startled when one is passed on, and "Working on …" for AI functions. A click-through layered window owned by
-  Premiere's window, so it sits just above Premiere and goes behind anything in front of it.
+  startled when one is passed on, and "Working on …" for AI functions. He stays on the Timeline whenever Premiere's
+  window is open, in front or not (hidden only when Premiere is minimised, the Timeline isn't showing, or a Premiere
+  dialog is in front). A click-through layered window kept directly above Premiere's in the z-order, so other apps
+  in front cover it. **Never make Premiere its owner:** an owner in another process joins the two programs' input
+  queues, and clicks in the Timeline then fell through to the app behind Premiere, which took the front, so Edie
+  vanished and no shortcut fired (seen 2026-11-21).
+- The listener logs which window takes the front whenever "Premiere is in front" changes. For key problems, create
+  `%APPDATA%\PR FX Palette\log-keys` (logs keys pressed in Premiere only) and restart the listener.
 - **Edie's nudges** (`Core/EdieNudges.cs`, settings `edieNudges` and `edieNudgeMinutes`): "Still with me?" after a
   quiet stretch and "Welcome back!" after being away, in a speech bubble beside him on the highlight.
 - Edie's sprite is one port of the macOS `EdieSprite` (`Win/EdieSprite.cs`); the palette draws from it too.

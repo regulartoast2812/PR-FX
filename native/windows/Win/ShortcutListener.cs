@@ -92,7 +92,13 @@ namespace PrFxShortcutListener
             LoadSettings();
 
             timeline.Log = Log.Write;
-            hook = new KeyboardHook(Decide) { Log = Log.Write };
+            hook = new KeyboardHook(Decide)
+            {
+                Log = Log.Write,
+                LogKeys = File.Exists(Path.Combine(Paths.SupportDir, "log-keys")),
+                AcceptInjected = File.Exists(Path.Combine(Paths.SupportDir, "accept-injected")),
+            };
+            if (hook.LogKeys || hook.AcceptInjected) Log.Write("Key diagnostics on: log-keys=" + hook.LogKeys + " accept-injected=" + hook.AcceptInjected);
             hook.ForegroundChanged = isPremiere => OnUi(() => { if (isPremiere) ReloadSettingsIfNeeded(); });
 
             try
@@ -166,37 +172,82 @@ namespace PrFxShortcutListener
             bridge?.Sweep();
             // Which panel is in use is worked out here, off the hook thread: the
             // hook only reads the verdict this leaves behind.
+            var premiereOpen = PremiereOnScreen();
             if (hook.PremiereFrontmost)
             {
                 timeline.Refresh(hook.PremiereThread, hook.PremiereWindow);
                 AnnounceScopeIfChanged(CurrentScope());
             }
-            else announcedScope = "";
-            RefreshHighlight();
+            else
+            {
+                announcedScope = "";
+                // Behind another app the Timeline is still followed, so Edie stays on it.
+                if (premiereOpen) timeline.Refresh(0, PremiereMainWindow());
+            }
+            RefreshHighlight(premiereOpen);
             RefreshNudge();
             if (housekeepingTicks % 4 == 0) ReloadSettingsIfNeeded();
         }
 
+        // Premiere's main window is there and not minimised.
+        private bool PremiereOnScreen()
+        {
+            var window = PremiereMainWindow();
+            if (window == IntPtr.Zero || !Native.IsWindow(window)) return false;
+            var root = Native.GetAncestor(window, Native.GA_ROOT);
+            return Native.IsWindowVisible(root) && !Native.IsIconic(root);
+        }
+
+        // The Premiere window last in front, or, before Premiere has been in
+        // front since the listener started, its main window (looked up at most
+        // every 2 s).
+        private IntPtr foundPremiere;
+        private DateTime foundPremiereAt;
+        private IntPtr PremiereMainWindow()
+        {
+            var window = hook.PremiereWindow;
+            if (window != IntPtr.Zero && Native.IsWindow(window)) return window;
+            if (foundPremiere != IntPtr.Zero && Native.IsWindow(foundPremiere)) return foundPremiere;
+            if (DateTime.UtcNow - foundPremiereAt < TimeSpan.FromSeconds(2)) return IntPtr.Zero;
+            foundPremiereAt = DateTime.UtcNow;
+            foundPremiere = IntPtr.Zero;
+            foreach (var process in Process.GetProcesses())
+            {
+                try
+                {
+                    if (process.ProcessName.StartsWith("Adobe Premiere Pro", StringComparison.OrdinalIgnoreCase) && process.MainWindowHandle != IntPtr.Zero)
+                    { foundPremiere = process.MainWindowHandle; break; }
+                }
+                catch (Exception) { }
+                finally { process.Dispose(); }
+            }
+            return foundPremiere;
+        }
+
         // ---- Timeline highlight and Edie's nudges ---------------------------
 
-        // Drawn only with the setting on, Premiere in front and the Timeline
-        // seen on screen just now. While the palette is open (it takes focus,
-        // so Premiere isn't in front) it stays exactly as it was. A Premiere
-        // dialog in front (Export settings, say) hides it: the Timeline's
-        // window isn't the one in front then.
-        private void RefreshHighlight()
+        // Drawn with the setting on whenever Premiere's window is open and the
+        // Timeline is on screen, whether Premiere is in front or not (the user,
+        // 2026-11-21: "I want him to always exist in PR even if PR isn't active").
+        // Its window sits just above Premiere's, so other apps in front cover
+        // it. Hidden when Premiere is minimised, when the Timeline isn't showing,
+        // and while a Premiere dialog is in front (Export settings, say). While
+        // the palette is open it stays as it was.
+        private void RefreshHighlight(bool premiereOpen)
         {
             if (palette.Visible && highlight.IsShowing) return;
             var settings = armed.Settings;
             var live = timeline.LiveRect;
-            if (settings.TimelineHighlight != "on" || !hook.PremiereFrontmost || live == null ||
-                timeline.LiveRoot == IntPtr.Zero || Native.GetAncestor(hook.PremiereWindow, Native.GA_ROOT) != timeline.LiveRoot)
+            var root = timeline.LiveRoot;
+            var dialogInFront = hook.PremiereFrontmost && Native.GetAncestor(hook.PremiereWindow, Native.GA_ROOT) != root;
+            if (settings.TimelineHighlight != "on" || !premiereOpen || live == null || root == IntPtr.Zero ||
+                !Native.IsWindowVisible(root) || Native.IsIconic(root) || dialogInFront)
             {
                 highlight.HideHighlight();
                 return;
             }
             var scope = CurrentScope();
-            highlight.Update(new TimelineHighlight.State { Owner = timeline.LiveRoot, Region = live.Value, Armed = scope.Level == ScopeLevel.Full, Reason = scope.Reason });
+            highlight.Update(new TimelineHighlight.State { Owner = root, Region = live.Value, Armed = scope.Level == ScopeLevel.Full, Reason = scope.Reason });
         }
 
         // Same tick: one idle-time read, the rest comparisons. He speaks only
