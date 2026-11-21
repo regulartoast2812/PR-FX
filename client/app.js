@@ -6,15 +6,32 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20260930-no-legacy-1';
+  var PRFX_HOST_BUILD = '20261119-edie-name-1';
+  // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
+  // host and bridge protocol are shared. Keep platform branches to setup only.
+  var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';
+  var MODIFIER_WORDS = IS_WINDOWS ? 'Ctrl/Alt/Win' : 'Ctrl/Option/Cmd';
+  var WINDOWS_LISTENER_EXE = 'PRFXShortcutListener.exe';
+  var WINDOWS_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+  var WINDOWS_RUN_VALUE = 'PR FX Shortcut Listener';
   var RETIRED_COMMAND_IDS = { 'stretch-speed-to-playhead': true };
-  var DEFAULTS = { shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', showSystemCommands: false, syntheticSeconds: 5, bindings: [], folderSyncsByProject: {} };
+  var DEFAULTS = { announceScope: 'on', timelineHighlight: 'off', edieNudges: 'on', edieNudgeMinutes: 2, shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, exportNamePattern: '{sequence} - {index}', mergeTouchingSameSource: false, nameTolerance: 'normalized', failurePolicy: 'rollback', showSystemCommands: false, syntheticSeconds: 5, shortcutFeedback: 'problems', bindings: [], folderSyncsByProject: {} };
   var commands = [
+    { type: 'ai-function', id: 'ai-create-optimized-subtitles', name: 'Create Optimized Subtitles (Whisper → SRT)' },
+    { type: 'ai-function', id: 'ai-transcribe-optimized-srt', name: 'Transcribe + Save Optimized SRT' },
+    { type: 'ai-function', id: 'ai-auto-captions', name: 'Auto Captions' },
+    { type: 'ai-function', id: 'ai-full-processing', name: 'Full Process' },
+    { type: 'ai-function', id: 'ai-layout', name: 'Layout from Script' },
+    { type: 'ai-function', id: 'ai-audio-text', name: 'Audio + Text (Script Cut Workflow)' },
+    { type: 'ai-function', id: 'ai-add-text', name: 'Add Script Text as Captions' },
+    { type: 'ai-function', id: 'ai-new-sequence', name: 'Create New Sequence' },
     { type: 'custom', id: 'dump-qe-api', name: '[System] Dump QE + DOM API' },
     { type: 'custom', id: 'inspect-selected-clip', name: '[System] Inspect Selected Clip' },
     { type: 'custom', id: 'failure-report', name: '[System] Failure Report' },
+    { type: 'custom', id: 'preset-report', name: '[System] Preset Report' },
+    { type: 'custom', id: 'probe-preset-routes', name: '[System] Probe Lumetri Preset Apply' },
     { type: 'custom', id: 'clear-failure-ledger', name: '[System] Clear Failure Ledger' },
-    { type: 'custom', id: 'undo-last-palette-action', name: 'Undo Last PR FX Effect Apply' },
+    { type: 'custom', id: 'undo-last-palette-action', name: 'Undo Last Edie Effect Apply' },
     { type: 'custom', id: 'remove-transitions', name: 'Remove Transitions on Selected Clips' },
     { type: 'custom', id: 'move-selected-clips-up', name: 'Move Selected Clips Up as Group', moveMode: 'group' },
     { type: 'custom', id: 'move-selected-clips-up', name: 'Move Selected Clips Up Individually', moveMode: 'individual' },
@@ -24,9 +41,9 @@
     { type: 'custom', id: 'pull-group-out', name: 'Pull Group Out to Playhead' },
     { type: 'custom', id: 'retract-speed-in-to-playhead', name: 'Retract Speed In to Playhead' },
     { type: 'custom', id: 'retract-speed-out-to-playhead', name: 'Retract Speed Out to Playhead' },
-    { type: 'custom', id: 'undo-last-prfx-action', name: 'Undo Last PR FX Action (Any)' },
-    { type: 'custom', id: 'undo-last-arrange', name: 'Undo Last PR FX Arrange Action' },
-    { type: 'custom', id: 'redo-last-arrange', name: 'Redo Last PR FX Arrange Action' },
+    { type: 'custom', id: 'undo-last-prfx-action', name: 'Undo Last Edie Action (Any)' },
+    { type: 'custom', id: 'undo-last-arrange', name: 'Undo Last Edie Arrange Action' },
+    { type: 'custom', id: 'redo-last-arrange', name: 'Redo Last Edie Arrange Action' },
     { type: 'custom', id: 'select-before-playhead', name: 'Select Everything Starting Before Playhead' },
     { type: 'custom', id: 'adjustment-layer-over-selection', name: 'Adjustment Layer Over Selection' },
     { type: 'custom', id: 'perfect-pitch', name: 'Perfect Pitch (Correct Speed Transposition)' },
@@ -34,6 +51,7 @@
     { type: 'custom', id: 'place-bin-clips', name: 'Place Bin Clips at Playhead in Row' },
     { type: 'custom', id: 'place-bin-clips-column', name: 'Place Bin Clips at Playhead in Column' },
     { type: 'custom', id: 'replace-from-bin', name: 'Replace Selected Clips from Bin' },
+    { type: 'custom', id: 'replace-fit-from-bin', name: 'Replace & Fit to Slot from Bin' },
     { type: 'custom', id: 'bulk-replace-preview', name: 'Bulk Replace — Dry Run (no changes)' },
     { type: 'custom', id: 'bulk-replace-by-name', name: 'Bulk Replace from Bin by Name' },
     { type: 'custom', id: 'queue-cuts-to-ame', name: 'Queue Cuts to Media Encoder' },
@@ -56,11 +74,11 @@
   ];
   // These iterate over clips and can legitimately take minutes.
   var LONG_RUNNING_COMMANDS = {
-    'bulk-replace-by-name': true, 'bulk-replace-preview': true, 'replace-from-bin': true,
+    'bulk-replace-by-name': true, 'bulk-replace-preview': true, 'replace-from-bin': true, 'replace-fit-from-bin': true,
     'place-bin-clips': true, 'place-bin-clips-column': true, 'place-source-clip': true, 'queue-cuts-to-ame': true, 'adjustment-layer-over-selection': true,
-    'dump-qe-api': true, 'inspect-selected-clip': true
+    'dump-qe-api': true, 'inspect-selected-clip': true, 'preset-report': true, 'probe-preset-routes': true
   };
-  var functionCommands = commands.filter(function (command) { return command.type === 'custom'; });
+  var functionCommands = commands.filter(function (command) { return command.type === 'custom' || command.type === 'ai-function'; });
   var catalogReady = false;
   var hostResponsive = false;
   try {
@@ -72,11 +90,17 @@
   } catch (_) {}
   var cs = new CSInterface();
   var settings = loadSettings();
+  setTimeout(function () { watchSettingsFile(); }, 0);
   var activeIndex = 0;
   var palette = document.getElementById('palette');
   var search = document.getElementById('command-search');
   var list = document.getElementById('command-list');
   var paletteTitle = document.getElementById('palette-title');
+  var paletteCharacter = document.getElementById('palette-character');
+  var brandFace = document.querySelector('.brand-face');
+  if (paletteCharacter && brandFace) {
+    paletteCharacter.appendChild(brandFace.cloneNode(true));
+  }
   var shortcutBadge = document.getElementById('shortcut-badge');
   var pendingTransitionCommand = null;
   var pendingMoveCommand = null;
@@ -104,6 +128,7 @@
   var failurePolicyInput = document.getElementById('failure-policy');
   var showSystemInput = document.getElementById('show-system-commands');
   var syntheticDurationInput = document.getElementById('synthetic-duration');
+  var shortcutFeedbackInput = document.getElementById('shortcut-feedback');
   var managerSearch = document.getElementById('command-manager-search');
   var managerTypeFilter = document.getElementById('command-type-filter');
   var managerList = document.getElementById('command-manager-list');
@@ -213,9 +238,25 @@
     rememberPanelError('promise rejection', event && event.reason);
   });
 
+  // settings.json is the source of truth, localStorage only a fallback. CEP's
+  // localStorage is not durable: if the previous Premiere's helper still holds
+  // its database lock at launch, Chromium silently hands the panel an empty
+  // in-memory store. The panel then wrote those defaults over settings.json and
+  // every saved shortcut vanished (2026-10-28).
+  function readSettingsFile() {
+    var modules = nodeModules();
+    var dir = appSupportDir();
+    if (!modules || !dir) return null;
+    try {
+      var parsed = JSON.parse(modules.fs.readFileSync(modules.path.join(dir, 'settings.json'), 'utf8'));
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) { return null; }
+  }
   function loadSettings() {
     try {
-      var loaded = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(STORAGE_KEY)) || {});
+      var stored = readSettingsFile();
+      if (!stored) stored = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      var loaded = Object.assign({}, DEFAULTS, stored);
       if (!loaded.folderSyncsByProject || typeof loaded.folderSyncsByProject !== 'object') loaded.folderSyncsByProject = {};
       loaded.staggerFrames = Math.max(0, Math.min(9999, Math.round(Number(loaded.staggerFrames) || 0)));
       loaded.staggerGroup = Math.max(1, Math.min(999, Math.round(Number(loaded.staggerGroup) || 1)));
@@ -223,7 +264,10 @@
       delete loaded.folderSyncs;
       loaded.bindings = (loaded.bindings || []).filter(function (binding) { return !(binding.command && RETIRED_COMMAND_IDS[binding.command.id]); });
       loaded.bindings.forEach(function (binding) {
-        if (binding.command.id === 'undo-last-palette-action') binding.command.name = 'Undo Last PR FX Effect Apply';
+        if (binding.command.id === 'undo-last-palette-action') binding.command.name = 'Undo Last Edie Effect Apply';
+        if (binding.command.id === 'undo-last-prfx-action') binding.command.name = 'Undo Last Edie Action (Any)';
+        if (binding.command.id === 'undo-last-arrange') binding.command.name = 'Undo Last Edie Arrange Action';
+        if (binding.command.id === 'redo-last-arrange') binding.command.name = 'Redo Last Edie Arrange Action';
         if (binding.command.id === 'remove-transitions') binding.command.name = 'Remove Transitions on Selected Clips';
         if (binding.command.id === 'dump-qe-api') binding.command.name = '[System] Dump QE + DOM API';
         if (binding.command.id === 'clean-up-track-rows') binding.command.name = 'Clean Up by Selected';
@@ -247,7 +291,7 @@
   }
   function displayShortcut(s) {
     var parts = [];
-    if (s.ctrl) parts.push('Ctrl'); if (s.alt) parts.push('Alt'); if (s.shift) parts.push('Shift'); if (s.meta) parts.push('Cmd');
+    if (s.ctrl) parts.push('Ctrl'); if (s.alt) parts.push('Alt'); if (s.shift) parts.push('Shift'); if (s.meta) parts.push(IS_WINDOWS ? 'Win' : 'Cmd');
     parts.push(s.code === 'Space' ? 'Space' : s.code.replace(/^Key|^Digit/, ''));
     return parts.join(' + ');
   }
@@ -261,6 +305,7 @@
     if (mergeTouchingInput) mergeTouchingInput.checked = settings.mergeTouchingSameSource === true;
     if (nameToleranceInput) nameToleranceInput.value = settings.nameTolerance || 'normalized';
     if (failurePolicyInput) failurePolicyInput.value = settings.failurePolicy || 'rollback';
+    if (shortcutFeedbackInput) shortcutFeedbackInput.value = settings.shortcutFeedback || 'problems';
     if (showSystemInput) showSystemInput.checked = settings.showSystemCommands === true;
     if (syntheticDurationInput) syntheticDurationInput.value = settings.syntheticSeconds || 5;
     renderManager();
@@ -293,8 +338,8 @@
     document.getElementById('command-count').textContent = available.length + ' command' + (available.length === 1 ? '' : 's');
     managerList.innerHTML = available.map(function (command) {
       var binding = bindingFor(command);
-      var type = command.type === 'custom' ? 'function' : command.type;
-      return '<div class="manager-row' + (selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand) ? ' is-active' : '') + '" data-command="' + escapeHtml(commandKey(command)) + '"><span class="manager-name" title="' + escapeHtml(command.name) + '">' + escapeHtml(command.name) + '</span><span class="manager-kind ' + escapeHtml(command.type) + '">' + escapeHtml(type) + '</span><span class="manager-shortcut">' + escapeHtml(binding ? displayShortcut(binding.shortcut) : '—') + '</span></div>';
+      var type = command.type === 'ai-function' ? 'AI function' : command.type === 'custom' ? 'function' : command.type;
+      return '<div class="manager-row' + (selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand) ? ' is-active' : '') + '" data-command="' + escapeHtml(commandKey(command)) + '"><span class="manager-name" title="' + escapeHtml(command.name) + '">' + escapeHtml(command.name) + '</span><span class="manager-kind ' + escapeHtml(command.type) + '">' + escapeHtml(type) + '</span><span class="manager-shortcut">' + (binding ? '<kbd>' + escapeHtml(displayShortcut(binding.shortcut)) + '</kbd>' : '—') + '</span></div>';
     }).join('');
     var binding = selectedManagerCommand && bindingFor(selectedManagerCommand);
     document.getElementById('manager-command-name').textContent = selectedManagerCommand ? selectedManagerCommand.name : 'Select a command';
@@ -326,10 +371,40 @@
         : path.join(os.homedir(), 'Library', 'Application Support', 'PR FX Palette');
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       var target = path.join(dir, 'settings.json');
+      // Losing shortcuts must always be recoverable: keep the last file that
+      // had more of them before overwriting it with fewer.
+      try {
+        var previous = JSON.parse(fs.readFileSync(target, 'utf8')) || {};
+        if ((previous.bindings || []).length > (settings.bindings || []).length) {
+          fs.writeFileSync(path.join(dir, 'settings.backup.json'), JSON.stringify(previous), 'utf8');
+        }
+      } catch (_) {}
       var temp = path.join(dir, 'settings.' + process.pid + '.' + Date.now() + '.tmp');
       fs.writeFileSync(temp, JSON.stringify(settings), 'utf8');
       fs.renameSync(temp, target);
+      settingsFileMtime = settingsFileStamp();
     } catch (_) {}
+  }
+  // The PR FX app edits settings.json too. Without this the panel would keep
+  // its stale copy and write it back over the app's change on its next save.
+  var settingsFileMtime = 0;
+  function settingsFileStamp() {
+    var modules = nodeModules();
+    var dir = appSupportDir();
+    if (!modules || !dir) return 0;
+    try { return modules.fs.statSync(modules.path.join(dir, 'settings.json')).mtimeMs; } catch (_) { return 0; }
+  }
+  function watchSettingsFile() {
+    settingsFileMtime = settingsFileStamp();
+    setInterval(function () {
+      var stamp = settingsFileStamp();
+      if (!stamp || stamp === settingsFileMtime) return;
+      settingsFileMtime = stamp;
+      if (!readSettingsFile()) return;
+      settings = loadSettings();
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (_) {}
+      updateShortcutUI();
+    }, 1500);
   }
   function nodeModules() {
     if (typeof require !== 'function') return null;
@@ -353,7 +428,7 @@
   function setFailureLogStatus(message, error) {
     if (!failureLogStatus) return;
     failureLogStatus.textContent = message || '';
-    failureLogStatus.style.color = error ? '#ff9f9f' : '#8f8f8f';
+    failureLogStatus.style.color = error ? 'var(--danger)' : 'var(--muted)';
   }
   function refreshFailureLogStatus() {
     var logPath = failureLogPath(), fs, text, lines, lastLine, last;
@@ -389,7 +464,7 @@
   function setSyncStatus(message, error) {
     if (!syncStatus) return;
     syncStatus.textContent = message || '';
-    syncStatus.style.color = error ? '#ff9f9f' : '#a8d7a8';
+    syncStatus.style.color = error ? 'var(--danger)' : 'var(--good)';
   }
   function activeFolderSyncs() {
     if (!projectSyncKey) return [];
@@ -423,18 +498,30 @@
   function uniqueSyncBinName(baseName) {
     return baseName || 'Media';
   }
-  function addSyncFolder(sourcePath) {
+  // Several folders can arrive at once (drop, multi-select). Add them all,
+  // then sync them one after another so Premiere sees one import at a time.
+  function addSyncFolders(sourcePaths) {
     var modules = nodeModules();
-    if (!modules || !sourcePath) { setSyncStatus('Folder access is unavailable in this CEP panel.', true); return; }
-    try {
-      sourcePath = modules.path.resolve(sourcePath);
-      if (!modules.fs.statSync(sourcePath).isDirectory()) { setSyncStatus('Choose a folder, not an individual file.', true); return; }
-      if (!projectSyncKey) { setSyncStatus('Open a project before adding a synced folder.', true); return; }
-      if (activeFolderSyncs().some(function (folder) { return folder.sourcePath === sourcePath; })) { setSyncStatus('That folder is already being synced for this project.'); return; }
-      var sourceName = modules.path.basename(sourcePath) || 'Media';
-      activeFolderSyncs().push({ sourcePath: sourcePath, binName: uniqueSyncBinName(sourceName) });
-      saveSettings(); renderFolderSyncs(); setSyncStatus('Watching ' + sourceName + ' in ' + projectSyncName + '…'); syncFolderMapping(activeFolderSyncs()[activeFolderSyncs().length - 1], true);
-    } catch (error) { setSyncStatus('Could not add folder: ' + error.message, true); }
+    if (!modules || !sourcePaths || !sourcePaths.length) { setSyncStatus('Folder access is unavailable in this CEP panel.', true); return; }
+    if (!projectSyncKey) { setSyncStatus('Open a project before adding a synced folder.', true); return; }
+    var added = [], skipped = [];
+    sourcePaths.forEach(function (sourcePath) {
+      try {
+        sourcePath = modules.path.resolve(sourcePath);
+        var sourceName = modules.path.basename(sourcePath) || 'Media';
+        if (!modules.fs.statSync(sourcePath).isDirectory()) { skipped.push(sourceName + ' (not a folder)'); return; }
+        if (activeFolderSyncs().some(function (folder) { return folder.sourcePath === sourcePath; })) { skipped.push(sourceName + ' (already synced)'); return; }
+        var mapping = { sourcePath: sourcePath, binName: uniqueSyncBinName(sourceName) };
+        activeFolderSyncs().push(mapping); added.push(mapping);
+      } catch (error) { skipped.push((sourcePath || 'folder') + ' (' + error.message + ')'); }
+    });
+    var skippedNote = skipped.length ? ' Skipped: ' + skipped.join(', ') + '.' : '';
+    if (!added.length) { setSyncStatus((sourcePaths.length > 1 ? 'No new folders added.' : 'Nothing added.') + skippedNote, true); return; }
+    saveSettings(); renderFolderSyncs();
+    setSyncStatus('Watching ' + added.map(function (folder) { return folder.binName; }).join(', ') + ' in ' + projectSyncName + '…' + skippedNote);
+    var index = 0;
+    function next() { if (index >= added.length) return; syncFolderMapping(added[index++], true, next); }
+    next();
   }
   function supportedMediaFile(filePath) {
     return /\.(3g2|3gp|aac|aif|aiff|avi|bwf|cr2|dng|gif|heic|jpeg|jpg|m4a|m4v|mkv|mov|mp3|mp4|mpeg|mpg|mxf|png|psd|r3d|tga|tif|tiff|wav|webm)$/i.test(filePath);
@@ -505,17 +592,22 @@
     if (!silent) setSyncStatus('Scanning folders…');
     next();
   }
-  function folderFromFileList(fileList) {
-    var modules = nodeModules();
-    if (!modules || !fileList || !fileList.length) return '';
-    var first = fileList[0], rawPath = first.path || '';
-    if (!rawPath) return '';
-    try {
-      if (modules.fs.statSync(rawPath).isDirectory()) return rawPath;
-      var relative = first.webkitRelativePath || '';
-      if (!relative) return modules.path.dirname(rawPath);
-      return rawPath.slice(0, rawPath.length - relative.length).replace(/[\\/]$/, '');
-    } catch (_) { return ''; }
+  // Every dropped folder, not just the first. Plain files are left out; a
+  // folder chosen through the file input arrives as its files, so those
+  // collapse to their one root.
+  function foldersFromFileList(fileList) {
+    var modules = nodeModules(), folders = [];
+    if (!modules || !fileList || !fileList.length) return folders;
+    for (var i = 0; i < fileList.length; i++) {
+      var file = fileList[i], rawPath = file.path || '', folder = '';
+      if (!rawPath) continue;
+      try {
+        if (modules.fs.statSync(rawPath).isDirectory()) folder = rawPath;
+        else if (file.webkitRelativePath) folder = rawPath.slice(0, rawPath.length - file.webkitRelativePath.length).replace(/[\\/]$/, '') + modules.path.sep + file.webkitRelativePath.split('/')[0];
+      } catch (_) {}
+      if (folder && folders.indexOf(folder) < 0) folders.push(folder);
+    }
+    return folders;
   }
   function extensionFilesystemPath() {
     // CSInterface can return a file:// URL. ExtendScript's $.evalFile only
@@ -558,7 +650,7 @@
     // A CEP panel's ScriptPath can be discarded by Premiere while the native
     // palette is still alive. Reload only PR FX's own host on demand.
     var root = extensionFilesystemPath();
-    if (!root) { callback('ERROR: Could not locate the PR FX extension folder.'); return; }
+    if (!root) { callback('ERROR: Could not locate the Edie extension folder.'); return; }
     var hostPath = root + '/jsx/host.jsx';
     var wrapped = "(function(){try{" +
       "if(typeof prfx==='undefined'||prfx.HOST_BUILD!==" + JSON.stringify(PRFX_HOST_BUILD) + "||typeof prfx.apply!=='function'){$.evalFile(" + JSON.stringify(hostPath) + ");}" +
@@ -588,11 +680,11 @@
     });
   }
   function reloadHostScript(complete) {
-    evalPremiere("typeof prfx !== 'undefined' && prfx.HOST_BUILD===" + JSON.stringify(PRFX_HOST_BUILD) + " && typeof prfx.apply === 'function' ? 'PR FX host loaded.' : 'ERROR: PR FX host did not load.'", function (status) {
+    evalPremiere("typeof prfx !== 'undefined' && prfx.HOST_BUILD===" + JSON.stringify(PRFX_HOST_BUILD) + " && typeof prfx.apply === 'function' ? 'Edie host loaded.' : 'ERROR: Edie host did not load.'", function (status) {
       hostResponsive = status !== 'EvalScript error.' && !(status && status.indexOf('ERROR:') === 0);
-      if (status === 'EvalScript error.') setStatus('PR FX host did not respond after reload. Use Force reconnect.', true);
+      if (status === 'EvalScript error.') setStatus('Edie host did not respond after reload. Use Force reconnect.', true);
       else if (status && status.indexOf('ERROR:') === 0) setStatus(status.replace('ERROR: ', ''), true);
-      else { setStatus('PR FX host loaded.'); checkHostFreshness(); }
+      else { setStatus('Edie host loaded.'); checkHostFreshness(); }
       if (complete) complete();
     });
   }
@@ -614,15 +706,70 @@
 
   function listenerAppPath() {
     var root = extensionFilesystemPath();
-    return root ? root + '/native/build/PR FX Shortcut Listener.app' : '';
+    if (!root) return '';
+    return IS_WINDOWS ? root + '/native/windows/build/' + WINDOWS_LISTENER_EXE : root + '/native/build/PR FX Shortcut Listener.app';
   }
   function listenerBuildMarkerPath() {
     var root = extensionFilesystemPath();
-    return root ? root + '/native/build/listener-build.txt' : '';
+    if (!root) return '';
+    return IS_WINDOWS ? root + '/native/windows/build/listener-build.txt' : root + '/native/build/listener-build.txt';
   }
   function launchAgentPath() {
     var os = nodeOs();
     return os ? os.homedir() + '/Library/LaunchAgents/com.prfx.shortcut-listener.plist' : '';
+  }
+  // Windows runs a copy outside the extension folder, so the exe CEP ships is
+  // never the one holding a file lock when the extension is updated.
+  function windowsInstalledListenerPath() {
+    if (!IS_WINDOWS || typeof require !== 'function') return '';
+    try {
+      var path = require('path');
+      var os = require('os');
+      var base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      return path.join(base, 'PR FX Palette', 'bin', WINDOWS_LISTENER_EXE);
+    } catch (_) { return ''; }
+  }
+  function windowsCopyListener(done) {
+    var node = nodeModules();
+    var source = listenerAppPath();
+    var target = windowsInstalledListenerPath();
+    if (!node || !source || !target) { done('Could not resolve the listener paths'); return; }
+    if (!node.fs.existsSync(source)) { done('The bundled listener is missing: ' + source); return; }
+    try { node.fs.mkdirSync(node.path.dirname(target), { recursive: true }); } catch (_) {}
+    var attempts = 0;
+    // taskkill returns before Windows releases the image file; retry briefly.
+    (function attempt() {
+      try {
+        node.fs.copyFileSync(source, target);
+        done('');
+      } catch (error) {
+        if (++attempts >= 10) { done('Could not replace ' + target + ': ' + (error.message || error)); return; }
+        window.setTimeout(attempt, 300);
+      }
+    })();
+  }
+  function windowsStartListener(done) {
+    var child = nodeChild();
+    var target = windowsInstalledListenerPath();
+    if (!child || !target) { done('Node is not available in this panel'); return; }
+    try {
+      var started = child.spawn(target, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      started.on('error', function () {});
+      started.unref();
+      done('');
+    } catch (error) { done(error.message || String(error)); }
+  }
+  function windowsListenerSteps() {
+    return [
+      { label: 'quitting the running listener', command: 'taskkill.exe', args: ['/IM', WINDOWS_LISTENER_EXE, '/F'], optional: true, timeout: 6000 },
+      { label: 'copying the listener', run: windowsCopyListener },
+      { label: 'installing autostart', command: 'reg.exe', args: ['add', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/t', 'REG_SZ', '/d', '"' + windowsInstalledListenerPath() + '"', '/f'] },
+      { label: 'starting the listener', run: windowsStartListener }
+    ];
+  }
+  function runStep(step, done) {
+    if (step.run) { step.run(done); return; }
+    runSetupStep(step.command, step.args, done, step.timeout);
   }
   function readExpectedListenerBuild() {
     var node = nodeModules();
@@ -655,11 +802,19 @@
   function refreshSetupStatus() {
     var node = nodeModules();
     if (!node) return;
+    setSetupCheck('running', bridgeOnline === true);
+    if (IS_WINDOWS) {
+      var installed = windowsInstalledListenerPath();
+      setSetupCheck('listener', !!(installed && node.fs.existsSync(installed)));
+      runSetupStep('reg.exe', ['query', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE], function (error) {
+        setSetupCheck('autostart', !error);
+      }, 5000);
+      return;
+    }
     var app = listenerAppPath();
     var agent = launchAgentPath();
     setSetupCheck('listener', !!(app && node.fs.existsSync(app)));
     setSetupCheck('autostart', !!(agent && node.fs.existsSync(agent)));
-    setSetupCheck('running', bridgeOnline === true);
   }
 
   // Each step reports for itself. A silent installer that half-works is worse
@@ -680,38 +835,43 @@
     var root = extensionFilesystemPath();
     var app = listenerAppPath();
     if (!node || !root) {
-      setStatus('Could not locate the PR FX extension folder.', true);
-      if (done) done('Could not locate the PR FX extension folder.');
+      setStatus('Could not locate the Edie extension folder.', true);
+      if (done) done('Could not locate the Edie extension folder.');
       return;
     }
     setupInstallButton.disabled = true;
     setSetupDetail('Installing…');
 
     var steps = [];
-    if (node.fs.existsSync(root + '/native/build-macos.sh')) {
+    if (IS_WINDOWS) steps = windowsListenerSteps();
+    else if (node.fs.existsSync(root + '/native/build-macos.sh')) {
       // On soft-launch machines this validates and uses the bundled app. On a
       // dev machine it can still rebuild when the bundled app is missing.
       steps.push({ label: 'checking the bundled listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
     }
     // The app arrives inside the extension rather than as a download, but
     // clear any quarantine flag anyway or Gatekeeper blocks the first launch.
-    steps.push({ label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true });
-    steps.push({ label: 'installing autostart', command: '/bin/zsh', args: [root + '/native/install-autostart-macos.sh'] });
-    steps.push({ label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 });
-    steps.push({ label: 'starting the listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'] });
+    if (!IS_WINDOWS) {
+      steps.push({ label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true });
+      steps.push({ label: 'installing autostart', command: '/bin/zsh', args: [root + '/native/install-autostart-macos.sh'] });
+      steps.push({ label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 });
+      steps.push({ label: 'starting the listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'] });
+    }
 
     var index = 0;
     function next() {
       if (index >= steps.length) {
         setupInstallButton.disabled = false;
-        setSetupDetail('Installed. Ctrl/Option/Cmd shortcuts arm while Premiere is frontmost; Shift-only and plain-key shortcuts arm after the Timeline/Sequence panel is clicked.');
+        setSetupDetail(IS_WINDOWS
+          ? 'Installed. Ctrl/Alt/Win shortcuts arm while Premiere is frontmost; Shift-only and plain-key shortcuts arm once Edie has seen a Premiere text field (click into the Project panel search box once), and pause while you type in one.'
+          : 'Installed. Ctrl/Option/Cmd shortcuts arm while Premiere is frontmost; Shift-only and plain-key shortcuts arm after the Timeline/Sequence panel is clicked.');
         window.setTimeout(refreshSetupStatus, 1200);
         if (done) done('');
         return;
       }
       var step = steps[index++];
       setSetupDetail('Installing — ' + step.label + '…');
-      runSetupStep(step.command, step.args, function (error) {
+      runStep(step, function (error) {
         if (error && !step.optional) {
           setupInstallButton.disabled = false;
           setSetupDetail('Install stopped while ' + step.label + ': ' + error);
@@ -720,7 +880,7 @@
           return;
         }
         next();
-      }, step.timeout);
+      });
     }
     next();
   }
@@ -728,10 +888,12 @@
   function setSetupDetail(text) { if (setupDetail) setupDetail.textContent = text; }
 
   if (setupInstallButton) setupInstallButton.addEventListener('click', installListener);
-  if (setupAccessibilityButton) setupAccessibilityButton.addEventListener('click', function () {
+  // Windows has no Accessibility grant; low-level keyboard hooks need none.
+  if (setupAccessibilityButton && IS_WINDOWS) setupAccessibilityButton.style.display = 'none';
+  if (setupAccessibilityButton && !IS_WINDOWS) setupAccessibilityButton.addEventListener('click', function () {
     runSetupStep('/usr/bin/open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], function (error) {
       if (error) setSetupDetail('Could not open System Settings: ' + error);
-      else setSetupDetail('Accessibility lets PR FX confirm Timeline focus. Without it, Ctrl/Option/Cmd shortcuts can still work from Premiere, but Shift-only/plain-key shortcuts need a saved Timeline click region.');
+      else setSetupDetail('Accessibility lets Edie confirm Timeline focus. Without it, ' + MODIFIER_WORDS + ' shortcuts can still work from Premiere, but Shift-only/plain-key shortcuts need a saved Timeline click region.');
     });
   });
 
@@ -771,11 +933,13 @@
       var shortcutWord = savedBindings === 1 ? 'shortcut' : 'shortcuts';
       if (payload.accessibilityTrusted === false && payload.accessibilityBypassed !== true && savedBindings > 0 && payload.mode !== 'active' && payload.mode !== 'modifier-only') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Needs Timeline';
-        bridgeDetail.textContent = 'Ctrl+Space can open the palette, but saved command shortcuts are paused until PR FX can confirm the Timeline/Sequence panel. Grant Accessibility or click the Timeline once after it has been detected.';
+        bridgeDetail.textContent = 'Ctrl+Space can open the palette, but saved command shortcuts are paused until Edie can confirm the Timeline/Sequence panel. Grant Accessibility or click the Timeline once after it has been detected.';
       } else if (payload.mode === 'active') {
         if (hostResponsive) {
           bridgeState.className = 'bridge-state is-active'; bridgeState.innerHTML = '<i></i>Active';
-          bridgeDetail.textContent = (payload.accessibilityBypassed === true
+          bridgeDetail.textContent = IS_WINDOWS
+            ? 'Shortcuts are active while Premiere is frontmost and no text field is focused: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + ' armed.'
+            : (payload.accessibilityBypassed === true
             ? 'Premiere-frontmost shortcut mode is active with '
             : 'Timeline/Sequence shortcuts are active with ') + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + ' armed.'
             + (payload.accessibilityBypassed === true ? ' Accessibility focus detection is bypassed.' : (payload.accessibilityTrusted === false ? ' Using the saved Timeline position because Accessibility is currently unavailable.' : ''))
@@ -786,7 +950,9 @@
         }
       } else if (payload.mode === 'modifier-only') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Waiting for Timeline';
-        bridgeDetail.textContent = 'Listener is healthy. Ctrl/Option/Cmd command shortcuts are armed: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + '. Shift-only and plain-key shortcuts stay paused until the Timeline/Sequence panel is clicked, so typing in bins is safe. Repair will not change this state.';
+        bridgeDetail.textContent = IS_WINDOWS
+          ? 'Listener is healthy. Ctrl/Alt/Win command shortcuts are armed: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + '. Shift-only and plain-key shortcuts are paused — ' + (payload.focus || 'a text field is focused') + '. Repair will not change this state.'
+          : 'Listener is healthy. Ctrl/Option/Cmd command shortcuts are armed: ' + armedBindings + '/' + savedBindings + ' command ' + shortcutWord + '. Shift-only and plain-key shortcuts stay paused until the Timeline/Sequence panel is clicked, so typing in bins is safe. Repair will not change this state.';
       } else if (payload.mode === 'palette-only') {
         bridgeState.className = 'bridge-state is-checking'; bridgeState.innerHTML = '<i></i>Palette only';
         bridgeDetail.textContent = payload.accessibilityBypassed === true ? 'Ctrl+Space can open the palette while Premiere is frontmost.' : 'Ctrl+Space can open the palette while Premiere is frontmost. Command shortcuts are waiting for Timeline/Sequence focus.';
@@ -807,6 +973,7 @@
       if (Number(payload.droppedCommands) > 0) {
         bridgeDetail.textContent += ' ' + payload.droppedCommands + ' command(s) expired or exceeded the queue limit during this listener session.';
       }
+      bridgeDetail.textContent += ' ' + deliverySummary(payload);
       if (expectedBuild || payload.listenerBuild) {
         catalogHealth.textContent = (catalogReady ? commands.length + ' live/cached commands ready' : commands.length + ' fallback commands only') +
           ' · listener ' + shortBuild(payload.listenerBuild || expectedBuild || 'unknown') +
@@ -817,6 +984,63 @@
     request.ontimeout = request.onerror = function () { bridgeOnline = false; lastBridgePayload = null; bridgeState.className = 'bridge-state is-offline'; bridgeState.innerHTML = '<i></i>Offline'; bridgeDetail.textContent = 'The native listener is not responding.'; };
     try { request.send(); } catch (_) {}
   }
+  // One sentence on how shortcuts reach Premiere and how they have fared this
+  // listener session. tools/key-report.sh gives the full breakdown.
+  function deliverySummary(payload) {
+    var mode = payload.deliveryMode === 'keyboard-hook' ? 'Keys: Windows keyboard hook'
+      : payload.deliveryMode === 'event-tap' ? 'Keys: event tap'
+      : payload.deliveryMode === 'carbon-secure-input' ? 'Keys: Carbon (another app has secure keyboard entry on)'
+      : payload.deliveryMode === 'carbon' ? 'Keys: Carbon fallback (grant Accessibility for the event tap)'
+      : 'Keys: older listener';
+    var runner = engineIsActive() ? 'commands run by the background engine' : 'commands run by this panel (engine not running — restart Premiere after updating)';
+    var stats = payload.keyStats;
+    var counts = '';
+    if (stats && typeof stats === 'object') {
+      var fired = Number(stats.fired) || 0;
+      var ok = Number(stats.ok) || 0;
+      counts = ' This session: ' + fired + ' fired, ' + ok + ' succeeded, ' + (Number(stats.failed) || 0) + ' failed, ' +
+        (Number(stats.expired) || 0) + ' expired, ' + (Number(stats.passed) || 0) + ' passed to Premiere.';
+    }
+    return mode + '; ' + runner + '.' + counts;
+  }
+  function engineIsActive() {
+    var age = lastBridgePayload ? Number(lastBridgePayload.enginePollAgeMs) : -1;
+    return isFinite(age) && age >= 0 && age < 3000;
+  }
+  function postCommandResult(command, ok, message, startedAt) {
+    if (!command || command.seq === undefined || command.seq === null) return;
+    try {
+      var request = new XMLHttpRequest();
+      request.open('POST', 'http://127.0.0.1:27389/result', true);
+      request.setRequestHeader('Content-Type', 'application/json');
+      request.send(JSON.stringify({ seq: Number(command.seq), ok: ok === true, message: String(message || '').slice(0, 2000), ms: Date.now() - startedAt }));
+    } catch (_) {}
+  }
+  function formatAIFunctionResult(command, result) {
+    if (result && result.saved_path) {
+      return (result.imported ? 'Created and imported ' : 'Created ') + (result.subtitle_count || '') +
+        (result.subtitle_count ? ' optimized subtitles. ' : 'optimized subtitles. ') + 'Saved ' + result.saved_path;
+    }
+    return 'Finished ' + command.name + '.';
+  }
+  function dispatchAIFunction(command, callback) {
+    var frame = document.getElementById('prai-backend');
+    var host = null;
+    try { host = frame && frame.contentWindow && frame.contentWindow.prAIAgentHost; } catch (_) {}
+    if (!host || typeof host.runAIFunction !== 'function') {
+      callback('ERROR: Edie AI functions are still starting. Reopen the Edie panel if this continues.');
+      return;
+    }
+    Promise.resolve(host.runAIFunction(command.id, {})).then(function (result) {
+      callback(formatAIFunctionResult(command, result));
+    }, function (error) {
+      callback('ERROR: ' + String(error && error.message ? error.message : error));
+    });
+  }
+  function dispatchCommand(command, payload, callback) {
+    if (command && command.type === 'ai-function') { dispatchAIFunction(command, callback); return; }
+    dispatchPremiereApply(payload, callback);
+  }
   function startCommandPolling() {
     // The native listener owns localhost. Poll it from CEP instead of requiring Node in Premiere.
     if (window.__prfxCommandPolling) return;
@@ -824,8 +1048,12 @@
     window.__prfxCommandPollInFlight = false;
     safeInterval('command polling', function () {
       if (window.__prfxApplying || window.__prfxCommandPollInFlight) return;
+      // The hidden engine extension (engine.js) runs shortcut commands while
+      // it is alive. The panel only takes over if it stops polling, so the two
+      // never race for the same queue.
+      if (engineIsActive()) return;
       var request = new XMLHttpRequest();
-      request.open('GET', 'http://127.0.0.1:27389/next', true);
+      request.open('GET', 'http://127.0.0.1:27389/next?client=panel', true);
       request.timeout = 1500;
       window.__prfxCommandPollInFlight = true;
       function finishPoll() { window.__prfxCommandPollInFlight = false; }
@@ -838,14 +1066,17 @@
           if (!command) return;
           window.__prfxApplying = true;
           var completed = false;
+          var startedAt = Date.now();
           var hostWatchdog = window.setTimeout(function () {
             if (completed) return;
             completed = true;
             window.__prfxApplying = false;
-            setStatus('Premiere did not answer the palette command in time. It may still be running — check the Timeline before retrying.', true);
-          }, LONG_RUNNING_COMMANDS[command && command.id] ? 600000 : 12000);
+            var late = 'Premiere did not answer the palette command in time. It may still be running — check the Timeline before retrying.';
+            setStatus(late, true);
+            postCommandResult(command, false, late, startedAt);
+          }, (LONG_RUNNING_COMMANDS[command && command.id] || (command && (command.type === 'preset' || command.type === 'ai-function'))) ? 600000 : 12000);
           var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
-          dispatchPremiereApply(payload, function (result) {
+          dispatchCommand(command, payload, function (result) {
             if (completed) return;
             completed = true;
             window.clearTimeout(hostWatchdog);
@@ -853,10 +1084,12 @@
             if (result === 'EvalScript error.') {
               hostResponsive = false;
               setStatus('Premiere host script did not respond. Use Force reconnect in General.', true);
+              postCommandResult(command, false, 'Premiere host script did not respond.', startedAt);
               return;
             }
             hostResponsive = true;
             setStatus(result || ('Applied ' + command.name + '.'), result && result.indexOf('ERROR:') === 0);
+            postCommandResult(command, !(result && result.indexOf('ERROR:') === 0), result, startedAt);
           });
         } catch (error) { window.__prfxApplying = false; rememberPanelError('palette command dispatch', error); }
       };
@@ -885,7 +1118,7 @@
       try {
         var catalog = JSON.parse(result);
         if (!catalog || catalog.length < MINIMUM_COMPLETE_CATALOG) {
-          var incomplete = 'Premiere returned only ' + (catalog ? catalog.length : 0) + ' catalog items; PR FX kept the last complete catalog.';
+          var incomplete = 'Premiere returned only ' + (catalog ? catalog.length : 0) + ' catalog items; Edie kept the last complete catalog.';
           setStatus(incomplete, true);
           if (complete) complete(false, incomplete);
           return;
@@ -935,7 +1168,7 @@
     var app = listenerAppPath();
     if (!node || !root || !app) { complete('Could not locate the native listener app.'); return; }
     if (!node.fs.existsSync(app)) { complete('Native listener is not built yet. Use Install / Repair first.'); return; }
-    var steps = [
+    var steps = IS_WINDOWS ? windowsListenerSteps() : [
       { label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true },
       { label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 },
       { label: 'starting current listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'], timeout: 10000 }
@@ -952,16 +1185,16 @@
       }
       var step = steps[index++];
       setStatus('Restarting listener — ' + step.label + '…');
-      runSetupStep(step.command, step.args, function (error) {
+      runStep(step, function (error) {
         if (error && !step.optional) { complete('Listener restart stopped while ' + step.label + ': ' + error); return; }
         next();
-      }, step.timeout);
+      });
     }
     next();
   }
   function forceReconnectHost() {
     var root = extensionFilesystemPath();
-    if (!root) { setStatus('Could not locate the PR FX extension folder.', true); return; }
+    if (!root) { setStatus('Could not locate the Edie extension folder.', true); return; }
     var staleListener = listenerBuildIsStale(lastBridgePayload);
     var restartFirst = staleListener || !bridgeOnline;
     var finished = false;
@@ -1020,14 +1253,16 @@
   }
   function kickstartBridge() {
     var root = extensionFilesystemPath();
-    if (!root) { setStatus('Could not locate the PR FX extension folder.', true); return; }
+    if (!root) { setStatus('Could not locate the Edie extension folder.', true); return; }
     if (lastBridgePayload && lastBridgePayload.mode === 'modifier-only' && !listenerBuildIsStale(lastBridgePayload)) {
-      setStatus('Listener is healthy. Click the Timeline/Sequence panel once to arm Shift-only and plain-key shortcuts; Repair will not change this safe mode.');
+      setStatus(IS_WINDOWS
+        ? 'Listener is healthy. ' + (lastBridgePayload.focus || 'Shift-only and plain-key shortcuts are paused') + '. Repair will not change this safe mode.'
+        : 'Listener is healthy. Click the Timeline/Sequence panel once to arm Shift-only and plain-key shortcuts; Repair will not change this safe mode.');
       checkBridge();
       return;
     }
     setReconnectButtonsDisabled(true);
-    setStatus('Kickstarting PR FX — repairing listener, then reloading Premiere host…');
+    setStatus('Kickstarting Edie — repairing listener, then reloading Premiere host…');
     setSetupDetail('Kickstart: repairing the native listener…');
     installListener(function (installError) {
       if (installError) {
@@ -1174,8 +1409,9 @@
     var available = filteredCommands();
     activeIndex = Math.max(0, Math.min(activeIndex, available.length - 1));
     list.innerHTML = available.length ? available.map(function (command, i) {
-      var kind = command.type === 'custom' || command.type === 'move-mode' || command.type === 'stagger-frames' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
-      return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind ' + escapeHtml(kind) + '">' + kind + '</span></button>';
+      var kind = command.type === 'ai-function' ? 'AI function' : command.type === 'custom' || command.type === 'move-mode' || command.type === 'stagger-frames' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
+      var kindClass = command.type === 'ai-function' ? 'ai-function' : kind;
+      return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind ' + escapeHtml(kindClass) + '">' + kind + '</span></button>';
     }).join('') : '<p class="muted">No matching command.</p>';
   }
   function escapeHtml(value) {
@@ -1224,7 +1460,7 @@
     pendingTransitionCommand = null;
     pendingMoveCommand = null;
     pendingStaggerCommand = null;
-    paletteTitle.textContent = 'FX PALETTE';
+    paletteTitle.textContent = 'EDIE';
     shortcutBadge.textContent = displayShortcut(settings.shortcut);
     search.value = catalogSearchValue;
     search.placeholder = 'Search effects and transitions…';
@@ -1244,7 +1480,7 @@
       if (settled) return;
       settled = true;
       if (watchdog) window.clearTimeout(watchdog);
-      if (result === 'EvalScript error.') { setStatus('Premiere host script did not respond. Reopen the PR FX panel to reload it.', true); return; }
+      if (result === 'EvalScript error.') { setStatus('Premiere host script did not respond. Reopen the Edie panel to reload it.', true); return; }
       if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); refreshFailureLogStatus(); return; }
       setStatus(result || 'Applied ' + command.name + '.');
       if (keepPaletteOpen) {
@@ -1257,15 +1493,15 @@
     // Bulk replace and the place functions work clip by clip and legitimately
     // run for minutes. Timing them out at 12s reports failure for work that is
     // still running and will complete.
-    var timeoutMs = LONG_RUNNING_COMMANDS[command.id] ? 600000 : 12000;
+    var timeoutMs = (LONG_RUNNING_COMMANDS[command.id] || command.type === 'preset' || command.type === 'ai-function') ? 600000 : 12000;
     watchdog = window.setTimeout(function () {
       finish('ERROR: Premiere did not finish ' + command.name + ' within ' + Math.round(timeoutMs / 1000) +
         ' seconds. It may still be running — check the Timeline before retrying.');
     }, timeoutMs);
-    dispatchPremiereApply(payload, finish);
+    dispatchCommand(command, payload, finish);
   }
   function setStatus(message, error) {
-    var color = error ? '#ff9f9f' : '#a8d7a8';
+    var color = error ? 'var(--danger)' : 'var(--good)';
     var status = document.getElementById('status');
     if (status) { status.textContent = message; status.style.color = color; }
     if (commandStatus) { commandStatus.textContent = message; commandStatus.style.color = color; }
@@ -1315,6 +1551,7 @@
   });
   document.querySelectorAll('.settings-tab').forEach(function (tab) { tab.addEventListener('click', function () {
     document.querySelectorAll('.settings-tab').forEach(function (item) { item.classList.toggle('is-active', item === tab); });
+    document.getElementById('chat-view').classList.toggle('is-hidden', tab.dataset.view !== 'chat');
     document.getElementById('commands-view').classList.toggle('is-hidden', tab.dataset.view !== 'commands');
     document.getElementById('general-view').classList.toggle('is-hidden', tab.dataset.view !== 'general');
     document.getElementById('sync-view').classList.toggle('is-hidden', tab.dataset.view !== 'sync');
@@ -1322,16 +1559,16 @@
   document.getElementById('choose-sync-folder').addEventListener('click', function () {
     try {
       if (window.cep && window.cep.fs && window.cep.fs.showOpenDialog) {
-        var result = window.cep.fs.showOpenDialog(false, true, 'Choose a media folder');
-        if (result && !result.err && result.data && result.data[0]) { addSyncFolder(result.data[0]); return; }
+        var result = window.cep.fs.showOpenDialog(true, true, 'Choose media folders');
+        if (result && !result.err && result.data && result.data.length) { addSyncFolders(result.data); return; }
       }
     } catch (_) {}
     folderInput.click();
   });
-  folderInput.addEventListener('change', function () { var sourcePath = folderFromFileList(folderInput.files); if (sourcePath) addSyncFolder(sourcePath); else setSyncStatus('Choose a folder containing supported media.', true); folderInput.value = ''; });
+  folderInput.addEventListener('change', function () { var sourcePaths = foldersFromFileList(folderInput.files); if (sourcePaths.length) addSyncFolders(sourcePaths); else setSyncStatus('Choose a folder containing supported media.', true); folderInput.value = ''; });
   ['dragenter', 'dragover'].forEach(function (eventName) { folderDropZone.addEventListener(eventName, function (event) { event.preventDefault(); folderDropZone.classList.add('is-dragging'); }); });
   ['dragleave', 'drop'].forEach(function (eventName) { folderDropZone.addEventListener(eventName, function (event) { event.preventDefault(); folderDropZone.classList.remove('is-dragging'); }); });
-  folderDropZone.addEventListener('drop', function (event) { var sourcePath = folderFromFileList(event.dataTransfer && event.dataTransfer.files); if (sourcePath) addSyncFolder(sourcePath); else setSyncStatus('Drop a folder, not individual files.', true); });
+  folderDropZone.addEventListener('drop', function (event) { var sourcePaths = foldersFromFileList(event.dataTransfer && event.dataTransfer.files); if (sourcePaths.length) addSyncFolders(sourcePaths); else setSyncStatus('Drop folders, not individual files.', true); });
   folderDropZone.addEventListener('click', function (event) { if (event.target.id !== 'choose-sync-folder') document.getElementById('choose-sync-folder').click(); });
   folderDropZone.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); document.getElementById('choose-sync-folder').click(); } });
   folderList.addEventListener('click', function (event) {
@@ -1359,6 +1596,11 @@
     // other catalog change happened to occur.
     lastSentBridgeCatalogFingerprint = '';
     syncBridgeCatalog();
+  });
+  if (shortcutFeedbackInput) shortcutFeedbackInput.addEventListener('change', function () {
+    var value = shortcutFeedbackInput.value;
+    settings.shortcutFeedback = value === 'all' || value === 'off' ? value : 'problems';
+    saveSettings();
   });
   if (failurePolicyInput) failurePolicyInput.addEventListener('change', function () {
     settings.failurePolicy = failurePolicyInput.value === 'keep' ? 'keep' : 'rollback';

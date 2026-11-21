@@ -1,0 +1,10 @@
+{
+  "name": "prfx-app",
+  "productName": "PR FX",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PR FX as a Creative Assist tool: its page, service and MCP server",
+  "scripts": {
+    "check": "node tools/check.js"
+  }
+}

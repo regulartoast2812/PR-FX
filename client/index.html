@@ -3,22 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PR FX Palette Settings</title>
+  <title>Edie</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <main class="settings-shell" aria-labelledby="settings-title">
-    <div class="panel-toolbar">
-    <header><h1 id="settings-title">PR FX</h1></header>
-    <nav class="settings-tabs" role="tablist"><button class="settings-tab is-active" data-view="commands" role="tab">Commands</button><button class="settings-tab" data-view="general" role="tab">General</button><button class="settings-tab" data-view="sync" role="tab">Sync</button></nav>
+    <div class="panel-toolbar card">
+      <svg class="brand-face" viewBox="0 0 32 32" width="32" height="32" shape-rendering="crispEdges" aria-hidden="true"><rect x="8" y="6" width="1" height="1" fill="#ef5a30"/><rect x="8" y="7" width="4" height="1" fill="#ef5a30"/><rect x="9" y="8" width="4" height="1" fill="#ef5a30"/><rect x="13" y="8" width="1" height="1" fill="#b02a1c"/><rect x="14" y="8" width="1" height="1" fill="#ef5a30"/><rect x="17" y="8" width="1" height="1" fill="#ef5a30"/><rect x="1" y="9" width="16" height="1" fill="#ef5a30"/><rect x="3" y="10" width="7" height="1" fill="#ef5a30"/><rect x="10" y="10" width="2" height="1" fill="#b02a1c"/><rect x="12" y="10" width="2" height="1" fill="#ef5a30"/><rect x="14" y="10" width="1" height="1" fill="#b02a1c"/><rect x="15" y="10" width="1" height="1" fill="#ef5a30"/><rect x="16" y="10" width="1" height="1" fill="#b02a1c"/><rect x="17" y="10" width="1" height="1" fill="#ef5a30"/><rect x="6" y="11" width="6" height="1" fill="#ef5a30"/><rect x="12" y="11" width="3" height="1" fill="#b02a1c"/><rect x="15" y="11" width="1" height="1" fill="#ef5a30"/><rect x="16" y="11" width="2" height="1" fill="#b02a1c"/><rect x="6" y="12" width="1" height="1" fill="#faa046"/><rect x="7" y="12" width="1" height="1" fill="#b02a1c"/><rect x="8" y="12" width="2" height="1" fill="#ef5a30"/><rect x="10" y="12" width="4" height="1" fill="#b02a1c"/><rect x="14" y="12" width="1" height="1" fill="#ef5a30"/><rect x="15" y="12" width="3" height="1" fill="#b02a1c"/><rect x="18" y="12" width="1" height="1" fill="#ef5a30"/><rect x="30" y="12" width="2" height="1" fill="#f0f0f0"/><rect x="4" y="13" width="1" height="1" fill="#faa046"/><rect x="5" y="13" width="1" height="1" fill="#b02a1c"/><rect x="6" y="13" width="2" height="1" fill="#ef5a30"/><rect x="8" y="13" width="6" height="1" fill="#b02a1c"/><rect x="14" y="13" width="1" height="1" fill="#ef5a30"/><rect x="15" y="13" width="4" height="1" fill="#b02a1c"/><rect x="19" y="13" width="1" height="1" fill="#faa046"/><rect x="30" y="13" width="2" height="1" fill="#f0f0f0"/><rect x="4" y="14" width="1" height="1" fill="#b02a1c"/><rect x="5" y="14" width="1" height="1" fill="#ef5a30"/><rect x="6" y="14" width="8" height="1" fill="#b02a1c"/><rect x="14" y="14" width="1" height="1" fill="#ef5a30"/><rect x="15" y="14" width="5" height="1" fill="#b02a1c"/><rect x="26" y="14" width="2" height="1" fill="#f0f0f0"/><rect x="28" y="14" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="15" width="8" height="1" fill="#b02a1c"/><rect x="10" y="15" width="2" height="1" fill="#faa046"/><rect x="12" y="15" width="4" height="1" fill="#b02a1c"/><rect x="16" y="15" width="2" height="1" fill="#faa046"/><rect x="18" y="15" width="2" height="1" fill="#b02a1c"/><rect x="20" y="15" width="2" height="1" fill="#faa046"/><rect x="26" y="15" width="2" height="1" fill="#f0f0f0"/><rect x="28" y="15" width="2" height="1" fill="#5f5f6c"/><rect x="1" y="16" width="4" height="1" fill="#b02a1c"/><rect x="5" y="16" width="7" height="1" fill="#faa046"/><rect x="12" y="16" width="4" height="1" fill="#b02a1c"/><rect x="16" y="16" width="6" height="1" fill="#faa046"/><rect x="24" y="16" width="2" height="1" fill="#f0f0f0"/><rect x="26" y="16" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="17" width="20" height="1" fill="#faa046"/><rect x="24" y="17" width="2" height="1" fill="#f0f0f0"/><rect x="26" y="17" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="18" width="20" height="1" fill="#faa046"/><rect x="22" y="18" width="2" height="1" fill="#f0f0f0"/><rect x="24" y="18" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="19" width="3" height="1" fill="#faa046"/><rect x="5" y="19" width="2" height="1" fill="#19191c"/><rect x="7" y="19" width="1" height="1" fill="#b8692c"/><rect x="8" y="19" width="4" height="1" fill="#faa046"/><rect x="12" y="19" width="2" height="1" fill="#19191c"/><rect x="14" y="19" width="1" height="1" fill="#b8692c"/><rect x="15" y="19" width="7" height="1" fill="#faa046"/><rect x="22" y="19" width="2" height="1" fill="#f0f0f0"/><rect x="24" y="19" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="20" width="3" height="1" fill="#faa046"/><rect x="5" y="20" width="3" height="1" fill="#19191c"/><rect x="8" y="20" width="4" height="1" fill="#faa046"/><rect x="12" y="20" width="3" height="1" fill="#19191c"/><rect x="15" y="20" width="7" height="1" fill="#faa046"/><rect x="22" y="20" width="10" height="1" fill="#5f5f6c"/><rect x="2" y="21" width="1" height="1" fill="#e8607a"/><rect x="3" y="21" width="1" height="1" fill="#faa046"/><rect x="4" y="21" width="1" height="1" fill="#e8607a"/><rect x="5" y="21" width="3" height="1" fill="#19191c"/><rect x="8" y="21" width="4" height="1" fill="#faa046"/><rect x="12" y="21" width="3" height="1" fill="#19191c"/><rect x="15" y="21" width="1" height="1" fill="#e8607a"/><rect x="16" y="21" width="1" height="1" fill="#faa046"/><rect x="17" y="21" width="1" height="1" fill="#e8607a"/><rect x="18" y="21" width="1" height="1" fill="#faa046"/><rect x="19" y="21" width="1" height="1" fill="#e8607a"/><rect x="20" y="21" width="2" height="1" fill="#faa046"/><rect x="22" y="21" width="10" height="1" fill="#5f5f6c"/><rect x="2" y="22" width="1" height="1" fill="#e8607a"/><rect x="3" y="22" width="1" height="1" fill="#faa046"/><rect x="4" y="22" width="1" height="1" fill="#e8607a"/><rect x="5" y="22" width="1" height="1" fill="#faa046"/><rect x="6" y="22" width="1" height="1" fill="#e8607a"/><rect x="7" y="22" width="8" height="1" fill="#faa046"/><rect x="15" y="22" width="1" height="1" fill="#e8607a"/><rect x="16" y="22" width="1" height="1" fill="#faa046"/><rect x="17" y="22" width="1" height="1" fill="#e8607a"/><rect x="18" y="22" width="1" height="1" fill="#faa046"/><rect x="19" y="22" width="1" height="1" fill="#e8607a"/><rect x="20" y="22" width="2" height="1" fill="#faa046"/><rect x="22" y="22" width="2" height="1" fill="#5f5f6c"/><rect x="24" y="22" width="6" height="1" fill="#f0f0f0"/><rect x="30" y="22" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="23" width="1" height="1" fill="#e8607a"/><rect x="3" y="23" width="1" height="1" fill="#faa046"/><rect x="4" y="23" width="1" height="1" fill="#e8607a"/><rect x="5" y="23" width="1" height="1" fill="#faa046"/><rect x="6" y="23" width="1" height="1" fill="#e8607a"/><rect x="7" y="23" width="1" height="1" fill="#19191c"/><rect x="8" y="23" width="4" height="1" fill="#faa046"/><rect x="12" y="23" width="1" height="1" fill="#19191c"/><rect x="13" y="23" width="2" height="1" fill="#faa046"/><rect x="15" y="23" width="1" height="1" fill="#e8607a"/><rect x="16" y="23" width="1" height="1" fill="#faa046"/><rect x="17" y="23" width="1" height="1" fill="#e8607a"/><rect x="18" y="23" width="1" height="1" fill="#faa046"/><rect x="19" y="23" width="1" height="1" fill="#e8607a"/><rect x="20" y="23" width="2" height="1" fill="#faa046"/><rect x="22" y="23" width="2" height="1" fill="#5f5f6c"/><rect x="24" y="23" width="6" height="1" fill="#f0f0f0"/><rect x="30" y="23" width="2" height="1" fill="#5f5f6c"/><rect x="2" y="24" width="5" height="1" fill="#faa046"/><rect x="7" y="24" width="6" height="1" fill="#19191c"/><rect x="13" y="24" width="9" height="1" fill="#faa046"/><rect x="22" y="24" width="10" height="1" fill="#5f5f6c"/><rect x="2" y="25" width="6" height="1" fill="#faa046"/><rect x="8" y="25" width="4" height="1" fill="#19191c"/><rect x="12" y="25" width="10" height="1" fill="#faa046"/><rect x="22" y="25" width="10" height="1" fill="#5f5f6c"/><rect x="2" y="26" width="22" height="1" fill="#faa046"/><rect x="24" y="26" width="4" height="1" fill="#f0f0f0"/><rect x="28" y="26" width="4" height="1" fill="#5f5f6c"/><rect x="4" y="27" width="16" height="1" fill="#faa046"/><rect x="22" y="27" width="2" height="1" fill="#faa046"/><rect x="24" y="27" width="4" height="1" fill="#f0f0f0"/><rect x="28" y="27" width="4" height="1" fill="#5f5f6c"/><rect x="4" y="28" width="16" height="1" fill="#faa046"/><rect x="22" y="28" width="10" height="1" fill="#5f5f6c"/><rect x="6" y="29" width="12" height="1" fill="#faa046"/><rect x="22" y="29" width="10" height="1" fill="#5f5f6c"/><rect x="6" y="30" width="3" height="1" fill="#cd8339"/><rect x="15" y="30" width="3" height="1" fill="#cd8339"/><rect x="6" y="31" width="3" height="1" fill="#cd8339"/><rect x="15" y="31" width="3" height="1" fill="#cd8339"/></svg>
+      <header class="brand"><h1 id="settings-title">Edie</h1><div class="brand-sub">Premiere Pro tools</div></header>
+      <span class="toolbar-sep" aria-hidden="true"></span>
+      <nav class="settings-tabs" role="tablist"><button class="settings-tab is-active" data-view="commands" role="tab">Commands</button><button class="settings-tab" data-view="general" role="tab">General</button><button class="settings-tab" data-view="sync" role="tab">Sync</button></nav>
     </div>
+
+    <section id="chat-view" class="settings-view edie-chat-view is-hidden" aria-hidden="true">
+      <section id="agentPanel" class="edie-agent-panel" aria-label="Chat with Edie">
+        <header class="edie-chat-heading">
+          <div><h2>What should we do in Premiere?</h2><p>Edie can inspect the active sequence, chain tools, create captions, run workflows, and apply edits.</p></div>
+          <span id="edie-agent-state" class="edie-agent-state is-starting"><i></i>Starting</span>
+        </header>
+        <div id="chatLog" class="edie-chat-log" role="log" aria-live="polite"></div>
+        <div id="edie-context" class="edie-context" hidden></div>
+        <div class="edie-composer">
+          <textarea id="prompt" rows="3" placeholder="Ask Edie to edit, inspect, transcribe, caption, or organise the active sequence…" aria-label="Message Edie"></textarea>
+          <div class="edie-composer-tools">
+            <div class="edie-input-actions">
+              <button id="edie-add-script" class="edie-icon-btn" type="button" title="Attach a script or table" aria-label="Attach a script or table">+</button>
+              <button id="edie-add-images" class="edie-icon-btn" type="button" title="Attach images" aria-label="Attach images">⌑</button>
+              <input id="edie-script-input" class="visually-hidden" type="file" accept=".txt,.md,.csv,.tsv,.json,.srt">
+              <input id="edie-image-input" class="visually-hidden" type="file" accept="image/*" multiple>
+            </div>
+            <div class="edie-ai-settings">
+              <select id="edie-provider" aria-label="AI provider"><option value="claude">Claude Code</option><option value="codex">Codex CLI</option></select>
+              <select id="edie-model" aria-label="AI model"></select>
+              <select id="edie-effort" aria-label="Reasoning effort"><option value="">Default effort</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option></select>
+            </div>
+            <button id="edie-stop" class="edie-send is-stop" type="button" hidden aria-label="Stop Edie">■</button>
+            <button id="edie-send" class="edie-send primary" type="button" aria-label="Send to Edie">↑</button>
+          </div>
+          <p id="edie-chat-status" class="edie-chat-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </section>
 
     <section id="commands-view" class="settings-view">
       <div class="commands-layout">
         <div class="commands-browser">
           <div class="browser-toolbar"><input id="command-manager-search" type="search" placeholder="Search commands…" autocomplete="off"><span id="command-count" class="command-count"></span></div>
           <div class="manager-filters" aria-label="Command filters">
-            <label class="filter-select" for="command-type-filter"><span>Type</span><select id="command-type-filter"><option value="all">All types</option><option value="preset">Presets</option><option value="effect">Effects</option><option value="transition">Transitions</option><option value="audio-transition">Audio transitions</option><option value="custom">Functions</option></select></label>
+            <label class="filter-select" for="command-type-filter"><span>Type</span><select id="command-type-filter"><option value="all">All types</option><option value="ai-function">AI functions</option><option value="preset">Presets</option><option value="effect">Effects</option><option value="transition">Transitions</option><option value="audio-transition">Audio transitions</option><option value="custom">Functions</option></select></label>
             <div class="filter-segmented" role="group" aria-label="Shortcut assignment"><button class="is-active" type="button" data-assignment-filter="all" aria-pressed="true">All</button><button type="button" data-assignment-filter="assigned" aria-pressed="false">Assigned</button><button type="button" data-assignment-filter="unassigned" aria-pressed="false">Unassigned</button></div>
           </div>
           <div class="command-columns"><span>Command</span><span>Type</span><span>Shortcut</span></div>
@@ -31,7 +63,7 @@
           <div class="editor-actions"><button id="perform-manager-command" class="secondary" type="button" disabled>Run</button><button id="save-manager-shortcut" class="primary" type="button" disabled>Save</button><button id="remove-manager-shortcut" class="secondary" type="button" disabled>Remove</button></div>
           <p id="command-status" class="command-status" role="status" aria-live="polite"></p>
           <div class="failure-log-actions"><button id="open-failure-log" class="secondary" type="button">Open failure log</button><span id="failure-log-status">No failures logged yet.</span></div>
-          <details class="shortcut-help"><summary>Shortcut help</summary><p class="editor-note">Ctrl/Option/Cmd shortcuts can stay armed while Premiere is frontmost; Shift-only and plain-key shortcuts arm after the Timeline/Sequence panel is clicked.</p></details>
+          <details class="shortcut-help"><summary>Shortcut help</summary><p class="editor-note">Shortcuts using Ctrl, Option/Alt or Cmd/Win stay armed while Premiere is frontmost. Shift-only and plain-key shortcuts arm only when Edie can tell you are not typing: on Mac after the Timeline/Sequence panel is clicked, on Windows once a Premiere text field has been seen (and never while one is focused).</p></details>
         </aside>
       </div>
     </section>
@@ -46,7 +78,16 @@
           <option value="rollback">Roll back — undo everything the function did</option>
           <option value="keep">Keep changes — leave them and let me judge</option>
         </select>
-        <p class="help">Verification is strict, so it occasionally cries wolf on work that actually landed. <strong>Keep</strong> leaves the result on the Timeline; <em>Undo Last PR FX Action (Any)</em> still reverts it if the failure was real.</p>
+        <p class="help">Verification is strict, so it occasionally cries wolf on work that actually landed. <strong>Keep</strong> leaves the result on the Timeline; <em>Undo Last Edie Action (Any)</em> still reverts it if the failure was real.</p>
+      </section>
+      <section class="card">
+        <label for="shortcut-feedback">On-screen shortcut feedback</label>
+        <select id="shortcut-feedback">
+          <option value="problems">Problems only — failed, expired or skipped shortcuts</option>
+          <option value="all">Everything — also confirm each success</option>
+          <option value="off">Off</option>
+        </select>
+        <p class="help">A small banner near the bottom of the screen. It says why a shortcut did nothing — usually that the last click was outside the Timeline. It never takes focus from Premiere.</p>
       </section>
       <section class="card">
         <label for="show-system-commands" class="checkbox-row"><input id="show-system-commands" type="checkbox"><span>Show <code>[System]</code> diagnostic commands</span></label>
@@ -68,7 +109,7 @@
             <button id="setup-install" class="primary" type="button">Install / Repair</button>
             <button id="setup-accessibility" class="secondary" type="button">Open Accessibility settings</button>
           </div>
-          <p id="setup-detail" class="help">PR FX uses Timeline-aware shortcut arming. Install / Repair uses the bundled listener first and keeps the last working listener until a rebuild completes.</p>
+          <p id="setup-detail" class="help">Edie uses Timeline-aware shortcut arming. Install / Repair uses the bundled listener first and keeps the last working listener until a rebuild completes.</p>
         </section>
         <section class="card bridge-card" aria-live="polite"><div class="bridge-heading"><span>Bridge status</span><span id="bridge-state" class="bridge-state is-checking"><i></i>Checking…</span></div><p id="bridge-detail" class="help">Checking the native Timeline shortcut listener.</p><div class="bridge-actions"><button id="kickstart-listener" class="secondary" type="button">Kickstart / Repair</button><button id="force-reconnect" class="secondary" type="button">Force reconnect</button><span id="catalog-health">Catalog not checked</span></div></section>
         <footer class="tool-action-footer"><button id="open-palette" class="primary" type="button">Open FX palette</button><span id="status" role="status" aria-live="polite"></span></footer>
@@ -122,13 +163,17 @@
       <div id="sync-folder-list" class="sync-folder-list" aria-live="polite"></div>
       <footer><button id="sync-all-folders" class="primary" type="button">Sync now</button><span id="sync-status" role="status" aria-live="polite"></span></footer>
     </section>
+
+    <!-- The proven Premiere runtime remains implementation-only. Reusable agent
+         and tool setup lives in Edie's Creative Assist panel. -->
+    <iframe id="prai-backend" class="runtime-frame" title="Premiere tool runtime" aria-hidden="true" tabindex="-1" enable-nodejs></iframe>
   </main>
 
   <div id="palette" class="palette is-hidden" role="dialog" aria-modal="true" aria-labelledby="palette-title">
     <div class="palette-backdrop" data-close-palette></div>
     <div class="palette-dialog">
       <div class="palette-topline">
-        <span id="palette-title">FX PALETTE</span>
+        <span class="palette-identity"><span id="palette-character" class="palette-character" aria-hidden="true"></span><span id="palette-title">EDIE</span></span>
         <kbd id="shortcut-badge">Ctrl + Space</kbd>
       </div>
       <input id="command-search" type="search" placeholder="Search effects and transitions…" autocomplete="off" aria-label="Search effects and transitions">
@@ -150,6 +195,11 @@
   </div>
 
   <script src="CSInterface.js"></script>
+  <script src="prai/agent/tools.js?v=20261119-edie1"></script>
+  <script src="prai/agent/server.js?v=20261119-edie1"></script>
+  <script src="prai/agent/chat.js?v=20261119-edie1"></script>
+  <script src="prai/agent/chat-ui.js?v=20261119-edie1"></script>
   <script src="app.js"></script>
+  <script src="edie-agent.js?v=20261120-creative-assist-setup1"></script>
 </body>
 </html>

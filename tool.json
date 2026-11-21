@@ -1,0 +1,23 @@
+{
+  "id": "prfx",
+  "name": "PR FX",
+  "maker": "Crossian",
+  "version": "0.5.0",
+  "tagline": "Command palette and shortcuts for Premiere Pro",
+  "about": "Runs 375+ editing commands in Premiere Pro through the PR FX panel (CEP). The Edie UXP plugin is a demo only. Timeline-aware shortcuts and Ctrl+Space stay native; agents, Whisper and ffmpeg stay in Creative Assist.",
+  "category": "Premiere Pro",
+  "platforms": ["darwin", "win32"],
+  "icon": "film",
+  "color": "#3fbf6f",
+  "ui": "app/ui/index.html",
+  "overlay": "app/ui/overlay.html",
+  "service": "app/src/service.mjs",
+  "mcp": "app/src/mcp.mjs",
+  "repo": "https://github.com/regulartoast2812/PR-FX.git",
+  "install": {
+    "darwin": "~/Library/Application Support/Adobe/CEP/extensions/PR FX",
+    "win32": "%APPDATA%\\Adobe\\CEP\\extensions\\PR FX",
+    "cepDebug": true,
+    "after": "On the next Premiere launch, open Window ▸ UXP Plugins ▸ Edie. CEP remains installed as the automatic migration fallback."
+  }
+}

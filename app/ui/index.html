@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+<title>Edie</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="drag"></div>
+    <div class="brand"><span class="mark"></span>Edie</div>
+    <nav>
+      <button class="nav active" data-view="status"><span class="nav-dot" id="navDot"></span>Status</button>
+      <button class="nav" data-view="commands">Shortcuts</button>
+      <button class="nav" data-view="activity">Activity</button>
+      <button class="nav" data-view="settings">Settings</button>
+    </nav>
+    <div class="side-foot">
+      <button class="ghost wide" id="paletteBtn" title="Open the palette over Premiere">Open palette</button>
+      <div class="faint small" id="buildLine"></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="drag top"></div>
+
+    <!-- Status -->
+    <section class="view" id="view-status">
+      <header class="hero" id="hero">
+        <div class="hero-dot" id="heroDot"></div>
+        <div>
+          <h1 id="heroTitle">Connecting…</h1>
+          <p class="muted" id="heroDetail">Looking for the Edie listener.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="heroAction" hidden></button>
+        </div>
+      </header>
+
+      <div class="grid">
+        <div class="card map-card">
+          <div class="card-head">
+            <h2>Timeline detection</h2>
+            <label class="switch" title="Draw the detected rectangle over Premiere"><input type="checkbox" id="overlayToggle"><span></span>Show on screen</label>
+          </div>
+          <svg id="map" class="map" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="legend">
+            <span><i class="lg live"></i>Live Timeline</span>
+            <span><i class="lg saved"></i>Remembered</span>
+            <span><i class="lg win"></i>Premiere window</span>
+            <span><i class="lg click"></i>Last click</span>
+          </div>
+          <p class="muted small" id="mapNote"></p>
+        </div>
+
+        <div class="card facts-card">
+          <h2>Right now</h2>
+          <dl class="facts" id="facts"></dl>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Recent commands</h2>
+          <div class="stats" id="todayStats"></div>
+        </div>
+        <ol class="feed" id="miniFeed"></ol>
+        <button class="link" data-goto="activity">See all activity</button>
+      </div>
+    </section>
+
+    <!-- Shortcuts -->
+    <section class="view" id="view-commands" hidden>
+      <header class="view-head">
+        <h1>Shortcuts</h1>
+        <p class="muted">Pick a command, press keys to bind it, or run it on the selected clips.</p>
+      </header>
+      <div class="split">
+        <div class="list-pane">
+          <div class="filters">
+            <input type="search" id="search" placeholder="Search commands" autocomplete="off" spellcheck="false">
+            <div class="chips" id="typeChips"></div>
+            <div class="chips" id="assignChips"></div>
+          </div>
+          <ul class="cmd-list" id="cmdList" tabindex="0"></ul>
+          <div class="faint small list-count" id="listCount"></div>
+        </div>
+        <div class="detail-pane" id="detail">
+          <div class="empty muted">Choose a command on the left.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Activity -->
+    <section class="view" id="view-activity" hidden>
+      <header class="view-head row">
+        <div>
+          <h1>Activity</h1>
+          <p class="muted">Every shortcut, palette and app command the listener handled, newest first.</p>
+        </div>
+        <div class="row gap">
+          <div class="chips" id="activityChips"></div>
+          <button class="ghost" data-open="journal">Show journal file</button>
+          <button class="ghost" data-open="failures">Failure log</button>
+        </div>
+      </header>
+      <ol class="feed big" id="feed"></ol>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" id="view-settings" hidden>
+      <header class="view-head">
+        <h1>Settings</h1>
+        <p class="muted">Saved straight to settings.json. The Premiere panel and the listener pick changes up at once. <kbd id="undoKey">⌘Z</kbd> undoes.</p>
+      </header>
+
+      <div class="card form">
+        <h2>On-screen feedback</h2>
+        <div class="field">
+          <label for="shortcutFeedback">Banners after a command</label>
+          <div class="segmented" id="shortcutFeedback" data-key="shortcutFeedback">
+            <button data-value="all">Every result</button>
+            <button data-value="problems">Problems only</button>
+            <button data-value="off">Off</button>
+          </div>
+          <p class="hint">“Every result” shows a green ✓ banner with what changed after each success.</p>
+        </div>
+        <div class="field">
+          <label for="announceScope">Arming banners</label>
+          <div class="segmented" id="announceScope" data-key="announceScope">
+            <button data-value="on">On</button>
+            <button data-value="off">Off</button>
+          </div>
+          <p class="hint">A short banner when clicking the Timeline arms shortcuts, and when Export or Import mode pauses them.</p>
+        </div>
+        <div class="field">
+          <label for="edieNudges">Edie speaks up when you go quiet</label>
+          <div class="segmented" id="edieNudges" data-key="edieNudges">
+            <button data-value="on">On</button>
+            <button data-value="off">Off</button>
+          </div>
+          <p class="hint">Edie, on the Timeline outline, says a short line when you’ve gone quiet in Premiere, and after a longer break welcomes you back with what you were on. Needs Timeline detection’s Show on screen.</p>
+        </div>
+        <div class="field">
+          <label for="edieNudgeMinutes">Speak up after</label>
+          <div class="unit"><input type="number" id="edieNudgeMinutes" data-key="edieNudgeMinutes" min="1" max="30"><span>minutes with no input</span></div>
+        </div>
+      </div>
+
+      <div class="card form">
+        <h2>Palette</h2>
+        <div class="field">
+          <label>Open the palette with</label>
+          <button class="capture" id="paletteShortcut" data-capture="palette"></button>
+          <p class="hint">Click, then press the keys. Esc cancels.</p>
+        </div>
+        <div class="field inline">
+          <label for="showSystemCommands">Show [System] diagnostics in lists</label>
+          <label class="switch"><input type="checkbox" id="showSystemCommands" data-key="showSystemCommands"><span></span></label>
+        </div>
+      </div>
+
+      <div class="card form">
+        <h2>Transcription and subtitles</h2>
+        <div class="field two">
+          <div><label for="defaultAudioTrack">Default audio track</label><input type="text" id="defaultAudioTrack" data-key="defaultAudioTrack" value="A1" spellcheck="false"></div>
+          <div><label for="captionSplitMode">Caption breaks</label><select id="captionSplitMode" data-key="captionSplitMode"><option value="readability">Context and readability</option><option value="punctuation">Punctuation only</option><option value="even">Even length</option></select></div>
+        </div>
+        <div class="field four">
+          <div><label for="audioHeadPad">Head pad</label><div class="unit"><input type="number" id="audioHeadPad" data-key="audioHeadPad" min="0" max="30" step="0.01"><span>sec</span></div></div>
+          <div><label for="audioTailPad">Tail pad</label><div class="unit"><input type="number" id="audioTailPad" data-key="audioTailPad" min="0" max="30" step="0.01"><span>sec</span></div></div>
+          <div><label for="captionMaxWords">Max words</label><input type="number" id="captionMaxWords" data-key="captionMaxWords" min="1" max="20"></div>
+          <div><label for="captionMaxChars">Max characters</label><input type="number" id="captionMaxChars" data-key="captionMaxChars" min="8" max="90"></div>
+        </div>
+        <div class="field inline"><label for="captionTrimEndPunctuation">Trim trailing periods and commas</label><label class="switch"><input type="checkbox" id="captionTrimEndPunctuation" data-key="captionTrimEndPunctuation"><span></span></label></div>
+      </div>
+
+      <div class="card form">
+        <h2>Editing defaults</h2>
+        <div class="field two">
+          <div><label for="transitionFrames">Transition length</label><div class="unit"><input type="number" id="transitionFrames" data-key="transitionFrames" min="1" max="999"><span>frames</span></div></div>
+          <div><label for="syntheticSeconds">Generated clip length</label><div class="unit"><input type="number" id="syntheticSeconds" data-key="syntheticSeconds" min="1" max="600"><span>seconds</span></div></div>
+        </div>
+        <div class="field two">
+          <div><label for="staggerFrames">Stagger offset</label><div class="unit"><input type="number" id="staggerFrames" data-key="staggerFrames" min="0" max="9999"><span>frames</span></div></div>
+          <div><label for="staggerGroup">Stagger group size</label><div class="unit"><input type="number" id="staggerGroup" data-key="staggerGroup" min="1" max="999"><span>clips</span></div></div>
+        </div>
+        <div class="field">
+          <label for="failurePolicy">When a function fails partway</label>
+          <select id="failurePolicy" data-key="failurePolicy">
+            <option value="rollback">Roll back — undo everything the function did</option>
+            <option value="keep">Keep changes — leave them and let me judge</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card form">
+        <h2>Bulk replace and export</h2>
+        <div class="field">
+          <label for="nameTolerance">Name matching</label>
+          <select id="nameTolerance" data-key="nameTolerance">
+            <option value="exact">Strict — shot key and variant must match</option>
+            <option value="normalized">Normal — variant ignores case and punctuation</option>
+            <option value="fuzzy">Loose — also allow near-spellings and a missing variant</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="exportNamePattern">Export file names</label>
+          <input type="text" id="exportNamePattern" data-key="exportNamePattern" spellcheck="false">
+          <p class="hint">Use {sequence} and {index}.</p>
+        </div>
+        <div class="field inline">
+          <label for="mergeTouchingSameSource">Merge touching clips from the same source when exporting</label>
+          <label class="switch"><input type="checkbox" id="mergeTouchingSameSource" data-key="mergeTouchingSameSource"><span></span></label>
+        </div>
+      </div>
+
+      <div class="card form">
+        <h2>Listener</h2>
+        <div class="field inline"><span id="listenerState" class="muted"></span>
+          <div class="row gap">
+            <button class="ghost" id="restartListener">Restart listener</button>
+            <button class="ghost" id="accessBtn" hidden>Accessibility settings</button>
+          </div>
+        </div>
+        <div class="row gap wrap">
+          <button class="ghost" data-open="support">Open settings folder</button>
+          <button class="ghost" data-open="logs">Open logs</button>
+          <button class="ghost" data-open="listenerLog">Listener log</button>
+        </div>
+        <p class="hint">Folder sync lives in the Premiere panel for now.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script src="web-bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

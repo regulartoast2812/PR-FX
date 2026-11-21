@@ -1,0 +1,144 @@
+{
+  "id": "text-xml-two-style-graphic",
+  "name": "Text XML two-style saved Premiere template",
+  "sourceXml": "/Users/crossianllc/Downloads/Text XML.xml",
+  "workflow": "Clone the saved Premiere XML text clip and replace text strings inside sourceTextBlobBase64. Same-byte-length replacements are proven to import while preserving styling. Multiple XML text frames can be emitted by cloning the clipitem with separate replacements per frame. Variable-length replacement inside one Source Text blob still needs blob structure support before it is safe.",
+  "sequence": {
+    "name": "Text XML",
+    "timebase": 50,
+    "width": 1920,
+    "height": 1080,
+    "clipStartFrame": 0,
+    "clipEndFrame": 114
+  },
+  "graphic": {
+    "clipName": "Graphic",
+    "mediaSource": "GraphicAndType",
+    "effectId": "GraphicAndType",
+    "effectName": "Best Selling \r pants in 2026",
+    "fontStringsFound": [
+      "KitRounded-ExtraBold"
+    ],
+    "plainTextStringsFound": [
+      "Best Selling",
+      "pants ",
+      "in 2026"
+    ],
+    "styleNames": {
+      "yellowGradient": {
+        "description": "Style A. Yellow gradient text treatment from the original 'Best Selling' span.",
+        "sourceSpans": [
+          "Best Selling"
+        ],
+        "styleSource": "Premiere Source Text encoded blob"
+      },
+      "defaultWhite": {
+        "description": "Style B/C. Default white text treatment shared by the original 'pants' and 'in 2026' spans; those spans differ by size/scale, not base style.",
+        "sourceSpans": [
+          "pants",
+          "in 2026"
+        ],
+        "styleSource": "Premiere Source Text encoded blob"
+      }
+    },
+    "globalPreviewValues": {
+      "fontFamily": "KitRounded-ExtraBold",
+      "fontSize": 30,
+      "areaTypeWidth": 900,
+      "areaTypeHeight": 180,
+      "textAlign": "center",
+      "strokeOrientation": "outer",
+      "strokeWidth": 2
+    },
+    "styleSpans": [
+      {
+        "text": "Best Selling",
+        "sourceSpans": ["Best Selling"],
+        "styleName": "yellowGradient",
+        "font": "KitRounded-ExtraBold",
+        "styleSource": "Premiere Source Text encoded blob",
+        "fill": "yellow gradient stored in encoded blob",
+        "stroke": "stored in encoded blob",
+        "gradient": "yellow gradient stored in encoded blob",
+        "decodedValues": {
+          "confidence": "partial",
+          "textByteOffset": 808,
+          "byteLength": 12,
+          "likelyStyleOffset": 568,
+          "observedFields": {
+            "fontSizeLikeFloat": 186.6667,
+            "rangeStart": 0,
+            "rangeLength": 12,
+            "fillColorBytes": "00 18 18 18",
+            "gradientStopsLikeFloats": [1, 0.5, 0.5, 1, 0.5]
+          }
+        },
+        "previewValues": {
+          "sizeAdjust": 0,
+          "fillType": "gradient",
+          "fillColor": "#ffd735",
+          "fillColor2": "#dd9300",
+          "strokeColor": "#4d3200",
+          "strokeAdjust": 0,
+          "fillOverStroke": true,
+          "shadow": true
+        }
+      },
+      {
+        "text": "pants",
+        "sourceSpans": ["pants", "in 2026"],
+        "styleName": "defaultWhite",
+        "sizeRole": "shared defaultWhite styling; size variation belongs to global size plus per-style adjustment",
+        "font": "KitRounded-ExtraBold",
+        "styleSource": "Premiere Source Text encoded blob",
+        "fill": "default white stored in encoded blob",
+        "stroke": "stored in encoded blob",
+        "gradient": "none/default unless encoded blob says otherwise",
+        "decodedValues": {
+          "confidence": "partial",
+          "textByteOffset": 474,
+          "byteLength": 5,
+          "likelyStyleOffset": 408,
+          "observedFields": {
+            "fontSizeLikeFloat": 168.9454,
+            "rangeStart": 13,
+            "rangeLength": 6,
+            "fillColorBytes": "00 18 18 18"
+          }
+        },
+        "previewValues": {
+          "sizeAdjust": 0,
+          "fillType": "solid",
+          "fillColor": "#f7f8fb",
+          "fillColor2": "#f7f8fb",
+          "strokeColor": "#161616",
+          "strokeAdjust": 0,
+          "fillOverStroke": true,
+          "shadow": true
+        }
+      }
+    ],
+    "sourceTextBlobBase64": "LAMAAAAAAABEMyIRDAAAAAAABgAKAAQABgAAAGQAAAAAAF4AQAAQAAwAPAA4ADQAMAAAAAAAAAAAACwAKwAkAAAAIAAcABgAAAAAAAAAAAAAAAAAAAAAAAAAFgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAABcABwBeAAAAAAAAATgAAABIAAAAaAAAAAAAAQAAAEBBAADAQAAAQEAAAMhCAAAAASAAAAABAAAAAgAAAAAAgEQAQMVEpP3//6j9//+s/f//wv3//wAAAAABAAAABAAAABQAAABLaXRSb3VuZGVkLUV4dHJhQm9sZAAAAAADAAAA8AAAAFwAAAAMAAAACAAMAAQACAAIAAAAPAAAAAQAAACy////AgAAABgAAAAYAAAAAACAQAAAAAEQAAAAq6o6QyD+//8k/v//Ov7//wAYGBgw/v//BwAAAGluIDIwMjYAeP///3QAAAA8AAAAAAA2ACAAAAAcAAAAAAAYABcAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAgABAA2AAAAAgAAABgAAAAYAAAAAACAQAAAAAEQAAAABPIoQ6T+//+o/v//vv7//wAYGBi0/v//CAAAACANcGFudHMgAAAAAAgADgAEAAgACAAAADQBAAA8AAAAAAA2ACQAAAAgAAAAAAAcABsAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAADAAAAAgABAA2AAAAAgAAACAAAAAsAAAAAQAAAAAAQEAAAAAByAAAAKuqOkMEAAYABAAAAAAACgAMAAAACAAEAAoAAAAIAAAAPAAAAAIAAAAsAAAAEAAAAAAACgAOAAAABAAIAAoAAAAAAIA/AAAAPwAACgAIAAAAAAAEAAoAAAAAAAA/AgAAADgAAAAQAAAAAAAKABAABAAIAAwACgAAAAwAAAAAAIA/AAAAP97///8AAAD3wIkKAA4ABAAAAAgACgAAABQAAAAAAAA/AAAKAAoABwAIAAkACgAAAAAAAPDbeQoACAAFAAYABwAKAAAAABgYGAQABAAEAAAADAAAAEJlc3QgU2VsbGluZwAAAAA="
+  },
+  "testedReplacement": {
+    "outputXml": "/Users/crossianllc/Downloads/Text XML - duplicated graphic.xml",
+    "replacements": [
+      {
+        "from": "Best Selling",
+        "to": "Second Layer",
+        "byteLength": 12
+      },
+      {
+        "from": "pants",
+        "to": "style",
+        "byteLength": 5
+      },
+      {
+        "from": "in 2026",
+        "to": "in 2027",
+        "byteLength": 7
+      }
+    ],
+    "result": "User confirmed import worked and styling stayed."
+  }
+}

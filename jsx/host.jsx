@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20260930-no-legacy-1';
+prfx.HOST_BUILD = '20261119-edie-name-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -85,26 +85,6 @@ prfx.safeAppendCatalog = function (target, type, methodName) {
     } catch (ignore) {}
 };
 
-prfx.safeAppendUserPresetCatalog = function (target) {
-    var files = prfx.userPresetFiles(), seen = {}, presets = [], i, j, parsed, item, key;
-    try {
-        for (i = 0; i < files.length; i++) {
-            parsed = prfx.parseUserPresetFile(files[i]);
-            for (j = 0; j < parsed.length; j++) {
-                item = parsed[j];
-                key = item.uid ? ('uid:' + item.uid) : ('name:' + item.name.toLowerCase());
-                if (seen[key]) continue;
-                seen[key] = true;
-                presets.push({ type: 'preset', name: item.name, presetUid: item.uid || '', transitionFrames: 30 });
-            }
-        }
-        presets.sort(function (a, b) {
-            var an = a.name.toLowerCase(), bn = b.name.toLowerCase();
-            return an < bn ? -1 : (an > bn ? 1 : 0);
-        });
-        for (i = 0; i < presets.length; i++) target.push(presets[i]);
-    } catch (ignore) {}
-};
 
 prfx.userPresetFiles = function () {
     var files = [], seen = {};
@@ -152,32 +132,6 @@ prfx.xmlText = function (value) {
         .replace(/&apos;/g, "'")
         .replace(/&amp;/g, '&')
         .replace(/^\s+|\s+$/g, '');
-};
-
-prfx.parseUserPresetFile = function (file) {
-    var out = [], text = '', uidOpen = '<MZ.EffectPresets.PresetUID>', uidClose = '</MZ.EffectPresets.PresetUID>';
-    var index = 0, uidStart, uidEnd, uid, prefix, nameStart, nameEnd, name;
-    try {
-        file.encoding = 'UTF-8';
-        if (!file.open('r')) return out;
-        text = file.read();
-        file.close();
-    } catch (readError) {
-        try { file.close(); } catch (closeError) {}
-        return out;
-    }
-    while ((uidStart = text.indexOf(uidOpen, index)) >= 0) {
-        uidEnd = text.indexOf(uidClose, uidStart + uidOpen.length);
-        if (uidEnd < 0) break;
-        uid = prfx.xmlText(text.substring(uidStart + uidOpen.length, uidEnd));
-        prefix = text.substring(Math.max(0, uidStart - 5000), uidStart);
-        nameStart = prefix.lastIndexOf('<Name>');
-        nameEnd = nameStart >= 0 ? prefix.indexOf('</Name>', nameStart + 6) : -1;
-        name = nameStart >= 0 && nameEnd > nameStart ? prfx.xmlText(prefix.substring(nameStart + 6, nameEnd)) : '';
-        if (name && name !== 'Root' && name !== 'Presets') out.push({ name: name, uid: uid });
-        index = uidEnd + uidClose.length;
-    }
-    return out;
 };
 
 prfx.readTextFile = function (file) {
@@ -279,246 +233,6 @@ prfx.replaceLogSource = function (source) {
         extension: prfx.projectItemExtension(source),
         mediaCategory: prfx.mediaCategoryOf(prfx.projectItemExtension(source))
     };
-};
-
-prfx.escapeRegex = function (value) {
-    return String(value || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-};
-
-prfx.xmlTagValue = function (block, tagName) {
-    var match;
-    try {
-        match = new RegExp('<' + prfx.escapeRegex(tagName) + '[^>]*>([\\s\\S]*?)<\\/' + prfx.escapeRegex(tagName) + '>', '').exec(String(block || ''));
-        return match ? prfx.xmlText(match[1]) : '';
-    } catch (error) { return ''; }
-};
-
-prfx.xmlObjectById = function (text, tagName, objectId) {
-    var match;
-    try {
-        match = new RegExp('<' + prfx.escapeRegex(tagName) + '\\b[^>]*\\bObjectID="' + prfx.escapeRegex(objectId) + '"[^>]*>[\\s\\S]*?<\\/' + prfx.escapeRegex(tagName) + '>', '').exec(String(text || ''));
-        return match ? match[0] : '';
-    } catch (error) { return ''; }
-};
-
-prfx.xmlObjectAnyById = function (text, tagNames, objectId) {
-    var i, block;
-    for (i = 0; i < tagNames.length; i++) {
-        block = prfx.xmlObjectById(text, tagNames[i], objectId);
-        if (block) return { tagName: tagNames[i], block: block };
-    }
-    return { tagName: '', block: '' };
-};
-
-prfx.xmlObjectRefs = function (block, tagName) {
-    var refs = [], re, match;
-    try {
-        re = new RegExp('<' + prfx.escapeRegex(tagName) + '\\b[^>]*\\bObjectRef="([^"]+)"[^>]*\\/?>', 'g');
-        while ((match = re.exec(String(block || ''))) !== null) refs.push(match[1]);
-    } catch (error) {}
-    return refs;
-};
-
-prfx.xmlObjectRefEntries = function (block, tagName) {
-    var refs = [], re, match, tag, indexMatch, indexValue;
-    try {
-        re = new RegExp('<' + prfx.escapeRegex(tagName) + '\\b[^>]*\\bObjectRef="([^"]+)"[^>]*\\/?>', 'g');
-        while ((match = re.exec(String(block || ''))) !== null) {
-            tag = match[0];
-            indexMatch = /\bIndex="([^"]+)"/.exec(tag);
-            indexValue = indexMatch ? Number(indexMatch[1]) : NaN;
-            refs.push({ ref: match[1], index: indexValue });
-        }
-    } catch (error) {}
-    return refs;
-};
-
-prfx.parsePresetValue = function (raw) {
-    var value = prfx.xmlText(raw), parts, out, i, token, number;
-    if (value === '') return null;
-    if (/^(true|false)$/i.test(value)) return /^true$/i.test(value);
-    if (value.indexOf(',') >= 0) {
-        parts = value.split(',');
-        out = [];
-        for (i = 0; i < parts.length; i++) {
-            token = prfx.xmlText(parts[i]);
-            if (token === '') continue;
-            if (/^(true|false)$/i.test(token)) out.push(/^true$/i.test(token));
-            else {
-                number = Number(token);
-                if (isNaN(number)) return null;
-                out.push(number);
-            }
-        }
-        return out.length ? out : null;
-    }
-    number = Number(value);
-    if (!isNaN(number)) return number;
-    return null;
-};
-
-prfx.parsePresetStartValue = function (raw) {
-    var parts = prfx.xmlText(raw).split(',');
-    if (parts.length < 2) return null;
-    return prfx.parsePresetValue(parts[1]);
-};
-
-prfx.presetValueWithinBounds = function (value, lower, upper) {
-    if (typeof value !== 'number') return true;
-    if (typeof lower === 'number' && !isNaN(lower) && value < lower - 0.0001) return false;
-    if (typeof upper === 'number' && !isNaN(upper) && value > upper + 0.0001) return false;
-    return true;
-};
-
-prfx.selectPresetParamValue = function (paramBlock, currentRaw) {
-    var currentValue = prfx.parsePresetValue(currentRaw);
-    var startValue = prfx.parsePresetStartValue(prfx.xmlTagValue(paramBlock, 'StartKeyframe'));
-    var lower = prfx.parsePresetValue(prfx.xmlTagValue(paramBlock, 'LowerBound'));
-    var upper = prfx.parsePresetValue(prfx.xmlTagValue(paramBlock, 'UpperBound'));
-    if (currentValue !== null && prfx.presetValueWithinBounds(currentValue, lower, upper)) return currentValue;
-    if (startValue !== null && prfx.presetValueWithinBounds(startValue, lower, upper)) return startValue;
-    return currentValue;
-};
-
-prfx.parsePresetKeyframes = function (raw) {
-    var out = [], rows = String(raw || '').split(';'), i, parts, ticks, value;
-    for (i = 0; i < rows.length; i++) {
-        if (!rows[i]) continue;
-        parts = rows[i].split(',');
-        if (parts.length < 2) continue;
-        ticks = Number(prfx.xmlText(parts[0]));
-        value = prfx.parsePresetValue(parts[1]);
-        if (isNaN(ticks) || value === null || !prfx.isSimpleMockPresetValue(value)) continue;
-        out.push({ ticks: ticks, value: value });
-    }
-    out.sort(function (a, b) { return a.ticks - b.ticks; });
-    return out;
-};
-
-prfx.isMockPresetMetaParam = function (name) {
-    var normalized = prfx.normalizedPresetLabel(name);
-    if (!normalized) return true;
-    if (normalized.indexOf('unused') === 0) return true;
-    if (normalized.charAt(0) === '_') return true;
-    return {
-        erroroccurred: true,
-        warning: true,
-        pluginpresets: true,
-        effecttiming: true,
-        units: true,
-        startoffset: true,
-        enableduration: true,
-        duration: true,
-        controls: true,
-        pretransform: true,
-        applyprescale: true,
-        visualcurveeditor: true,
-        motioncontrols: true,
-        motionblurengine: true,
-        overlaymode: true,
-        overlayinfo: true,
-        overlayenabled: true,
-        appliedversion: true,
-        sequencewidth: true,
-        sequenceheight: true,
-        sequencepixelratio: true
-    }[normalized] === true;
-};
-
-prfx.findUserPresetTreeBlock = function (text, command) {
-    var uid = String(command && command.presetUid || ''), name = String(command && command.name || '');
-    var index = -1, uidOpen, uidClose, namePattern, match, start, end;
-    if (uid) {
-        uidOpen = '<MZ.EffectPresets.PresetUID>';
-        uidClose = '</MZ.EffectPresets.PresetUID>';
-        index = String(text || '').indexOf(uidOpen + uid + uidClose);
-    }
-    if (index < 0 && name) {
-        try {
-            namePattern = new RegExp('<Name>\\s*' + prfx.escapeRegex(name) + '\\s*<\\/Name>');
-            match = namePattern.exec(String(text || ''));
-            if (match) index = match.index;
-        } catch (nameError) {}
-    }
-    if (index < 0) return '';
-    start = String(text || '').lastIndexOf('<TreeItem', index);
-    end = String(text || '').indexOf('</TreeItem>', index);
-    if (start < 0 || end < start) return '';
-    return String(text || '').substring(start, end + 11);
-};
-
-prfx.readUserPresetData = function (command) {
-    var files = prfx.userPresetFiles(), f, text, tree, dataRef, itemBlock, presetRefs, presets = [];
-    var i, j, presetBlock, filterMatchName, componentRef, componentObject, componentBlock, componentTag, displayName, matchName, kind;
-    var paramRefs, params, unsupportedParams, privateParams, hasPrivateData, p, paramObject, paramBlock, rawValue, parsedValue, paramName, keyframeText, keyframes, hasKeyframes, isVarying;
-    for (f = 0; f < files.length; f++) {
-        text = prfx.readTextFile(files[f]);
-        if (!text) continue;
-        tree = prfx.findUserPresetTreeBlock(text, command);
-        if (!tree) continue;
-        dataRef = prfx.xmlObjectRefs(tree, 'Data')[0] || '';
-        itemBlock = dataRef ? prfx.xmlObjectById(text, 'FilterPresetItem', dataRef) : '';
-        if (!itemBlock) continue;
-        presetRefs = prfx.xmlObjectRefs(itemBlock, 'FilterPreset');
-        for (i = 0; i < presetRefs.length; i++) {
-            presetBlock = prfx.xmlObjectById(text, 'FilterPreset', presetRefs[i]);
-            if (!presetBlock) continue;
-            filterMatchName = prfx.xmlTagValue(presetBlock, 'FilterMatchName');
-            componentRef = prfx.xmlObjectRefs(presetBlock, 'Component')[0] || '';
-            componentObject = componentRef ? prfx.xmlObjectAnyById(text, ['VideoFilterComponent', 'AudioFilterComponent'], componentRef) : { tagName: '', block: '' };
-            componentBlock = componentObject.block;
-            componentTag = componentObject.tagName;
-            if (!componentBlock) continue;
-            kind = componentTag === 'AudioFilterComponent' ? 'audio' : 'video';
-            displayName = prfx.xmlTagValue(componentBlock, 'DisplayName') || String(command.name || '');
-            matchName = prfx.xmlTagValue(componentBlock, 'MatchName') || filterMatchName;
-            paramRefs = prfx.xmlObjectRefEntries(componentBlock, 'Param');
-            params = [];
-            unsupportedParams = 0;
-            privateParams = componentBlock.indexOf('<PremiereFilterPrivateData') >= 0 ? 1 : 0;
-            hasPrivateData = privateParams > 0;
-            for (j = 0; j < paramRefs.length; j++) {
-                paramObject = prfx.xmlObjectAnyById(text, ['VideoComponentParam', 'AudioComponentParam', 'ArbVideoComponentParam', 'ArbAudioComponentParam'], paramRefs[j].ref);
-                paramBlock = paramObject.block;
-                if (!paramBlock) continue;
-                if (paramObject.tagName === 'ArbVideoComponentParam' || paramObject.tagName === 'ArbAudioComponentParam') {
-                    unsupportedParams++;
-                    continue;
-                }
-                paramName = prfx.xmlTagValue(paramBlock, 'Name');
-                rawValue = prfx.xmlTagValue(paramBlock, 'CurrentValue');
-                keyframeText = prfx.xmlTagValue(paramBlock, 'Keyframes');
-                keyframes = prfx.parsePresetKeyframes(keyframeText);
-                hasKeyframes = keyframeText !== '';
-                isVarying = /^true$/i.test(prfx.xmlTagValue(paramBlock, 'IsTimeVarying'));
-                parsedValue = prfx.selectPresetParamValue(paramBlock, rawValue);
-                if (!paramName || prfx.isMockPresetMetaParam(paramName) || parsedValue === null) {
-                    unsupportedParams++;
-                    continue;
-                }
-                if (hasKeyframes || isVarying) {
-                    if (!keyframes.length) {
-                        unsupportedParams++;
-                        continue;
-                    }
-                    params.push({ name: paramName, index: paramRefs[j].index, value: parsedValue, keyframes: keyframes });
-                } else {
-                    params.push({ name: paramName, index: paramRefs[j].index, value: parsedValue });
-                }
-            }
-            presets.push({
-                kind: kind,
-                displayName: displayName,
-                matchName: matchName,
-                params: params,
-                unsupportedParams: unsupportedParams,
-                privateParams: privateParams,
-                hasPrivateData: hasPrivateData
-            });
-        }
-        if (presets.length) return { name: String(command.name || ''), file: files[f].fsName, effects: presets };
-    }
-    return null;
 };
 
 prfx.syncFolder = function (payload) {
@@ -646,6 +360,12 @@ prfx.functions = {
     'bulk-replace-by-name': { run: function (publicSequence, qeSequence, command) {
         return prfx.bulkReplaceByName(publicSequence, qeSequence, (command && command.nameTolerance) || 'normalized');
     } },
+    'preset-report': { needsSequence: false, run: function () {
+        return prfx.presetReport();
+    } },
+    'probe-preset-routes': { run: function (publicSequence, qeSequence) {
+        return prfx.probePresetRoutes(publicSequence, qeSequence);
+    } },
     'failure-report': { needsSequence: false, run: function () {
         return prfx.failureReport();
     } },
@@ -663,6 +383,9 @@ prfx.functions = {
     } },
     'replace-from-bin': { run: function (publicSequence, qeSequence) {
         return prfx.replaceSelectedClipsFromBin(publicSequence, qeSequence);
+    } },
+    'replace-fit-from-bin': { run: function (publicSequence, qeSequence) {
+        return prfx.replaceSelectedClipsFitToSlot(publicSequence, qeSequence);
     } },
     'place-bin-clips': { run: function (publicSequence, qeSequence) {
         return prfx.placeSelectedProjectItems(publicSequence, qeSequence);
@@ -718,6 +441,8 @@ prfx.NON_MUTATING_COMMANDS = {
     'dump-qe-api': true,
     'inspect-selected-clip': true,
     'build-status': true,
+    'preset-report': true,
+    'probe-preset-routes': true,
     'failure-report': true,
     'clear-failure-ledger': true,
     'bulk-replace-preview': true,
@@ -834,57 +559,1454 @@ prfx.applyCommand = function (payload) {
     } catch (error) { return 'ERROR: ' + error.toString(); }
 };
 
-prfx.applyUserPresetCommand = function (publicSequence, sequence, command) {
-    var preset = prfx.readUserPresetData(command), reason, checkpoint, selectedByKind = {}, totalClips = 0, totalEffects = 0, totalWrites = 0;
-    var i, j, entry, selected, detail, effectItem, addResult, resolved, writeResult, failure = '', rollback, label;
-    if (!preset) return 'ERROR: Could not read saved preset "' + String(command && command.name || '') + '" from Premiere\'s preset file.';
-    reason = prfx.mockPresetUnsupportedReason(preset);
-    if (reason) return 'ERROR: Cannot safely recreate "' + preset.name + '" yet: ' + reason + '.';
+// ===========================================================================
+// User preset engine
+//
+// Premiere 26 has no scripting API that applies a saved Effect Preset, so PR FX
+// reads the preset file itself and rebuilds the effect from it. Every stage is
+// generic: nothing below knows about a particular effect or preset.
+//
+//   file      -> indexed document   (one pass, ObjectID -> span; cached by mtime)
+//   document  -> preset model       (bin tree walk; effects; params on demand)
+//   model     -> analysis           (what can be written, what must be default)
+//   analysis  -> route              (native Lumetri apply, else recreate)
+//   route     -> verification       (re-resolve the clip, re-read every value)
+//
+// Format facts (verified against .prfpset files written by Premiere 26):
+// - Flat XML of top-level objects, one tab deep, linked by ObjectRef.
+//   Tree -> BinTreeItem (Items) -> TreeItem (Name, UID, Data) ->
+//   FilterPresetItem -> FilterPreset (Type, AnchorIn/OutPoint, Speed,
+//   FilterMatchName, Component) -> Video/AudioFilterComponent (DisplayName,
+//   PremiereFilterPrivateData, Params) -> *ComponentParam.
+// - <CurrentValue> is NOT the value. It is usually "0", which is what turned
+//   clips black (Scale 0, Gamma 0, black tint). The value is field 1 of
+//   <StartKeyframe>.
+// - Points are "x:y" (normalized). Colours are a decimal uint64 holding four
+//   16-bit channels A,R,G,B -- beyond 2^53, so decoded as a string.
+// - Keyframes are "ticks,value,interp...;" in SOURCE-media ticks. Field 2/3
+//   are 0,0 for linear keys; other easing is not decoded.
+// - ParameterID is the stable identity of a param across versions; the Param
+//   Index is not (bundled presets use an older Lumetri layout).
+// ===========================================================================
 
-    checkpoint = prfx.undoCheckpoint();
+prfx.PRESET_BASELINE_PREFIX_CHARS = 3000000;
+prfx.PRESET_BASELINE_MIN_SAMPLES = 3;
+if (!prfx.presetDocCache) prfx.presetDocCache = {};
+if (!prfx.presetBaselineCache) prfx.presetBaselineCache = {};
+// '' = unknown, 'works' = verified this session, 'broken' = verified not to.
+if (prfx.lumetriNativeRoute === undefined) prfx.lumetriNativeRoute = '';
+if (prfx.lumetriNativeRouteNote === undefined) prfx.lumetriNativeRouteNote = '';
+
+// Components every clip already carries. A preset of one of these writes into
+// the existing component instead of adding a second copy.
+prfx.PRESET_INTRINSIC_MATCH_NAMES = { 'AE.ADBE Motion': true, 'AE.ADBE Opacity': true };
+prfx.PRESET_LUMETRI_MATCH_NAME = 'AE.ADBE Lumetri';
+
+// Plugin bookkeeping that is recomputed at render time or would trigger side
+// effects if written (a "Plugin Presets" popup reloads every other param).
+// Never written, never allowed to block.
+prfx.PRESET_META_NAMES = {
+    erroroccurred: true,
+    warning: true,
+    pluginpresets: true,
+    appliedversion: true,
+    sequencewidth: true,
+    sequenceheight: true,
+    sequencepixelratio: true,
+    overlaymode: true,
+    overlayinfo: true,
+    overlayenabled: true
+};
+
+prfx.presetTrim = function (value) { return String(value === undefined || value === null ? '' : value).replace(/^\s+|\s+$/g, ''); };
+
+// ---------------------------------------------------------------------------
+// Text access. indexOf only: a regex literal containing "<" is an E4X parse
+// error in ExtendScript, and scanning a 3 MB file with regexes is slow.
+// ---------------------------------------------------------------------------
+
+// First <tag>...</tag> (attributes allowed). Returns null when absent and ''
+// for a self-closing tag.
+prfx.presetField = function (body, tag) {
+    var open = '<' + tag, from = 0, at, next, close, end;
+    body = String(body || '');
+    while ((at = body.indexOf(open, from)) >= 0) {
+        next = body.charAt(at + open.length);
+        if (next === '>' || next === ' ' || next === '\t') {
+            close = body.indexOf('>', at);
+            if (close < 0) return null;
+            if (body.charAt(close - 1) === '/') return '';
+            end = body.indexOf('</' + tag + '>', close);
+            if (end < 0) return null;
+            return prfx.xmlText(body.substring(close + 1, end));
+        }
+        from = at + open.length;
+    }
+    return null;
+};
+
+// Every <tag ... ObjectRef="n" Index="i"/> in order. "<Param " never matches
+// "<Params ", and "<Component Version=..." (no ObjectRef) is skipped.
+prfx.presetRefs = function (body, tag) {
+    var out = [], open = '<' + tag + ' ', from = 0, at, close, head, refAt, refEnd, idxAt, idxEnd;
+    body = String(body || '');
+    while ((at = body.indexOf(open, from)) >= 0) {
+        close = body.indexOf('>', at);
+        if (close < 0) break;
+        head = body.substring(at, close);
+        refAt = head.indexOf('ObjectRef="');
+        if (refAt >= 0) {
+            refEnd = head.indexOf('"', refAt + 11);
+            idxAt = head.indexOf(' Index="');
+            idxEnd = idxAt >= 0 ? head.indexOf('"', idxAt + 8) : -1;
+            out.push({
+                ref: head.substring(refAt + 11, refEnd),
+                index: idxEnd > idxAt ? Number(head.substring(idxAt + 8, idxEnd)) : out.length
+            });
+        }
+        from = close + 1;
+    }
+    return out;
+};
+
+// One pass: ObjectID -> { tag, start, end }. Jumps straight to each object's
+// closing tag, so the cost is the number of objects, not the number of lines.
+// A truncated read (baseline prefix) simply stops at the last whole object.
+prfx.indexPresetObjects = function (text) {
+    var objects = {}, order = [], from = 0, at, nameEnd, tag, ch, close, head, idAt, idEnd, id, end;
+    while ((at = text.indexOf('\n\t<', from)) >= 0) {
+        if (text.charAt(at + 3) === '/') { from = at + 4; continue; }
+        nameEnd = at + 3;
+        while (nameEnd < text.length) {
+            ch = text.charAt(nameEnd);
+            if (ch === ' ' || ch === '>' || ch === '/' || ch === '\r' || ch === '\n' || ch === '\t') break;
+            nameEnd++;
+        }
+        tag = text.substring(at + 3, nameEnd);
+        close = text.indexOf('>', nameEnd);
+        if (close < 0) break;
+        head = text.substring(nameEnd, close);
+        idAt = head.indexOf('ObjectID="');
+        if (idAt < 0) { from = close; continue; }
+        idEnd = head.indexOf('"', idAt + 10);
+        id = head.substring(idAt + 10, idEnd);
+        end = text.indexOf('\n\t</' + tag + '>', close);
+        if (end < 0) break;
+        objects[id] = { tag: tag, start: at + 1, end: end };
+        order.push(id);
+        from = end + 4;
+    }
+    return { objects: objects, order: order };
+};
+
+prfx.presetFileStamp = function (file) {
+    var stamp = '';
+    try { stamp = String(file.modified ? file.modified.getTime() : ''); } catch (modifiedError) {}
+    try { stamp += ':' + String(file.length); } catch (lengthError) {}
+    return stamp;
+};
+
+prfx.readPresetFileText = function (file, maxChars) {
+    var text = '';
     try {
-        for (i = 0; i < preset.effects.length; i++) {
-            entry = preset.effects[i];
-            if (!selectedByKind[entry.kind]) selectedByKind[entry.kind] = prfx.getSelectedQEClipDetails(publicSequence, sequence, entry.kind);
-            selected = selectedByKind[entry.kind];
-            if (!selected.length) throw new Error(prfx.selectionError(entry.kind).replace(/^ERROR: /, ''));
+        file.encoding = 'UTF-8';
+        if (!file.open('r')) return '';
+        text = maxChars > 0 ? file.read(maxChars) : file.read();
+        file.close();
+    } catch (readError) {
+        try { file.close(); } catch (closeError) {}
+        text = '';
+    }
+    return String(text || '');
+};
 
-            effectItem = prfx.resolveQEPresetEffect(entry.kind, entry.displayName, entry.matchName, preset.name);
-            if (!effectItem) throw new Error('underlying ' + entry.kind + ' effect "' + (entry.displayName || entry.matchName) + '" is not available');
+// Cached per path + read size, invalidated by mtime/length. Premiere rewrites
+// the user file only when it quits, so the cache normally lives all session.
+prfx.loadPresetDocument = function (file, maxChars) {
+    var key, stamp, cached, text, index, doc;
+    try { file = file instanceof File ? file : new File(String(file)); } catch (fileError) { return null; }
+    if (!file || !file.exists) return null;
+    maxChars = Number(maxChars) || 0;
+    key = file.fsName + '|' + maxChars;
+    stamp = prfx.presetFileStamp(file);
+    cached = prfx.presetDocCache[key];
+    if (cached && cached.stamp === stamp) return cached;
+    text = prfx.readPresetFileText(file, maxChars);
+    if (!text) return null;
+    index = prfx.indexPresetObjects(text);
+    doc = {
+        path: file.fsName,
+        stamp: stamp,
+        text: text,
+        objects: index.objects,
+        order: index.order,
+        truncated: maxChars > 0 && text.length >= maxChars,
+        presets: null
+    };
+    prfx.presetDocCache[key] = doc;
+    return doc;
+};
 
-            for (j = 0; j < selected.length; j++) {
-                detail = selected[j];
-                addResult = entry.kind === 'audio' ? detail.clip.addAudioEffect(effectItem) : detail.clip.addVideoEffect(effectItem);
-                if (addResult === false) throw new Error('Premiere refused to add "' + (entry.displayName || preset.name) + '" to "' + (detail.name || 'clip') + '"');
-                totalEffects++;
+prfx.presetObjectBody = function (doc, id) {
+    var object = doc.objects[String(id)];
+    return object ? doc.text.substring(object.start, object.end) : '';
+};
 
-                resolved = prfx.resolveAddedPresetComponent(publicSequence, entry, detail);
-                if (!resolved || !resolved.component) throw new Error('Premiere did not publish "' + (entry.displayName || preset.name) + '" after adding it to "' + (detail.name || 'clip') + '"');
+// ---------------------------------------------------------------------------
+// Model
+// ---------------------------------------------------------------------------
 
-                writeResult = prfx.applyMockPresetParams(resolved.component, entry.params, detail);
-                if (writeResult.failed) {
-                    throw new Error('Premiere refused preset parameter' + (writeResult.failed === 1 ? '' : 's') +
-                        ' "' + writeResult.failedNames.join('", "') + '" for "' + preset.name + '" on "' + (detail.name || 'clip') + '"');
-                }
-                if (entry.params.length && !writeResult.matched) throw new Error('none of the public parameters in "' + preset.name + '" matched the added effect');
-                totalWrites += writeResult.applied;
-                totalClips++;
+prfx.presetDocumentPresets = function (doc) {
+    var out = [], visited = {}, i, treeBody, rootRef;
+    if (doc.presets) return doc.presets;
+    function walk(binId, path, depth) {
+        var body, name, items, j, child, childPath, preset;
+        if (visited[binId] || depth > 32) return;
+        visited[binId] = true;
+        body = prfx.presetObjectBody(doc, binId);
+        name = prfx.presetTrim(prfx.presetField(body, 'Name'));
+        // Root and the top-level "Presets" bin are containers, not folders the
+        // editor made, so they stay out of the displayed path.
+        childPath = path.slice(0);
+        if (depth >= 2 && name) childPath.push(name);
+        items = prfx.presetRefs(body, 'Item');
+        for (j = 0; j < items.length; j++) {
+            child = doc.objects[items[j].ref];
+            if (!child) continue;
+            if (child.tag === 'BinTreeItem') walk(items[j].ref, childPath, depth + 1);
+            else if (child.tag === 'TreeItem' && !visited[items[j].ref]) {
+                visited[items[j].ref] = true;
+                preset = prfx.parsePresetTreeItem(doc, items[j].ref, childPath);
+                if (preset) out.push(preset);
             }
         }
-    } catch (error) { failure = error.toString(); }
+    }
+    for (i = 0; i < doc.order.length; i++) {
+        if (doc.objects[doc.order[i]].tag !== 'Tree') continue;
+        treeBody = prfx.presetObjectBody(doc, doc.order[i]);
+        rootRef = prfx.presetRefs(treeBody, 'RootBin')[0];
+        if (rootRef) walk(rootRef.ref, [], 0);
+        break;
+    }
+    // A truncated read, or a file without a tree, still yields every whole
+    // TreeItem it contains -- used only for the defaults baseline.
+    for (i = 0; i < doc.order.length; i++) {
+        if (visited[doc.order[i]] || doc.objects[doc.order[i]].tag !== 'TreeItem') continue;
+        visited[doc.order[i]] = true;
+        var orphan = prfx.parsePresetTreeItem(doc, doc.order[i], []);
+        if (orphan) out.push(orphan);
+    }
+    doc.presets = out;
+    return out;
+};
+
+// Returns null for anything that is not a complete effect preset (custom
+// items, transitions, or presets cut off by a truncated read).
+prfx.parsePresetTreeItem = function (doc, id, binPath) {
+    var body = prfx.presetObjectBody(doc, id), name, uid, dataRef, data, filterRefs, effects = [], i, effect;
+    name = prfx.presetTrim(prfx.presetField(body, 'Name'));
+    uid = prfx.presetTrim(prfx.presetField(body, 'MZ.EffectPresets.PresetUID') || '');
+    dataRef = prfx.presetRefs(body, 'Data')[0];
+    data = dataRef ? doc.objects[dataRef.ref] : null;
+    if (!name || !data || data.tag !== 'FilterPresetItem') return null;
+    filterRefs = prfx.presetRefs(prfx.presetObjectBody(doc, dataRef.ref), 'FilterPreset');
+    if (!filterRefs.length) return null;
+    for (i = 0; i < filterRefs.length; i++) {
+        effect = prfx.parsePresetFilter(doc, filterRefs[i].ref);
+        if (!effect) return null;
+        effects.push(effect);
+    }
+    return { name: name, uid: uid, binPath: binPath, file: doc.path, effects: effects, catalogName: name };
+};
+
+prfx.parsePresetFilter = function (doc, id) {
+    var object = doc.objects[String(id)], body, componentRef, component, componentBody, effect;
+    if (!object || object.tag !== 'FilterPreset') return null;
+    body = prfx.presetObjectBody(doc, id);
+    componentRef = prfx.presetRefs(body, 'Component')[0];
+    component = componentRef ? doc.objects[componentRef.ref] : null;
+    if (!component) return null;
+    componentBody = prfx.presetObjectBody(doc, componentRef.ref);
+    effect = {
+        doc: doc,
+        matchName: prfx.presetTrim(prfx.presetField(body, 'FilterMatchName') || prfx.presetField(componentBody, 'MatchName') || ''),
+        displayName: prfx.presetTrim(prfx.presetField(componentBody, 'DisplayName') || ''),
+        componentTag: component.tag,
+        kind: component.tag === 'AudioFilterComponent' ? 'audio' : (component.tag === 'VideoFilterComponent' ? 'video' : ''),
+        anchorType: Number(prfx.presetField(body, 'Type')),
+        anchorIn: Number(prfx.presetField(body, 'AnchorInPoint')),
+        anchorOut: Number(prfx.presetField(body, 'AnchorOutPoint')),
+        speed: Number(prfx.presetField(body, 'Speed')),
+        privateData: prfx.presetTrim(prfx.presetField(componentBody, 'PremiereFilterPrivateData') || ''),
+        paramRefs: prfx.presetRefs(componentBody, 'Param'),
+        params: null,
+        missingParams: 0,
+        layoutSig: ''
+    };
+    if (!(effect.speed > 0)) effect.speed = 1;
+    if (isNaN(effect.anchorType)) effect.anchorType = 0;
+    for (var i = 0; i < effect.paramRefs.length; i++) {
+        if (!doc.objects[effect.paramRefs[i].ref]) return null;
+    }
+    return effect;
+};
+
+prfx.presetParamKind = function (tag, ctl) {
+    if (ctl === 11) return 'group-start';
+    if (ctl === 12) return 'group-end';
+    if (tag.indexOf('Arb') === 0) return 'arb';
+    if (tag === 'PointComponentParam' || ctl === 6) return 'point';
+    if (ctl === 5) return 'color';
+    if (ctl === 4) return 'bool';
+    if (ctl === 7) return 'popup';
+    if (ctl === 9 || ctl === 10 || ctl === 16) return 'hidden';
+    return 'scalar';
+};
+
+// Parsed lazily: the catalog never needs params, and the baseline only needs
+// them for the effects the editor actually has presets of.
+prfx.presetEffectParams = function (effect) {
+    var params = [], groups = [], seenIds = {}, sig = [], i, ref, object, param, top;
+    if (effect.params) return effect.params;
+    for (i = 0; i < effect.paramRefs.length; i++) {
+        ref = effect.paramRefs[i];
+        object = effect.doc.objects[ref.ref];
+        param = prfx.parsePresetParam(effect.doc, ref.ref, object.tag, ref.index);
+        param.ordinal = i;
+        // ParameterID is unique in every file inspected, but key by occurrence
+        // anyway so a duplicate can never merge two params.
+        seenIds[param.parameterId] = (seenIds[param.parameterId] || 0) + 1;
+        param.idKey = param.parameterId + '#' + seenIds[param.parameterId];
+        sig.push(param.parameterId);
+        if (param.kind === 'group-start') {
+            top = groups.length ? groups[groups.length - 1] : null;
+            param.groupId = top ? top.id : -1;
+            param.groupName = top ? top.name : '';
+            groups.push({ id: param.ordinal, name: param.name });
+        } else if (param.kind === 'group-end') {
+            if (groups.length) groups.pop();
+            top = groups.length ? groups[groups.length - 1] : null;
+            param.groupId = top ? top.id : -1;
+            param.groupName = top ? top.name : '';
+        } else {
+            top = groups.length ? groups[groups.length - 1] : null;
+            param.groupId = top ? top.id : -1;
+            param.groupName = top ? top.name : '';
+        }
+        params.push(param);
+    }
+    effect.layoutSig = sig.join(',');
+    effect.params = params;
+    // Release the document text reference held through the effect once all
+    // params are parsed; the document cache keeps its own copy.
+    return params;
+};
+
+prfx.parsePresetParam = function (doc, id, tag, index) {
+    var body = prfx.presetObjectBody(doc, id), start, comma, rest, token, keyText, ctl, param;
+    ctl = Number(prfx.presetField(body, 'ParameterControlType'));
+    param = {
+        index: index,
+        tag: tag,
+        parameterId: prfx.presetTrim(prfx.presetField(body, 'ParameterID') || ''),
+        name: prfx.presetTrim(prfx.presetField(body, 'Name') || ''),
+        ctl: ctl,
+        kind: prfx.presetParamKind(tag, ctl),
+        timeVarying: prfx.presetTrim(prfx.presetField(body, 'IsTimeVarying')).toLowerCase() === 'true',
+        rawValue: '',
+        value: null,
+        keyframes: [],
+        keyError: '',
+        easedKeys: 0,
+        arbData: ''
+    };
+    if (param.kind === 'arb') {
+        param.arbData = prfx.presetTrim(prfx.presetField(body, 'StartKeyframeValue') || '');
+        keyText = prfx.presetTrim(prfx.presetField(body, 'Keyframes') || '');
+        if (param.timeVarying && keyText) param.keyError = 'animated binary parameter';
+        return param;
+    }
+    start = prfx.presetField(body, 'StartKeyframe');
+    if (start) {
+        comma = start.indexOf(',');
+        rest = comma >= 0 ? start.substring(comma + 1) : '';
+        token = rest.indexOf(',') >= 0 ? rest.substring(0, rest.indexOf(',')) : rest;
+        param.rawValue = prfx.presetTrim(token);
+        param.value = prfx.parsePresetToken(param.kind, param.rawValue);
+    }
+    keyText = prfx.presetTrim(prfx.presetField(body, 'Keyframes') || '');
+    if (param.timeVarying && keyText) prfx.parsePresetKeyRows(param, keyText);
+    return param;
+};
+
+prfx.parsePresetKeyRows = function (param, keyText) {
+    var rows = keyText.split(';'), i, fields, ticks, value;
+    for (i = 0; i < rows.length; i++) {
+        if (!prfx.presetTrim(rows[i])) continue;
+        fields = rows[i].split(',');
+        ticks = Number(fields[0]);
+        value = fields.length > 1 ? prfx.parsePresetToken(param.kind, prfx.presetTrim(fields[1])) : null;
+        if (isNaN(ticks) || value === null) { param.keyError = 'unreadable keyframe "' + rows[i].substring(0, 60) + '"'; return; }
+        if ((fields.length > 3) && (Number(fields[2]) !== 0 || Number(fields[3]) !== 0)) param.easedKeys++;
+        param.keyframes.push({ ticks: ticks, value: value });
+    }
+    param.keyframes.sort(function (a, b) { return a.ticks - b.ticks; });
+};
+
+prfx.parsePresetToken = function (kind, token) {
+    var number, colon, x, y;
+    token = prfx.presetTrim(token);
+    if (token === '') return null;
+    if (token === 'true') return true;
+    if (token === 'false') return false;
+    if (kind === 'point') {
+        colon = token.indexOf(':');
+        if (colon < 0) return null;
+        x = Number(token.substring(0, colon));
+        y = Number(token.substring(colon + 1));
+        return isNaN(x) || isNaN(y) ? null : [x, y];
+    }
+    if (kind === 'color') return prfx.presetColorFromDecimal(token);
+    number = Number(token);
+    return isNaN(number) ? null : number;
+};
+
+// Decimal uint64 -> [alpha, red, green, blue] as 0..255. Long division by
+// 65536 on the digit string; each quotient digit is at most 9.
+prfx.presetColorFromDecimal = function (text) {
+    var digits = String(text), words = [], w, i, rem, quotient, d;
+    if (!/^\d+$/.test(digits)) return null;
+    for (w = 0; w < 4; w++) {
+        rem = 0;
+        quotient = '';
+        for (i = 0; i < digits.length; i++) {
+            rem = rem * 10 + (digits.charCodeAt(i) - 48);
+            d = Math.floor(rem / 65536);
+            rem = rem % 65536;
+            if (quotient.length || d) quotient += String(d);
+        }
+        words.push(rem);
+        digits = quotient || '0';
+    }
+    // words are low-first: blue, green, red, alpha. 0xff00 is 255.
+    return [
+        Math.min(255, Math.round(words[3] / 256)),
+        Math.min(255, Math.round(words[2] / 256)),
+        Math.min(255, Math.round(words[1] / 256)),
+        Math.min(255, Math.round(words[0] / 256))
+    ];
+};
+
+prfx.isPresetMetaParam = function (param) {
+    var normalized = prfx.normalizedPresetLabel(param.name);
+    if (param.kind === 'group-start' || param.kind === 'group-end') return false;
+    if (param.name.charAt(0) === '_') return true;
+    if (normalized.indexOf('unused') === 0) return true;
+    return prfx.PRESET_META_NAMES[normalized] === true;
+};
+
+prfx.isPresetVisibleKind = function (kind) {
+    return kind === 'scalar' || kind === 'bool' || kind === 'popup' || kind === 'point' || kind === 'color';
+};
+
+// ---------------------------------------------------------------------------
+// Library: every user preset file, deduped by UID, with stable catalog names.
+// ---------------------------------------------------------------------------
+
+prfx.loadPresetLibrary = function () {
+    var files = prfx.userPresetFiles(), presets = [], byName = {}, seen = {}, errors = [], i, j, doc, list, preset, key, lower, used = {}, label, n;
+    for (i = 0; i < files.length; i++) {
+        doc = prfx.loadPresetDocument(files[i], 0);
+        if (!doc) { errors.push('could not read ' + files[i].fsName); continue; }
+        list = prfx.presetDocumentPresets(doc);
+        for (j = 0; j < list.length; j++) {
+            preset = list[j];
+            key = preset.uid ? ('uid:' + preset.uid) : ('name:' + preset.name.toLowerCase() + '|' + preset.binPath.join('/'));
+            if (seen[key]) continue;
+            seen[key] = true;
+            preset.fileIndex = i;
+            presets.push(preset);
+            lower = preset.name.toLowerCase();
+            byName[lower] = (byName[lower] || 0) + 1;
+        }
+    }
+    // Shortcuts are keyed by name, so the first preset of a name (current
+    // profile first) keeps the plain name; only later duplicates get a suffix.
+    for (i = 0; i < presets.length; i++) {
+        preset = presets[i];
+        lower = preset.name.toLowerCase();
+        label = preset.name;
+        if (byName[lower] > 1 && used[label.toLowerCase()]) {
+            label = preset.name + ' (' + (preset.binPath.length ? preset.binPath.join(' / ') : 'Presets') +
+                (preset.fileIndex > 0 ? ', ' + prfx.presetProfileLabel(preset.file) : '') + ')';
+            n = 2;
+            while (used[label.toLowerCase()]) { label = preset.name + ' (' + n + ')'; n++; }
+        }
+        used[label.toLowerCase()] = true;
+        preset.catalogName = label;
+    }
+    return { presets: presets, errors: errors, files: files };
+};
+
+prfx.presetProfileLabel = function (path) {
+    var parts = String(path || '').split('/');
+    return parts.length >= 3 ? parts[parts.length - 3] : '';
+};
+
+prfx.findLibraryPreset = function (library, command) {
+    var uid = String(command && command.presetUid || ''), name = String(command && command.name || ''), i, match = null, count = 0;
+    if (uid) {
+        for (i = 0; i < library.presets.length; i++) if (library.presets[i].uid === uid) return library.presets[i];
+    }
+    for (i = 0; i < library.presets.length; i++) if (library.presets[i].catalogName === name) return library.presets[i];
+    for (i = 0; i < library.presets.length; i++) {
+        if (library.presets[i].name === name) { match = library.presets[i]; count++; }
+    }
+    return count === 1 ? match : null;
+};
+
+prfx.safeAppendUserPresetCatalog = function (target) {
+    var library, list = [], i, preset;
+    try {
+        library = prfx.loadPresetLibrary();
+        for (i = 0; i < library.presets.length; i++) {
+            preset = library.presets[i];
+            list.push({ type: 'preset', name: preset.catalogName, presetUid: preset.uid || '', transitionFrames: 30 });
+        }
+        list.sort(function (a, b) {
+            var an = a.name.toLowerCase(), bn = b.name.toLowerCase();
+            return an < bn ? -1 : (an > bn ? 1 : 0);
+        });
+        for (i = 0; i < list.length; i++) target.push(list[i]);
+    } catch (ignore) {}
+};
+
+// ---------------------------------------------------------------------------
+// Defaults baseline
+//
+// Binary params (arb blobs, private data) cannot be written through the DOM,
+// so a preset is only safe to recreate when they hold their defaults. The
+// default of a param is the majority value across every preset of the same
+// effect on this machine: the editor's own files plus Premiere's bundled
+// Factory and Lumetri presets (first 3 MB only -- the Lumetri file is 24 MB).
+// Keyed by ParameterID; binary values only compare between presets of the
+// same param layout, because the blobs change format between versions.
+// ---------------------------------------------------------------------------
+
+prfx.bundledPresetFiles = function () {
+    var roots = [], out = [], seen = {}, i, j, apps, locales, base, names = ['Factory Presets.prfpset', 'Lumetri Presets.prfpset'], file, localeFolder;
+    function addRoot(folder) {
+        try {
+            folder = folder instanceof Folder ? folder : new Folder(String(folder));
+            if (folder.exists && !seen[folder.fsName]) { seen[folder.fsName] = true; roots.push(folder); }
+        } catch (ignore) {}
+    }
+    try { if (Folder.appPackage) addRoot(Folder.appPackage); } catch (packageError) {}
+    try {
+        apps = new Folder('/Applications').getFiles(function (entry) { return entry instanceof Folder && entry.name.indexOf('Adobe%20Premiere%20Pro') === 0 || (entry instanceof Folder && entry.displayName && entry.displayName.indexOf('Adobe Premiere Pro') === 0); });
+        apps.sort(function (a, b) { return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0); });
+        for (i = 0; i < apps.length; i++) {
+            var inner = apps[i].getFiles(function (entry) { return entry instanceof Folder && /\.app$/i.test(entry.name); });
+            for (j = 0; j < inner.length; j++) addRoot(inner[j]);
+        }
+    } catch (scanError) {}
+    // Windows (UNVERIFIED on a real install): C:\Program Files\Adobe\Adobe
+    // Premiere Pro <ver>\Settings\LocalizedPresets or \LocalizedPresets.
+    if (prfx.isWindows()) {
+        try {
+            var programFiles = new Folder((Folder.commonFiles && Folder.commonFiles.parent ? Folder.commonFiles.parent.fsName : 'C:/Program Files') + '/Adobe');
+            apps = programFiles.exists ? programFiles.getFiles(function (entry) { return entry instanceof Folder && String(entry.displayName || decodeURI(entry.name)).indexOf('Adobe Premiere Pro') === 0; }) : [];
+            apps.sort(function (a, b) { return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0); });
+            for (i = 0; i < apps.length; i++) addRoot(apps[i]);
+        } catch (windowsScanError) {}
+    }
+    var layouts = ['/Contents/Resources/LocalizedPresets/', '/Settings/LocalizedPresets/', '/LocalizedPresets/'];
+    for (i = 0; i < roots.length * layouts.length && !out.length; i++) {
+        base = roots[Math.floor(i / layouts.length)].fsName + layouts[i % layouts.length];
+        locales = ['en_US'];
+        try { if ($.locale) locales.unshift(String($.locale)); } catch (localeError) {}
+        for (j = 0; j < locales.length && !out.length; j++) {
+            localeFolder = new Folder(base + locales[j] + '/Effect Presets');
+            if (!localeFolder.exists) continue;
+            for (var k = 0; k < names.length; k++) {
+                file = new File(localeFolder.fsName + '/' + names[k]);
+                if (file.exists) out.push(file);
+            }
+        }
+    }
+    return out;
+};
+
+prfx.presetBaselineSources = function () {
+    var sources = [], user = prfx.userPresetFiles(), bundled = prfx.bundledPresetFiles(), i;
+    for (i = 0; i < user.length; i++) sources.push({ file: user[i], maxChars: 0 });
+    for (i = 0; i < bundled.length; i++) sources.push({ file: bundled[i], maxChars: prfx.PRESET_BASELINE_PREFIX_CHARS });
+    return sources;
+};
+
+prfx.presetValueKey = function (value) {
+    var i, parts;
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'number') return String(Math.round(value * 10000) / 10000);
+    if (typeof value === 'object' && typeof value.length === 'number') {
+        parts = [];
+        for (i = 0; i < value.length; i++) parts.push(prfx.presetValueKey(value[i]));
+        return parts.join(':');
+    }
+    return String(value);
+};
+
+prfx.presetBaselineFor = function (matchName) {
+    var sources = prfx.presetBaselineSources(), stamps = [], key, cached, baseline, i, j, k, doc, presets, effect, params, param, votes, bucket, vk;
+    for (i = 0; i < sources.length; i++) stamps.push(sources[i].file.fsName + '=' + prfx.presetFileStamp(sources[i].file));
+    key = matchName + '|' + stamps.join('|');
+    cached = prfx.presetBaselineCache[matchName];
+    if (cached && cached.key === key) return cached;
+    votes = {};
+    baseline = { key: key, matchName: matchName, samples: 0, values: {}, sources: [] };
+    function vote(slot, valueKey, value) {
+        bucket = votes[slot];
+        if (!bucket) bucket = votes[slot] = { total: 0, counts: {}, values: {} };
+        bucket.total++;
+        bucket.counts[valueKey] = (bucket.counts[valueKey] || 0) + 1;
+        bucket.values[valueKey] = value;
+    }
+    for (i = 0; i < sources.length; i++) {
+        doc = prfx.loadPresetDocument(sources[i].file, sources[i].maxChars);
+        if (!doc) continue;
+        baseline.sources.push(doc.path + (doc.truncated ? ' (first ' + sources[i].maxChars + ' chars)' : ''));
+        presets = prfx.presetDocumentPresets(doc);
+        for (j = 0; j < presets.length; j++) {
+            for (k = 0; k < presets[j].effects.length; k++) {
+                effect = presets[j].effects[k];
+                if (effect.matchName !== matchName) continue;
+                params = prfx.presetEffectParams(effect);
+                baseline.samples++;
+                for (var p = 0; p < params.length; p++) {
+                    param = params[p];
+                    if (!param.parameterId) continue;
+                    if (param.kind === 'arb') {
+                        vote('arb|' + effect.layoutSig + '|' + param.idKey, param.arbData, param.arbData);
+                    } else if (param.kind !== 'group-start' && param.kind !== 'group-end' && param.value !== null && !param.keyframes.length) {
+                        vk = prfx.presetValueKey(param.value);
+                        vote('v|' + param.idKey, vk, param.value);
+                    }
+                }
+                vote('private|' + effect.layoutSig, effect.privateData, effect.privateData);
+            }
+        }
+    }
+    for (var slot in votes) {
+        if (!votes.hasOwnProperty(slot)) continue;
+        bucket = votes[slot];
+        var bestKey = null, bestCount = 0;
+        for (vk in bucket.counts) {
+            if (bucket.counts.hasOwnProperty(vk) && bucket.counts[vk] > bestCount) { bestKey = vk; bestCount = bucket.counts[vk]; }
+        }
+        baseline.values[slot] = {
+            known: bucket.total >= prfx.PRESET_BASELINE_MIN_SAMPLES && bestCount * 2 > bucket.total,
+            value: bestKey === null ? null : bucket.values[bestKey],
+            count: bestCount,
+            total: bucket.total
+        };
+    }
+    prfx.presetBaselineCache[matchName] = baseline;
+    return baseline;
+};
+
+prfx.presetBaselineDefault = function (baseline, effect, param) {
+    var entry;
+    if (!baseline || !param.parameterId) return { known: false, value: null, count: 0, total: 0 };
+    entry = param.kind === 'arb' ? baseline.values['arb|' + effect.layoutSig + '|' + param.idKey] : baseline.values['v|' + param.idKey];
+    return entry || { known: false, value: null, count: 0, total: 0 };
+};
+
+prfx.presetPrivateDefault = function (baseline, effect) {
+    var entry = baseline ? baseline.values['private|' + effect.layoutSig] : null;
+    return entry || { known: false, value: null, count: 0, total: 0 };
+};
+
+// ---------------------------------------------------------------------------
+// Comparison
+// ---------------------------------------------------------------------------
+
+prfx.presetBool = function (value) {
+    if (value === true || value === 1 || value === 'true') return 1;
+    if (value === false || value === 0 || value === 'false') return 0;
+    return NaN;
+};
+
+prfx.presetIsList = function (value) {
+    return value !== null && typeof value === 'object' && typeof value.length === 'number';
+};
+
+prfx.presetValuesEqual = function (kind, a, b) {
+    var i, tolerance, x, y;
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    if (typeof a === 'boolean' || typeof b === 'boolean' || kind === 'bool') {
+        x = prfx.presetBool(a); y = prfx.presetBool(b);
+        return !isNaN(x) && x === y;
+    }
+    if (prfx.presetIsList(a) || prfx.presetIsList(b)) {
+        if (!prfx.presetIsList(a) || !prfx.presetIsList(b) || a.length !== b.length) return false;
+        for (i = 0; i < a.length; i++) {
+            x = Number(a[i]); y = Number(b[i]);
+            tolerance = kind === 'color' ? 1.01 : Math.max(0.0005, Math.abs(x) * 0.00001);
+            if (isNaN(x) || isNaN(y) || Math.abs(x - y) > tolerance) return false;
+        }
+        return true;
+    }
+    if (typeof a === 'string' && typeof b === 'string') return a === b;
+    x = Number(a); y = Number(b);
+    if (isNaN(x) || isNaN(y)) return String(a) === String(b);
+    return Math.abs(x - y) <= Math.max(0.0005, Math.abs(x) * 0.00001);
+};
+
+prfx.describePresetValue = function (value) {
+    var i, parts;
+    if (value === null || value === undefined) return '-';
+    if (prfx.presetIsList(value)) {
+        parts = [];
+        for (i = 0; i < value.length; i++) parts.push(typeof value[i] === 'number' ? String(Math.round(value[i] * 10000) / 10000) : String(value[i]));
+        return '[' + parts.join(', ') + ']';
+    }
+    if (typeof value === 'number') return String(Math.round(value * 10000) / 10000);
+    if (typeof value === 'string') return value.length > 24 ? value.substring(0, 24) + '...(' + value.length + ')' : value;
+    return String(value);
+};
+
+// ---------------------------------------------------------------------------
+// Analysis
+//
+// defaults(param) -> { known, value } decides what "default" means: the
+// baseline for the static report, the freshly added effect's own values
+// (then the baseline) at apply time.
+//
+// Statuses: meta, group, write (must land), keys (keyframes must land),
+// default (already default, nothing to do), try (hidden param, written when
+// it can be located, otherwise assumed default), inferred (binary param
+// assumed default because nothing near it was edited), live-check (static
+// report only: needs the live effect to decide), blocked.
+//
+// Binary params have no default of their own most of the time, so their
+// group decides: an arb is assumed untouched only when every visible param in
+// its innermost group is still at default. A group with an unknown visible
+// sibling counts as touched at apply time.
+// ---------------------------------------------------------------------------
+
+prfx.analyzePresetEffect = function (effect, baseline, defaults, mode) {
+    var params = prfx.presetEffectParams(effect), out = [], groups = {}, i, param, def, status, reason, groupState, privateDefault, result;
+    result = { effect: effect, rows: out, blocked: [], inferred: [], liveChecks: [], writes: 0, keyed: 0, eased: 0, fidelity: 'exact', privateStatus: 'none' };
+
+    for (i = 0; i < params.length; i++) {
+        param = params[i];
+        def = defaults(param);
+        param.defaultKnown = def.known === true;
+        param.defaultValue = def.value;
+        param.isDefault = def.known === true && !param.keyframes.length ? prfx.presetValuesEqual(param.kind, param.value, def.value) : (param.keyframes.length ? false : null);
+        if (prfx.isPresetVisibleKind(param.kind) && !prfx.isPresetMetaParam(param) && param.name) {
+            if (!groups[param.groupId]) groups[param.groupId] = { touched: false, unknown: false, names: [] };
+            if (param.isDefault === false) { groups[param.groupId].touched = true; groups[param.groupId].names.push(param.name); }
+            else if (param.isDefault === null) groups[param.groupId].unknown = true;
+        }
+    }
+
+    for (i = 0; i < params.length; i++) {
+        param = params[i];
+        reason = '';
+        if (param.kind === 'group-start' || param.kind === 'group-end') status = 'group';
+        else if (prfx.isPresetMetaParam(param)) status = 'meta';
+        else if (param.keyError) { status = 'blocked'; reason = param.keyError; }
+        else if (param.kind === 'arb') {
+            def = prfx.presetBaselineDefault(baseline, effect, param);
+            groupState = groups[param.groupId] || { touched: false, unknown: false, names: [] };
+            if (def.known) {
+                if (def.value === param.arbData) status = 'default';
+                else { status = 'blocked'; reason = 'binary data differs from the default (' + def.count + ' of ' + def.total + ' presets)'; }
+            } else if (groupState.touched) {
+                status = 'blocked';
+                reason = 'binary setting in ' + (param.groupName ? 'group "' + param.groupName + '"' : 'the top level') +
+                    ', which this preset edits (' + groupState.names.slice(0, 3).join(', ') + ')';
+            } else if (groupState.unknown) {
+                if (mode === 'live') { status = 'blocked'; reason = 'binary setting next to parameters whose defaults are unknown'; }
+                else status = 'live-check';
+            } else status = 'inferred';
+        } else if (param.value === null) {
+            if (param.kind === 'hidden') status = 'inferred';
+            else { status = 'blocked'; reason = 'unreadable value "' + param.rawValue + '"'; }
+        } else if (param.keyframes.length) {
+            if (param.kind === 'color') { status = 'blocked'; reason = 'animated colour'; }
+            else status = 'keys';
+        } else if (param.kind === 'hidden') {
+            if (param.isDefault === true) status = 'default';
+            else if (param.isDefault === false) status = 'write';
+            else status = 'try';
+        } else status = (param.isDefault === true && mode !== 'live') ? 'default' : 'write';
+
+        if (status === 'write') result.writes++;
+        if (status === 'keys') { result.keyed++; result.eased += param.easedKeys; }
+        if (status === 'blocked') result.blocked.push(prfx.presetParamLabel(param) + ': ' + reason);
+        if (status === 'inferred') result.inferred.push(prfx.presetParamLabel(param));
+        if (status === 'live-check') result.liveChecks.push(prfx.presetParamLabel(param));
+        out.push({ param: param, status: status, reason: reason });
+    }
+
+    if (effect.privateData) {
+        privateDefault = prfx.presetPrivateDefault(baseline, effect);
+        if (privateDefault.known && privateDefault.value === effect.privateData) result.privateStatus = 'default';
+        else if (privateDefault.known) {
+            result.privateStatus = 'blocked';
+            result.blocked.push('private effect data differs from the default (' + privateDefault.count + ' of ' + privateDefault.total + ' presets)');
+        } else {
+            result.privateStatus = 'inferred';
+            result.inferred.push('private effect data');
+        }
+    }
+    if (result.blocked.length) result.fidelity = 'blocked';
+    else if (result.liveChecks.length) result.fidelity = 'live-check';
+    else if (result.inferred.length) result.fidelity = 'inferred';
+    return result;
+};
+
+prfx.presetParamLabel = function (param) {
+    return '"' + (param.name || '(unnamed)') + '"' + (param.groupName ? ' in ' + param.groupName : '') + ' [#' + param.parameterId + ']';
+};
+
+prfx.presetStaticAnalysis = function (preset) {
+    var analyses = [], fidelity = 'exact', rank = { exact: 0, inferred: 1, 'live-check': 2, blocked: 3 }, i, effect, baseline, analysis;
+    for (i = 0; i < preset.effects.length; i++) {
+        effect = preset.effects[i];
+        baseline = prfx.presetBaselineFor(effect.matchName);
+        analysis = prfx.analyzePresetEffect(effect, baseline, (function (b, e) {
+            return function (param) { return prfx.presetBaselineDefault(b, e, param); };
+        })(baseline, effect), 'static');
+        analysis.baseline = baseline;
+        analyses.push(analysis);
+        if (rank[analysis.fidelity] > rank[fidelity]) fidelity = analysis.fidelity;
+    }
+    return { analyses: analyses, fidelity: fidelity };
+};
+
+// ---------------------------------------------------------------------------
+// DOM access
+// ---------------------------------------------------------------------------
+
+prfx.presetComponentList = function (clip) {
+    var out = [], components, count, i, component;
+    try { components = clip.components; count = Number(components.numItems || components.length || 0); } catch (error) { return out; }
+    for (i = 0; i < count; i++) {
+        try { component = components[i]; } catch (componentError) { component = null; }
+        if (component) out.push(component);
+    }
+    return out;
+};
+
+prfx.presetCountComponents = function (clip, matchName) {
+    var list = prfx.presetComponentList(clip), count = 0, i;
+    for (i = 0; i < list.length; i++) { try { if (String(list[i].matchName || '') === matchName) count++; } catch (ignore) {} }
+    return count;
+};
+
+prfx.presetComponentAt = function (clip, matchName, occurrence) {
+    var list = prfx.presetComponentList(clip), seen = 0, i;
+    for (i = 0; i < list.length; i++) {
+        try {
+            if (String(list[i].matchName || '') !== matchName) continue;
+        } catch (ignore) { continue; }
+        if (seen === occurrence) return list[i];
+        seen++;
+    }
+    return null;
+};
+
+prfx.presetPropertyList = function (component) {
+    var out = [], properties, count, i, property, name;
+    try { properties = component.properties; count = Number(properties.numItems || properties.length || 0); } catch (error) { return out; }
+    for (i = 0; i < count; i++) {
+        try { property = properties[i]; } catch (propertyError) { property = null; }
+        try { name = prfx.presetTrim(property ? property.displayName : ''); } catch (nameError) { name = ''; }
+        out.push({ index: i, property: property, name: name, normalized: prfx.normalizedPresetLabel(name) });
+    }
+    return out;
+};
+
+// Index mapping when the DOM exposes exactly the preset's param list (every
+// named pair agreeing); otherwise by name + occurrence, trusted only when the
+// name occurs the same number of times on both sides. Blank names are never
+// matched by name.
+prfx.mapPresetParamsToDom = function (params, domList) {
+    var map = [], agree = params.length === domList.length, i, pn, dn, presetCount = {}, domCount = {}, domByName = {}, seen = {}, mapped = 0;
+    if (agree) {
+        for (i = 0; i < params.length; i++) {
+            pn = prfx.normalizedPresetLabel(params[i].name);
+            dn = domList[i].normalized;
+            if (pn && dn && pn !== dn) { agree = false; break; }
+        }
+    }
+    if (agree) {
+        for (i = 0; i < params.length; i++) map.push(domList[i].property ? domList[i] : null);
+        return { method: 'index', map: map, mapped: params.length };
+    }
+    // A DOM that hides internal params shows fewer copies of a duplicated
+    // name ("Input LUT" popup + hidden twin); then only the visible copies
+    // are matched, in order.
+    var visibleCount = {}, visibleSeen = {};
+    for (i = 0; i < params.length; i++) {
+        pn = prfx.normalizedPresetLabel(params[i].name);
+        if (pn) presetCount[pn] = (presetCount[pn] || 0) + 1;
+        if (pn && prfx.isPresetVisibleKind(params[i].kind)) visibleCount[pn] = (visibleCount[pn] || 0) + 1;
+    }
+    for (i = 0; i < domList.length; i++) {
+        dn = domList[i].normalized;
+        if (!dn || !domList[i].property) continue;
+        domCount[dn] = (domCount[dn] || 0) + 1;
+        if (!domByName[dn]) domByName[dn] = [];
+        domByName[dn].push(domList[i]);
+    }
+    for (i = 0; i < params.length; i++) {
+        pn = prfx.normalizedPresetLabel(params[i].name);
+        if (pn && presetCount[pn] !== domCount[pn] && visibleCount[pn] === domCount[pn] && prfx.isPresetVisibleKind(params[i].kind)) {
+            visibleSeen[pn] = (visibleSeen[pn] || 0) + 1;
+            map.push(domByName[pn][visibleSeen[pn] - 1]);
+            mapped++;
+            continue;
+        }
+        if (!pn || presetCount[pn] !== domCount[pn]) { map.push(null); continue; }
+        seen[pn] = (seen[pn] || 0) + 1;
+        map.push(domByName[pn][seen[pn] - 1]);
+        mapped++;
+    }
+    return { method: 'name', map: map, mapped: mapped };
+};
+
+prfx.readPresetDomValue = function (property, kind) {
+    var value;
+    if (!property) return null;
+    if (kind === 'color') {
+        try {
+            value = property.getColorValue();
+            if (prfx.presetIsList(value) && value.length === 4) return [Number(value[0]), Number(value[1]), Number(value[2]), Number(value[3])];
+        } catch (colorError) {}
+        return null;
+    }
+    try { value = property.getValue(); } catch (readError) { return null; }
+    if (prfx.presetIsList(value) && typeof value !== 'string') {
+        var copy = [], i;
+        for (i = 0; i < value.length; i++) copy.push(Number(value[i]));
+        return copy;
+    }
+    return value;
+};
+
+prfx.presetPropertyIsVarying = function (property) {
+    try { return property.isTimeVarying() === true; } catch (error) { return false; }
+};
+
+prfx.writePresetStatic = function (property, param) {
+    var value = param.value, forms = [], i;
+    if (param.kind === 'color') {
+        try { property.setColorValue(value[0], value[1], value[2], value[3], true); } catch (colorError) {}
+        return prfx.presetValuesEqual('color', value, prfx.readPresetDomValue(property, 'color'));
+    }
+    if (prfx.presetIsList(value)) forms.push([Number(value[0]), Number(value[1])]);
+    else forms.push(value);
+    if (typeof value === 'boolean') forms.push(value ? 1 : 0);
+    for (i = 0; i < forms.length; i++) {
+        try { property.setValue(forms[i], true); } catch (firstError) {}
+        if (prfx.presetValuesEqual(param.kind, value, prfx.readPresetDomValue(property, param.kind))) return true;
+        try { property.setValue(forms[i]); } catch (secondError) {}
+        if (prfx.presetValuesEqual(param.kind, value, prfx.readPresetDomValue(property, param.kind))) return true;
+    }
+    if (prfx.presetIsList(value) && value.length === 2) {
+        try { property.setValue(Number(value[0]), Number(value[1])); } catch (pairError) {}
+        if (prfx.presetValuesEqual(param.kind, value, prfx.readPresetDomValue(property, param.kind))) return true;
+    }
+    return false;
+};
+
+// Where the clip's source range sits, which is the frame keyframes live in.
+prfx.presetKeyTarget = function (publicClip) {
+    var target = { inTicks: NaN, outTicks: NaN, speed: 1, reversed: false };
+    try { target.inTicks = Number(publicClip.inPoint.ticks); } catch (inError) {}
+    try { target.outTicks = Number(publicClip.outPoint.ticks); } catch (outError) {}
+    try { target.speed = prfx.speedRatioFromPremiereValue(publicClip.getSpeed()); } catch (speedError) {}
+    try { target.reversed = publicClip.isSpeedReversed() === true || publicClip.isSpeedReversed() === 1; } catch (reverseError) {}
+    return target;
+};
+
+// Type 1 anchors keys to the clip start, type 2 to the clip end, type 0
+// scales them across the clip. Offsets are in source ticks, so they scale by
+// the target's speed relative to the speed the preset was saved at.
+prfx.mapPresetKeyTicks = function (effect, ticks, target) {
+    var ratio = Math.abs(target.speed) / (effect.speed || 1), span;
+    if (effect.anchorType === 2) return target.outTicks - (effect.anchorOut - ticks) * ratio;
+    if (effect.anchorType === 0) {
+        span = effect.anchorOut - effect.anchorIn;
+        if (span > 0) return target.inTicks + (ticks - effect.anchorIn) / span * (target.outTicks - target.inTicks);
+    }
+    return target.inTicks + (ticks - effect.anchorIn) * ratio;
+};
+
+prfx.presetTime = function (ticks) {
+    var time = new Time();
+    time.ticks = String(Math.round(ticks));
+    return time;
+};
+
+// Returns '' on success, or why it failed.
+prfx.writePresetKeys = function (property, param, effect, target) {
+    var keys = param.keyframes, i, time, value, readBack, landed;
+    try { if (typeof property.areKeyframesSupported === 'function' && property.areKeyframesSupported() === false) return 'Premiere does not allow keyframes on it'; } catch (supportError) {}
+    try { property.setTimeVarying(true); } catch (varyError) {}
+    if (!prfx.clearPropertyKeys(property)) return 'its existing keyframes could not be cleared';
+    for (i = 0; i < keys.length; i++) {
+        time = prfx.presetTime(prfx.mapPresetKeyTicks(effect, keys[i].ticks, target));
+        value = prfx.presetIsList(keys[i].value) ? [Number(keys[i].value[0]), Number(keys[i].value[1])] : keys[i].value;
+        try { property.addKey(time); } catch (addError) {}
+        try { property.setValueAtKey(time, value, true); } catch (setError) {}
+        try { readBack = property.getValueAtKey(time); } catch (readError) { readBack = null; }
+        if (!prfx.presetValuesEqual(param.kind, keys[i].value, readBack)) return 'keyframe ' + (i + 1) + ' of ' + keys.length + ' did not take';
+    }
+    landed = prfx.countPropertyKeys(property);
+    return landed === keys.length ? '' : (landed + ' of ' + keys.length + ' keyframes landed');
+};
+
+prfx.verifyPresetKeys = function (property, param, effect, target) {
+    var i, readBack;
+    if (prfx.countPropertyKeys(property) !== param.keyframes.length) return false;
+    for (i = 0; i < param.keyframes.length; i++) {
+        try { readBack = property.getValueAtKey(prfx.presetTime(prfx.mapPresetKeyTicks(effect, param.keyframes[i].ticks, target))); } catch (readError) { return false; }
+        if (!prfx.presetValuesEqual(param.kind, param.keyframes[i].value, readBack)) return false;
+    }
+    return true;
+};
+
+// ---------------------------------------------------------------------------
+// Recreate route: one effect onto one clip. Throws on any failure; the caller
+// rolls the whole run back.
+// ---------------------------------------------------------------------------
+
+prfx.presetFail = function (message) { throw new Error(message); };
+
+prfx.recreatePresetEffect = function (publicSequence, effect, baseline, detail, stats) {
+    var params = prfx.presetEffectParams(effect), clipName = detail.name || 'clip', label = effect.displayName || effect.matchName;
+    var publicClip, intrinsic = prfx.PRESET_INTRINSIC_MATCH_NAMES[effect.matchName] === true, before, effectItem, occurrence, component, attempt, count;
+    var domList, mapping, fresh, freshValues = [], analysis, target, i, row, param, dom, current, error, written = [];
+
+    publicClip = prfx.resolveMovePublicClipAt(publicSequence, { kind: effect.kind }, detail.trackIndex, detail.start, detail.end);
+    if (!publicClip) prfx.presetFail('could not resolve "' + clipName + '" in the active sequence');
+    before = prfx.presetCountComponents(publicClip, effect.matchName);
+    if (!intrinsic) {
+        effectItem = prfx.resolveQEPresetEffect(effect.kind, effect.displayName, effect.matchName, '');
+        if (!effectItem) {
+            if (before > 0) intrinsic = true;
+            else prfx.presetFail('effect "' + label + '" (' + effect.matchName + ') is not installed');
+        }
+    }
+    if (intrinsic) {
+        if (before < 1) prfx.presetFail('"' + clipName + '" has no ' + label + ' component to write into');
+        occurrence = 0;
+    } else {
+        try {
+            if (effect.kind === 'audio') detail.clip.addAudioEffect(effectItem);
+            else detail.clip.addVideoEffect(effectItem);
+        } catch (addError) { prfx.presetFail('Premiere refused to add "' + label + '" to "' + clipName + '": ' + addError.toString()); }
+        stats.effects++;
+        occurrence = before;
+        for (attempt = 0; attempt < 20; attempt++) {
+            publicClip = prfx.resolveMovePublicClipAt(publicSequence, { kind: effect.kind }, detail.trackIndex, detail.start, detail.end);
+            count = publicClip ? prfx.presetCountComponents(publicClip, effect.matchName) : -1;
+            if (count === before + 1) break;
+            try { $.sleep(50); } catch (sleepError) {}
+        }
+        // Counting by matchName also proves QE added the right effect: a
+        // same-named effect of another kind would not raise this count.
+        if (count !== before + 1) prfx.presetFail('Premiere did not publish "' + label + '" on "' + clipName + '" after adding it');
+    }
+    component = prfx.presetComponentAt(publicClip, effect.matchName, occurrence);
+    if (!component) prfx.presetFail('could not locate "' + label + '" on "' + clipName + '"');
+
+    domList = prfx.presetPropertyList(component);
+    mapping = prfx.mapPresetParamsToDom(params, domList);
+    fresh = !intrinsic;
+    for (i = 0; i < params.length; i++) {
+        dom = mapping.map[i];
+        freshValues.push(fresh && dom ? prfx.readPresetDomValue(dom.property, params[i].kind) : null);
+    }
+    analysis = prfx.analyzePresetEffect(effect, baseline, function (p) {
+        var v = freshValues[p.ordinal];
+        if (fresh && v !== null && v !== undefined) return { known: true, value: v };
+        return prfx.presetBaselineDefault(baseline, effect, p);
+    }, 'live');
+    if (analysis.blocked.length) prfx.presetFail('"' + label + '" holds settings PR FX cannot write: ' + analysis.blocked.slice(0, 3).join('; '));
+
+    target = prfx.presetKeyTarget(publicClip);
+    if (analysis.keyed && (isNaN(target.inTicks) || isNaN(target.outTicks))) prfx.presetFail('could not read the source range of "' + clipName + '"');
+    if (analysis.keyed && target.reversed) prfx.presetFail('"' + clipName + '" plays reversed; animated presets are not mapped onto reversed clips');
+
+    for (i = 0; i < analysis.rows.length; i++) {
+        row = analysis.rows[i];
+        param = row.param;
+        if (row.status !== 'write' && row.status !== 'keys' && row.status !== 'try') continue;
+        dom = mapping.map[param.ordinal];
+        if (!dom || !dom.property) {
+            // Blank-named params cannot be located by name. They are written
+            // when index mapping finds them; otherwise they count as assumed
+            // default unless the baseline proves the preset changed them.
+            if (row.status === 'try' || (!param.name && param.isDefault !== false)) { stats.inferred++; continue; }
+            if (row.status === 'write' && param.isDefault === true) continue;
+            prfx.presetFail('could not find ' + prfx.presetParamLabel(param) + ' on "' + label + '" (' + mapping.method + ' mapping)');
+        }
+        if (row.status === 'keys') {
+            error = prfx.writePresetKeys(dom.property, param, effect, target);
+            if (error) prfx.presetFail(prfx.presetParamLabel(param) + ' on "' + clipName + '": ' + error);
+            stats.keys += param.keyframes.length;
+            written.push(row);
+            continue;
+        }
+        if (prfx.presetPropertyIsVarying(dom.property)) {
+            // Only an intrinsic (Motion, Opacity) can arrive animated. A static
+            // preset value cannot coexist with the clip's own animation.
+            if (!fresh) prfx.presetFail(prfx.presetParamLabel(param) + ' is keyframed on "' + clipName + '"; applying the preset would discard that animation');
+            try { dom.property.setTimeVarying(false); } catch (staticError) {}
+        }
+        current = prfx.readPresetDomValue(dom.property, param.kind);
+        if (prfx.presetValuesEqual(param.kind, param.value, current)) { stats.same++; written.push(row); continue; }
+        if (!prfx.writePresetStatic(dom.property, param)) {
+            prfx.presetFail('Premiere refused ' + prfx.presetParamLabel(param) + ' = ' + prfx.describePresetValue(param.value) +
+                ' on "' + clipName + '" (reads back ' + prfx.describePresetValue(prfx.readPresetDomValue(dom.property, param.kind)) + ')');
+        }
+        stats.writes++;
+        written.push(row);
+    }
+    stats.inferred += analysis.inferred.length;
+    stats.eased += analysis.eased;
+
+    // Re-resolve from the sequence and read everything back. A detached
+    // wrapper can confirm a write that never reached the published clip.
+    publicClip = prfx.resolveMovePublicClipAt(publicSequence, { kind: effect.kind }, detail.trackIndex, detail.start, detail.end);
+    component = publicClip ? prfx.presetComponentAt(publicClip, effect.matchName, occurrence) : null;
+    if (!component) prfx.presetFail('"' + label + '" disappeared from "' + clipName + '" during verification');
+    domList = prfx.presetPropertyList(component);
+    mapping = prfx.mapPresetParamsToDom(params, domList);
+    for (i = 0; i < written.length; i++) {
+        param = written[i].param;
+        dom = mapping.map[param.ordinal];
+        if (!dom || !dom.property) prfx.presetFail('could not re-read ' + prfx.presetParamLabel(param) + ' on "' + clipName + '"');
+        if (written[i].status === 'keys') {
+            if (!prfx.verifyPresetKeys(dom.property, param, effect, target)) prfx.presetFail('keyframes of ' + prfx.presetParamLabel(param) + ' did not survive on "' + clipName + '"');
+        } else if (!prfx.presetValuesEqual(param.kind, param.value, prfx.readPresetDomValue(dom.property, param.kind))) {
+            prfx.presetFail(prfx.presetParamLabel(param) + ' did not survive on "' + clipName + '"');
+        }
+    }
+    stats.clips[detail.trackIndex + ':' + detail.start] = true;
+};
+
+// ---------------------------------------------------------------------------
+// Native Lumetri route
+//
+// app.project.applyLumetriPreset(name) exists on 26 and lists only bundled
+// names. Whether it accepts a user preset is unverified; it is only trusted
+// when a sequence-wide snapshot proves it added exactly one Lumetri to each
+// selected clip and nothing else, and the result reads back with the preset's
+// values. Anything else is rolled back.
+// ---------------------------------------------------------------------------
+
+prfx.presetClipKey = function (trackIndex, start, end) {
+    return trackIndex + ':' + Math.round(Number(start) * 10000) + ':' + Math.round(Number(end) * 10000);
+};
+
+prfx.presetComponentSnapshot = function (publicSequence, matchName) {
+    var snapshot = {}, tracks, trackCount, t, clips, clipCount, c, clip;
+    try { tracks = publicSequence.videoTracks; trackCount = Number(tracks.numTracks || tracks.length || 0); } catch (error) { return snapshot; }
+    for (t = 0; t < trackCount; t++) {
+        try { clips = tracks[t].clips; clipCount = Number(clips.numItems || clips.length || 0); } catch (clipsError) { continue; }
+        for (c = 0; c < clipCount; c++) {
+            try { clip = clips[c]; } catch (clipError) { continue; }
+            if (!clip) continue;
+            snapshot[prfx.presetClipKey(t, prfx.timeInSeconds(clip.start), prfx.timeInSeconds(clip.end))] = prfx.presetCountComponents(clip, matchName);
+        }
+    }
+    return snapshot;
+};
+
+prfx.presetSnapshotDiff = function (before, after, expected, perClip) {
+    var problems = [], key;
+    for (key in after) {
+        if (!after.hasOwnProperty(key)) continue;
+        if (before[key] === undefined) { problems.push('new clip ' + key); continue; }
+        if (after[key] - before[key] !== (expected[key] ? perClip : 0)) problems.push(key + ' ' + before[key] + '->' + after[key]);
+    }
+    for (key in before) {
+        if (before.hasOwnProperty(key) && after[key] === undefined) problems.push('clip ' + key + ' vanished');
+    }
+    return problems;
+};
+
+prfx.bundledLumetriPresetNames = function () {
+    var names = {}, list, count, i;
+    try {
+        list = app.project.getAllLumetriPresetsList();
+        count = list ? Number(list.length || list.numItems || 0) : 0;
+        for (i = 0; i < count; i++) names[String(list[i]).toLowerCase()] = true;
+    } catch (error) {}
+    return names;
+};
+
+prfx.presetIsLumetriOnly = function (preset) {
+    var i;
+    for (i = 0; i < preset.effects.length; i++) {
+        if (preset.effects[i].matchName !== prfx.PRESET_LUMETRI_MATCH_NAME || preset.effects[i].kind !== 'video') return false;
+    }
+    return preset.effects.length > 0;
+};
+
+// Returns { ok, called, returned, problems[], checked, mismatches[] }. Leaves
+// any change in place; the caller decides whether to roll back.
+prfx.tryNativeLumetriPreset = function (publicSequence, preset, details, nameOverride) {
+    var outcome = { ok: false, called: false, returned: '', problems: [], checked: 0, mismatches: [] };
+    var expected = {}, before, after, i, j, clip, component, params, mapping, dom, written = 0, perClip = preset ? preset.effects.length : 1, occurrence;
+    if (typeof app.project.applyLumetriPreset !== 'function') { outcome.problems.push('applyLumetriPreset is not available'); return outcome; }
+    for (i = 0; i < details.length; i++) expected[prfx.presetClipKey(details[i].trackIndex, details[i].start, details[i].end)] = true;
+    before = prfx.presetComponentSnapshot(publicSequence, prfx.PRESET_LUMETRI_MATCH_NAME);
+    try {
+        outcome.called = true;
+        outcome.returned = String(app.project.applyLumetriPreset(String(nameOverride || preset.name)));
+    } catch (callError) {
+        outcome.returned = 'threw: ' + callError.toString();
+        outcome.problems.push(outcome.returned);
+        return outcome;
+    }
+    after = prfx.presetComponentSnapshot(publicSequence, prfx.PRESET_LUMETRI_MATCH_NAME);
+    outcome.problems = prfx.presetSnapshotDiff(before, after, expected, perClip);
+    if (outcome.problems.length || !preset) { outcome.ok = !outcome.problems.length; return outcome; }
+    for (i = 0; i < details.length; i++) {
+        clip = prfx.resolveMovePublicClipAt(publicSequence, { kind: 'video' }, details[i].trackIndex, details[i].start, details[i].end);
+        for (j = 0; j < preset.effects.length; j++) {
+            occurrence = before[prfx.presetClipKey(details[i].trackIndex, details[i].start, details[i].end)] + j;
+            component = clip ? prfx.presetComponentAt(clip, prfx.PRESET_LUMETRI_MATCH_NAME, occurrence) : null;
+            if (!component) { outcome.problems.push('no new Lumetri on ' + details[i].name); continue; }
+            params = prfx.presetEffectParams(preset.effects[j]);
+            mapping = prfx.mapPresetParamsToDom(params, prfx.presetPropertyList(component));
+            for (var p = 0; p < params.length; p++) {
+                if (!prfx.isPresetVisibleKind(params[p].kind) || prfx.isPresetMetaParam(params[p]) || params[p].value === null || params[p].keyframes.length) continue;
+                written++;
+                dom = mapping.map[p];
+                if (!dom || !dom.property) continue;
+                outcome.checked++;
+                if (!prfx.presetValuesEqual(params[p].kind, params[p].value, prfx.readPresetDomValue(dom.property, params[p].kind))) {
+                    outcome.mismatches.push(prfx.presetParamLabel(params[p]) + ' wants ' + prfx.describePresetValue(params[p].value) +
+                        ', reads ' + prfx.describePresetValue(prfx.readPresetDomValue(dom.property, params[p].kind)));
+                }
+            }
+        }
+    }
+    if (written && !outcome.checked) outcome.problems.push('none of the preset values could be located to verify');
+    if (outcome.mismatches.length) outcome.problems.push(outcome.mismatches.length + ' value(s) differ from the preset');
+    outcome.ok = !outcome.problems.length;
+    return outcome;
+};
+
+// ---------------------------------------------------------------------------
+// Command
+// ---------------------------------------------------------------------------
+
+prfx.presetNotFoundMessage = function (command) {
+    return 'ERROR: Could not find saved preset "' + String(command && command.name || '') + '" in Premiere\'s preset file. ' +
+        'Premiere writes new presets to disk only when it quits - quit Premiere once after saving a preset, then reopen the palette.';
+};
+
+prfx.applyUserPresetCommand = function (publicSequence, sequence, command) {
+    var library = prfx.loadPresetLibrary(), preset = prfx.findLibraryPreset(library, command), staticResult, i, j, effect, kinds = {}, selected = {}, total = 0;
+    var checkpoint, stats, failure = '', rollback, nativeOutcome = null, nativeNote = '', bundledNames, notes = [], label, skippedKinds = [], reverted;
+    if (!preset) return prfx.presetNotFoundMessage(command);
+    label = preset.catalogName || preset.name;
+    for (i = 0; i < preset.effects.length; i++) {
+        effect = preset.effects[i];
+        if (!effect.kind) return 'ERROR: "' + label + '" contains a ' + effect.componentTag + ', which PR FX cannot apply.';
+        if (!effect.matchName) return 'ERROR: One effect in "' + label + '" has no stable effect identity.';
+        if (effect.matchName.indexOf('Time Remap') >= 0) return 'ERROR: "' + label + '" contains Time Remapping, which changes clip timing; PR FX does not recreate it.';
+        kinds[effect.kind] = true;
+    }
+    for (var kind in kinds) {
+        if (!kinds.hasOwnProperty(kind)) continue;
+        selected[kind] = prfx.getSelectedQEClipDetails(publicSequence, sequence, kind);
+        if (selected[kind].length) total += selected[kind].length;
+        else skippedKinds.push(kind);
+    }
+    if (!total) return prfx.selectionError(kinds.video ? 'video' : 'audio');
+
+    staticResult = prfx.presetStaticAnalysis(preset);
+    checkpoint = prfx.undoCheckpoint();
+
+    // Route 1: Premiere's own Lumetri apply, for Lumetri presets whose binary
+    // settings PR FX cannot prove are default.
+    if (prfx.presetIsLumetriOnly(preset) && staticResult.fidelity !== 'exact' && selected.video && selected.video.length &&
+        prfx.lumetriNativeRoute !== 'broken' && typeof app.project.applyLumetriPreset === 'function') {
+        bundledNames = prfx.bundledLumetriPresetNames();
+        if (bundledNames[preset.name.toLowerCase()]) nativeNote = 'native route skipped: the name matches a bundled Lumetri preset';
+        else {
+            nativeOutcome = prfx.tryNativeLumetriPreset(publicSequence, preset, selected.video);
+            if (nativeOutcome.ok) {
+                prfx.lumetriNativeRoute = 'works';
+                prfx.lumetriNativeRouteNote = 'verified on "' + preset.name + '"';
+                prfx.lastPaletteEffectCheckpoint = checkpoint;
+                prfx.lastPaletteEffectUndoCount = selected.video.length;
+                return 'Applied preset "' + label + '" to ' + selected.video.length + ' clip' + (selected.video.length === 1 ? '' : 's') +
+                    ' through Premiere\'s Lumetri apply (' + nativeOutcome.checked + ' value' + (nativeOutcome.checked === 1 ? '' : 's') + ' verified).';
+            }
+            reverted = prfx.revertToUndoCheckpoint(checkpoint, 200);
+            if (!reverted || reverted.ok !== true) {
+                return 'ERROR: Premiere\'s Lumetri apply did not match "' + label + '" (' + nativeOutcome.problems.slice(0, 2).join('; ') +
+                    ') and could not be rolled back - ' + ((reverted && reverted.message) || 'unknown reason') + '. Undo manually.';
+            }
+            // A call that did nothing, or touched the wrong clips, will do the
+            // same next time; stop paying for it this session.
+            if (!nativeOutcome.called || nativeOutcome.problems.length) {
+                prfx.lumetriNativeRoute = 'broken';
+                prfx.lumetriNativeRouteNote = nativeOutcome.problems.slice(0, 2).join('; ') + ' (returned ' + nativeOutcome.returned + ')';
+            }
+            nativeNote = 'Premiere\'s Lumetri apply was tried and rolled back: ' + nativeOutcome.problems.slice(0, 2).join('; ');
+        }
+    }
+
+    if (staticResult.fidelity === 'blocked') {
+        var reasons = [];
+        for (i = 0; i < staticResult.analyses.length; i++) reasons = reasons.concat(staticResult.analyses[i].blocked);
+        return 'ERROR: Cannot recreate "' + label + '" exactly: ' + reasons.slice(0, 3).join('; ') +
+            (reasons.length > 3 ? ' (+' + (reasons.length - 3) + ' more)' : '') + '. ' +
+            (nativeNote ? nativeNote + '. ' : '') + 'Nothing was changed. Run [System] Preset Report for details.';
+    }
+
+    stats = { effects: 0, writes: 0, same: 0, keys: 0, inferred: 0, eased: 0, clips: {} };
+    try {
+        for (i = 0; i < preset.effects.length; i++) {
+            effect = preset.effects[i];
+            for (j = 0; j < selected[effect.kind].length; j++) {
+                prfx.recreatePresetEffect(publicSequence, effect, staticResult.analyses[i].baseline, selected[effect.kind][j], stats);
+            }
+        }
+    } catch (error) { failure = error.message || error.toString(); }
 
     if (failure) {
-        rollback = prfx.revertToUndoCheckpoint(checkpoint, totalEffects * 8 + totalWrites * 4 + 24);
-        return 'ERROR: Mock preset apply stopped and was rolled back: ' + failure +
-            ((!rollback || rollback.ok !== true) ? ' Undo manually if Premiere kept a partial change.' : '') + '.';
+        rollback = prfx.revertToUndoCheckpoint(checkpoint, 400 + stats.effects * 8 + stats.writes * 4 + stats.keys * 4);
+        return 'ERROR: Preset "' + label + '" stopped and was rolled back: ' + failure + '.' +
+            ((!rollback || rollback.ok !== true) ? ' Rollback did not complete - undo manually.' : '') +
+            (nativeNote ? ' (' + nativeNote + '.)' : '');
     }
 
     prfx.lastPaletteEffectCheckpoint = checkpoint;
-    prfx.lastPaletteEffectUndoCount = totalEffects;
-    label = totalWrites ? (' with ' + totalWrites + ' public parameter write' + (totalWrites === 1 ? '' : 's')) : ' as a default effect';
-    return 'Recreated saved preset "' + preset.name + '" on ' + totalClips + ' selected clip' + (totalClips === 1 ? '' : 's') + label + '.';
+    prfx.lastPaletteEffectUndoCount = Math.max(1, stats.effects);
+    if (stats.keys) notes.push(stats.keys + ' keyframe' + (stats.keys === 1 ? '' : 's'));
+    if (stats.eased) notes.push(stats.eased + ' eased key' + (stats.eased === 1 ? '' : 's') + ' set linear');
+    if (stats.inferred) notes.push(stats.inferred + ' hidden setting' + (stats.inferred === 1 ? '' : 's') + ' assumed default');
+    if (skippedKinds.length) notes.push('no ' + skippedKinds.join('/') + ' clips selected for its ' + skippedKinds.join('/') + ' part');
+    var clipCount = 0;
+    for (var clipKey in stats.clips) if (stats.clips.hasOwnProperty(clipKey)) clipCount++;
+    return 'Applied preset "' + label + '" to ' + clipCount + ' clip' + (clipCount === 1 ? '' : 's') + ' (' +
+        stats.writes + ' value' + (stats.writes === 1 ? '' : 's') + ' written, all verified' + (notes.length ? '; ' + notes.join('; ') : '') + ').';
 };
 
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+prfx.presetReport = function () {
+    var library = prfx.loadPresetLibrary(), lines = [], counts = { exact: 0, inferred: 0, 'live-check': 0, blocked: 0 }, i, j, k, preset, result, analysis, effect, row, param, bundled = prfx.bundledPresetFiles(), path;
+    lines.push('PR FX preset report - host ' + prfx.HOST_BUILD + ' - ' + new Date().toString());
+    lines.push('Lumetri native route this session: ' + (prfx.lumetriNativeRoute || 'untested') + (prfx.lumetriNativeRouteNote ? ' (' + prfx.lumetriNativeRouteNote + ')' : ''));
+    lines.push('User preset files:');
+    for (i = 0; i < library.files.length; i++) lines.push('  ' + library.files[i].fsName + '  modified ' + library.files[i].modified);
+    for (i = 0; i < library.errors.length; i++) lines.push('  ! ' + library.errors[i]);
+    lines.push('Bundled baseline files (first ' + prfx.PRESET_BASELINE_PREFIX_CHARS + ' chars):');
+    if (!bundled.length) lines.push('  (none found - binary defaults rely on your own presets only)');
+    for (i = 0; i < bundled.length; i++) lines.push('  ' + bundled[i].fsName);
+    lines.push('');
+    lines.push('Statuses: write = written and verified; keys = keyframes mapped from the clip source range; default = already default;');
+    lines.push('try = hidden, written when found; inferred = binary, assumed default; live-check = decided on the live effect; blocked = refused.');
+    for (i = 0; i < library.presets.length; i++) {
+        preset = library.presets[i];
+        result = prfx.presetStaticAnalysis(preset);
+        counts[result.fidelity]++;
+        lines.push('');
+        lines.push('== ' + preset.catalogName + '   [' + result.fidelity.toUpperCase() + ']');
+        lines.push('   uid ' + (preset.uid || '-') + '   bin ' + (preset.binPath.join(' / ') || 'Presets') + '   ' + preset.file);
+        for (j = 0; j < result.analyses.length; j++) {
+            analysis = result.analyses[j];
+            effect = analysis.effect;
+            lines.push('   effect ' + (j + 1) + ': ' + effect.displayName + ' <' + effect.matchName + '> ' + effect.kind +
+                '  anchor ' + ['scale', 'in', 'out'][effect.anchorType] + ' ' + effect.anchorIn + '..' + effect.anchorOut + ' speed ' + effect.speed +
+                '  params ' + effect.params.length + '  baseline ' + analysis.baseline.samples + ' preset(s)' +
+                (effect.privateData ? '  private data ' + analysis.privateStatus : ''));
+            for (k = 0; k < analysis.rows.length; k++) {
+                row = analysis.rows[k];
+                param = row.param;
+                if (row.status === 'group' || row.status === 'meta') continue;
+                if (row.status === 'default' && param.kind !== 'arb') continue;
+                lines.push('     #' + param.index + ' id ' + param.parameterId + ' ' + (param.name || '(unnamed)') + (param.groupName ? '  {' + param.groupName + '}' : '') +
+                    '  [' + param.kind + ']  ' + (param.kind === 'arb' ? describeArb(param) : prfx.describePresetValue(param.value)) +
+                    (param.keyframes.length ? '  ' + param.keyframes.length + ' keys' + (param.easedKeys ? ' (' + param.easedKeys + ' eased)' : '') : '') +
+                    '  default ' + (param.defaultKnown ? prfx.describePresetValue(param.defaultValue) : '?') +
+                    '  -> ' + row.status + (row.reason ? ': ' + row.reason : ''));
+            }
+        }
+    }
+    function describeArb(param) { return param.arbData ? (param.arbData.length + ' b64 chars') : 'empty'; }
+    path = prfx.writeDiagnostic('PR FX Preset Report.txt', lines);
+    return library.presets.length + ' preset' + (library.presets.length === 1 ? '' : 's') + ': ' + counts.exact + ' exact, ' + counts.inferred + ' inferred, ' +
+        counts['live-check'] + ' decided at apply, ' + counts.blocked + ' blocked. Report: ' + (path || '(could not write)');
+};
+
+prfx.probePresetRoutes = function (publicSequence, qeSequence) {
+    var lines = [], details, library, candidates = [], list, count = 0, i, checkpoint, outcome, reverted, anyUserWorked = false, anyUserTried = false, names = [], path;
+    lines.push('PR FX preset route probe - host ' + prfx.HOST_BUILD + ' - ' + new Date().toString());
+    try { lines.push('Premiere ' + app.version + ' build ' + app.build); } catch (versionError) {}
+    lines.push('typeof app.project.applyLumetriPreset = ' + typeof app.project.applyLumetriPreset);
+    lines.push('typeof app.project.getAllLumetriPresetsList = ' + typeof app.project.getAllLumetriPresetsList);
+    try {
+        list = app.project.getAllLumetriPresetsList();
+        count = list ? Number(list.length || list.numItems || 0) : 0;
+        for (i = 0; i < count && i < 5; i++) names.push(String(list[i]));
+    } catch (listError) { lines.push('getAllLumetriPresetsList threw: ' + listError.toString()); }
+    lines.push('bundled Lumetri presets listed: ' + count + (names.length ? ' (first: ' + names.join(', ') + ')' : ''));
+    details = prfx.getSelectedQEClipDetails(publicSequence, qeSequence, 'video');
+    if (!details.length) return 'ERROR: Select one video clip to probe on. Every change is rolled back.';
+    details = [details[0]];
+    lines.push('probe clip: ' + details[0].name + ' (V' + (details[0].trackIndex + 1) + ' at ' + details[0].start + 's)');
+    if (names.length) candidates.push({ label: 'bundled "' + names[0] + '"', name: names[0], preset: null, user: false });
+    library = prfx.loadPresetLibrary();
+    for (i = 0; i < library.presets.length; i++) {
+        if (prfx.presetIsLumetriOnly(library.presets[i])) candidates.push({ label: 'user "' + library.presets[i].name + '"', name: library.presets[i].name, preset: library.presets[i], user: true });
+    }
+    if (typeof app.project.applyLumetriPreset !== 'function') {
+        lines.push('applyLumetriPreset is missing; nothing to probe.');
+        prfx.lumetriNativeRoute = 'broken';
+        prfx.lumetriNativeRouteNote = 'applyLumetriPreset missing';
+    } else {
+        for (i = 0; i < candidates.length; i++) {
+            checkpoint = prfx.undoCheckpoint();
+            outcome = prfx.tryNativeLumetriPreset(publicSequence, candidates[i].preset, details, candidates[i].name);
+            reverted = prfx.revertToUndoCheckpoint(checkpoint, 200);
+            lines.push('');
+            lines.push(candidates[i].label + ': returned ' + outcome.returned + ', ' + (outcome.ok ? 'OK' : 'FAILED') +
+                (outcome.problems.length ? ' - ' + outcome.problems.join('; ') : '') +
+                (candidates[i].user ? ', ' + outcome.checked + ' value(s) checked' : '') +
+                ', rollback ' + (reverted && reverted.ok ? 'ok (' + reverted.steps + ' steps)' : 'FAILED: ' + (reverted && reverted.message)));
+            for (var m = 0; m < outcome.mismatches.length && m < 8; m++) lines.push('    ' + outcome.mismatches[m]);
+            if (candidates[i].user) { anyUserTried = true; if (outcome.ok) anyUserWorked = true; }
+            if (!reverted || reverted.ok !== true) { lines.push('Stopped: rollback failed. Undo manually.'); break; }
+        }
+        if (anyUserTried) {
+            prfx.lumetriNativeRoute = anyUserWorked ? 'works' : 'broken';
+            prfx.lumetriNativeRouteNote = 'probe ' + new Date().toString();
+        }
+    }
+    lines.push('');
+    lines.push('Conclusion: native Lumetri route ' + (prfx.lumetriNativeRoute || 'untested') + ' for user presets this session.');
+    path = prfx.writeDiagnostic('PR FX Preset Probe.txt', lines);
+    return 'Lumetri preset route: ' + (prfx.lumetriNativeRoute || 'untested (no user Lumetri presets)') + '. Every probe was rolled back. Log: ' + (path || '(could not write)');
+};
 prfx.selectedTrackItemMatchesKind = function (sequence, selected, kind) {
     var resolved = '', value = '';
     // TrackItem.type is not reliable for linked clips in Premiere. The move
@@ -2166,7 +3288,7 @@ prfx.dumpQeApi = function () {
             }
         } catch (lumetriError) { lines.push('  <call failed: ' + lumetriError.toString() + '>'); }
         lines.push('');
-        path = Folder.myDocuments.parent.fsName + '/Library/Logs/PR FX QE API.txt';
+        path = prfx.logPath('PR FX QE API.txt');
         file = new File(path);
         file.encoding = 'UTF-8';
         file.open('w');
@@ -5477,6 +6599,232 @@ prfx.replaceSelectedClipsFromBin = function (publicSequence, qeSequence) {
         function () { return source; }, '"' + String(source.name) + '"');
 };
 
+// ---------------------------------------------------------------------------
+// Replace & Fit to Slot
+//
+// A re-recorded line rarely matches the original's length: the old take is 15s,
+// the new one 10s. This swaps the media like Replace, then retimes each clip so
+// the new take fills exactly the old clip's slot. Timeline position and length
+// never change -- only speed and source range.
+//
+// The source range maps proportionally: if the old clip skipped the first 10%
+// of its take, the new one skips the first 10% of the new take. Fractions are
+// taken against each bin item's In/Out, which is the whole media unless it was
+// marked in the Source monitor, so the mapped range never runs past the media.
+//
+// A speed change transposes voices, so every audio clip gets the Perfect Pitch
+// correction. Pitch Shifter only spans 0.5-2.0, which bounds audio to 50-200%
+// speed; anything outside refuses the whole run before anything changes.
+//
+// Direct swap only. Replace's staging rebuild cannot be retimed safely, so when
+// the in-place swap is unavailable this refuses rather than rebuilds.
+// ---------------------------------------------------------------------------
+prfx.FIT_TICKS_PER_SECOND = 254016000000;
+prfx.FIT_VIDEO_MIN_SPEED = 0.1;
+prfx.FIT_VIDEO_MAX_SPEED = 10;
+
+prfx.fitPlanForClip = function (detail, clip, newRange, isAudio) {
+    var oldRange, oldLength, newLength, inTicks, outTicks, fromFraction, toFraction, newIn, newOut, duration, speed, oldSpeed, reversed;
+    try { oldRange = prfx.projectItemRange(clip.projectItem); } catch (rangeError) { oldRange = null; }
+    if (!oldRange || !(oldRange.outSeconds > oldRange.inSeconds)) throw new Error('the media length of "' + detail.name + '" cannot be read');
+    try { inTicks = Number(clip.inPoint.ticks); outTicks = Number(clip.outPoint.ticks); } catch (pointError) { inTicks = NaN; }
+    if (isNaN(inTicks) || isNaN(outTicks) || !(outTicks > inTicks)) throw new Error('the source in/out of "' + detail.name + '" cannot be read');
+    try { oldSpeed = Number(clip.getSpeed()); } catch (speedError) { oldSpeed = 1; }
+    if (!(oldSpeed > 0)) oldSpeed = 1;
+    try { reversed = clip.isSpeedReversed() === true; } catch (reverseError) { reversed = false; }
+
+    oldLength = oldRange.outSeconds - oldRange.inSeconds;
+    newLength = newRange.outSeconds - newRange.inSeconds;
+    fromFraction = Math.max(0, Math.min(1, (inTicks / prfx.FIT_TICKS_PER_SECOND - oldRange.inSeconds) / oldLength));
+    toFraction = Math.max(0, Math.min(1, (outTicks / prfx.FIT_TICKS_PER_SECOND - oldRange.inSeconds) / oldLength));
+    if (!(toFraction > fromFraction)) throw new Error('"' + detail.name + '" uses no part of its media');
+    newIn = newRange.inSeconds + fromFraction * newLength;
+    newOut = newRange.inSeconds + toFraction * newLength;
+    duration = detail.end - detail.start;
+    if (!(duration > 0)) throw new Error('"' + detail.name + '" has no length on the Timeline');
+    speed = (newOut - newIn) / duration;
+
+    return {
+        detail: detail, kind: isAudio ? 'audio' : 'video', isAudio: isAudio,
+        newInTicks: String(Math.round(newIn * prfx.FIT_TICKS_PER_SECOND)),
+        newOutTicks: String(Math.round(newOut * prfx.FIT_TICKS_PER_SECOND)),
+        speed: speed, oldSpeed: oldSpeed, reversed: reversed, duration: duration,
+        captured: prfx.captureComponentState(clip),
+        attributes: prfx.captureClipAttributes(clip)
+    };
+};
+
+// Keyframes live in source time. Retiming changes how much source passes per
+// Timeline frame, so each key's distance from the in-point is scaled to keep it
+// on the same Timeline frame. applyComponentState then slides the result onto
+// the new in-point.
+prfx.scaleCapturedKeys = function (captured, scale) {
+    var i, j, k, keys, anchor = captured.inTicks;
+    if (isNaN(anchor) || Math.abs(scale - 1) < 0.000001) return;
+    for (i = 0; i < captured.length; i++) {
+        for (j = 0; j < captured[i].properties.length; j++) {
+            keys = captured[i].properties[j].keys;
+            for (k = 0; k < keys.length; k++) {
+                keys[k].ticks = String(Math.round(anchor + (Number(keys[k].ticks) - anchor) * scale));
+            }
+        }
+    }
+};
+
+prfx.fitOneClip = function (plan, source, frameSeconds) {
+    var detail = plan.detail, live, direct, qeClip, clip, actual, result, timecode, toleranceTicks, actualSpeed, wanted, time;
+    live = app.project.activeSequence;
+    direct = prfx.tryDirectSourceSwap(live, detail, source, frameSeconds);
+    // A source-range warning is expected here: the old in/out often lies past
+    // the end of a shorter take. The range is rewritten below anyway.
+    if (!direct.ok) throw new Error('could not swap the media under "' + detail.name + '" in place (' + direct.reason + ')');
+
+    // Retime first: changing speed changes the source range, so the range is
+    // written after. The duration argument pins the Timeline length.
+    app.enableQE();
+    qeClip = prfx.resolveMoveQEClipAt(qe.project.getActiveSequence(), detail, detail.sourceTrackIndex, detail.start, detail.end);
+    if (!qeClip) throw new Error('lost track of "' + detail.name + '" before retiming it');
+    timecode = prfx.secondsToSequenceTimecode(live, plan.duration);
+    try { result = qeClip.setSpeed(plan.speed, timecode, plan.reversed, false, false); }
+    catch (setSpeedError) { throw new Error('Premiere refused ' + (plan.speed * 100).toFixed(1) + '% speed on "' + detail.name + '"'); }
+    if (result === false) throw new Error('Premiere rejected ' + (plan.speed * 100).toFixed(1) + '% speed on "' + detail.name + '"');
+
+    wanted = { inTicks: plan.newInTicks, outTicks: plan.newOutTicks };
+    // One source frame at the new speed, plus Premiere's tick rounding.
+    toleranceTicks = Math.max(1000, frameSeconds * plan.speed * prfx.FIT_TICKS_PER_SECOND);
+    clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+    if (!clip) throw new Error('"' + detail.name + '" changed length on the Timeline when retimed to ' + (plan.speed * 100).toFixed(1) + '%');
+    prfx.writeClipSourceRange(clip, wanted);
+    clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+    if (!clip) throw new Error('"' + detail.name + '" moved on the Timeline when its source range was set');
+    actual = prfx.clipSourceState(clip);
+    if (Math.abs(Number(actual.inTicks) - Number(wanted.inTicks)) > toleranceTicks ||
+        Math.abs(Number(actual.outTicks) - Number(wanted.outTicks)) > toleranceTicks) {
+        // Writing In before Out is refused when the new In lies beyond the
+        // current Out. Try the other order once before giving up.
+        try { time = new Time(); time.ticks = wanted.outTicks; clip.outPoint = time; } catch (outError) {}
+        prfx.writeClipSourceRange(clip, wanted);
+        clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+        if (!clip) throw new Error('"' + detail.name + '" moved on the Timeline when its source range was set');
+        actual = prfx.clipSourceState(clip);
+        if (Math.abs(Number(actual.inTicks) - Number(wanted.inTicks)) > toleranceTicks ||
+            Math.abs(Number(actual.outTicks) - Number(wanted.outTicks)) > toleranceTicks) {
+            throw new Error('the source range of "' + detail.name + '" did not take (wanted ' +
+                prfx.secondsForTicks(wanted.inTicks).toFixed(3) + '-' + prfx.secondsForTicks(wanted.outTicks).toFixed(3) + 's, got ' +
+                prfx.secondsForTicks(actual.inTicks).toFixed(3) + '-' + prfx.secondsForTicks(actual.outTicks).toFixed(3) + 's)');
+        }
+    }
+    try { actualSpeed = Number(clip.getSpeed()); } catch (readSpeedError) { actualSpeed = NaN; }
+    if (isNaN(actualSpeed) || Math.abs(actualSpeed - plan.speed) > 0.002) {
+        throw new Error('"' + detail.name + '" reads ' + (actualSpeed * 100).toFixed(1) + '% speed, wanted ' + (plan.speed * 100).toFixed(1) + '%');
+    }
+
+    prfx.scaleCapturedKeys(plan.captured, plan.speed / plan.oldSpeed);
+    app.enableQE();
+    qeClip = prfx.resolveMoveQEClipAt(qe.project.getActiveSequence(), detail, detail.sourceTrackIndex, detail.start, detail.end);
+    prfx.applyComponentState(qe.project.getActiveSequence(), clip, qeClip, plan.kind, plan.captured);
+    prfx.applyClipAttributes(clip, plan.attributes);
+
+    // Pitch last: applying the captured components put back the OLD correction.
+    if (plan.isAudio && (Math.abs(actualSpeed - 1) > 0.0001 || prfx.preferredPitchComponent(clip))) {
+        prfx.writePitchCorrection(detail, 1 / actualSpeed);
+        return true;
+    }
+    return false;
+};
+
+prfx.replaceSelectedClipsFitToSlot = function (publicSequence, qeSequence) {
+    var items = prfx.selectedProjectItems(), source = null, i, collected, sourceCategory, newRange, frameSeconds;
+    var plans = [], unsupported = [], detail, clip, partner, audioDetail, plan, minSpeed, maxSpeed, component, parameter;
+    var checkpoint, failure = null, results = [], pitched = 0, speeds = [];
+
+    for (i = 0; i < items.length; i++) if (prfx.projectItemIsMedia(items[i])) { source = items[i]; break; }
+    if (!source) return 'ERROR: Select one media clip in the Project panel to fit into the selected clips.';
+    if (items.length > 1) return 'ERROR: Select exactly one Project panel clip to fit - ' + items.length + ' are selected.';
+    sourceCategory = prfx.mediaCategoryOf(prfx.projectItemExtension(source));
+    if (sourceCategory === 'image') return 'ERROR: "' + String(source.name) + '" is a still - it has no length to fit into a slot.';
+    newRange = prfx.projectItemRange(source);
+    if (!newRange || !(newRange.outSeconds > newRange.inSeconds)) return 'ERROR: Premiere could not read the length of "' + String(source.name) + '".';
+
+    collected = prfx.collectReplaceTargets(publicSequence, qeSequence, sourceCategory);
+    if (!collected.targets.length) {
+        if (collected.stale) return 'ERROR: Premiere\'s Timeline selection is stale. Click an empty Timeline area, reselect the clips, and try again.';
+        if (sourceCategory === 'audio') return 'ERROR: "' + String(source.name) + '" is audio-only. Select audio Timeline clips to fit it into.';
+        return 'ERROR: Select video or audio clips on the Timeline to fit "' + String(source.name) + '" into.';
+    }
+
+    // Preflight every clip, and the linked audio of every video, before any
+    // change: a run must never stop halfway because the fifth clip is too fast.
+    for (i = 0; i < collected.targets.length; i++) {
+        detail = collected.targets[i];
+        clip = prfx.resolveMovePublicClipAt(publicSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+        if (!clip) { unsupported.push('lost track of "' + detail.name + '"'); continue; }
+        try { plans.push(prfx.fitPlanForClip(detail, clip, newRange, detail.kind === 'audio')); }
+        catch (planError) { unsupported.push(planError.message || planError.toString()); continue; }
+        if (detail.kind !== 'video') continue;
+        partner = prfx.linkedAudioPartner(publicSequence, clip);
+        if (!partner) continue;
+        audioDetail = {
+            kind: 'audio',
+            sourceTrackIndex: Number(partner.parentTrackIndex),
+            trackIndex: Number(partner.parentTrackIndex),
+            start: prfx.timeInSeconds(partner.start),
+            end: prfx.timeInSeconds(partner.end),
+            name: detail.name + ' (audio)'
+        };
+        try {
+            plan = prfx.fitPlanForClip(audioDetail, partner, newRange, true);
+            plan.linkedPartner = true;
+            plans.push(plan);
+        } catch (partnerError) { unsupported.push(partnerError.message || partnerError.toString()); }
+    }
+    for (i = 0; i < plans.length; i++) {
+        plan = plans[i];
+        minSpeed = plan.isAudio ? 1 / prfx.PITCH_MAX_RATIO : prfx.FIT_VIDEO_MIN_SPEED;
+        maxSpeed = plan.isAudio ? 1 / prfx.PITCH_MIN_RATIO : prfx.FIT_VIDEO_MAX_SPEED;
+        if (plan.speed < minSpeed - 0.0001 || plan.speed > maxSpeed + 0.0001) {
+            unsupported.push('"' + plan.detail.name + '" would need ' + (plan.speed * 100).toFixed(1) + '% speed' +
+                (plan.isAudio ? ', outside the 50-200% Pitch Shifter can correct' : ''));
+            continue;
+        }
+        if (!plan.isAudio) continue;
+        clip = prfx.resolveMovePublicClipAt(publicSequence, plan.detail, plan.detail.sourceTrackIndex, plan.detail.start, plan.detail.end);
+        component = clip ? prfx.preferredPitchComponent(clip) : null;
+        if (clip && !component && prfx.pitchShifterComponents(clip).length > 1) {
+            unsupported.push('"' + plan.detail.name + '" has more than one Pitch Shifter and none named "speed"');
+        }
+        parameter = component ? prfx.pitchRatioParameter(component) : null;
+        if (parameter && prfx.countPropertyKeys(parameter) > 0) unsupported.push('"' + plan.detail.name + '" has a keyframed Transpose Ratio');
+    }
+    if (unsupported.length) return 'ERROR: Nothing was changed. ' + prfx.uniqueList(unsupported).join('; ') + '.';
+
+    frameSeconds = 1 / 30;
+    try { if (Number(publicSequence.videoFrameRate) > 0) frameSeconds = 1 / Number(publicSequence.videoFrameRate); } catch (rateError) {}
+    prfx.lastPropertyFailures = [];
+    prfx.lastKeyClearFailures = 0;
+    prfx.lastDirectSwaps = 0;
+    prfx.lastDirectSwapReason = '';
+    checkpoint = prfx.undoCheckpoint();
+    try {
+        for (i = 0; i < plans.length; i++) {
+            if (prfx.fitOneClip(plans[i], source, frameSeconds)) pitched++;
+            results.push({ kind: plans[i].kind, trackIndex: plans[i].detail.sourceTrackIndex, start: plans[i].detail.start, end: plans[i].detail.end });
+            if (!plans[i].linkedPartner) speeds.push('"' + plans[i].detail.name + '" ' + (plans[i].speed * 100).toFixed(1) + '%');
+        }
+    } catch (error) { failure = error.message || error.toString(); }
+
+    if (failure) {
+        prfx.revertUnlessKeeping(checkpoint, plans.length * 12 + 12);
+        return 'ERROR: Replace & Fit stopped and ' + prfx.failureOutcomeText() + ' - ' + failure + '.';
+    }
+    prfx.selectClipRanges(app.project.activeSequence, results);
+    return 'Fitted "' + String(source.name) + '" into ' + speeds.length + ' slot' + (speeds.length === 1 ? '' : 's') +
+        ': ' + speeds.join('; ') + '.' +
+        (pitched ? ' Pitch corrected on ' + pitched + ' audio clip' + (pitched === 1 ? '' : 's') + '.' : '') +
+        (prfx.lastKeyClearFailures ? ' ' + prfx.lastKeyClearFailures + ' propert' + (prfx.lastKeyClearFailures === 1 ? 'y' : 'ies') + ' kept stale keyframes - Premiere would not remove them.' : '') +
+        (prfx.lastPropertyFailures.length ? ' Could not carry over: ' + prfx.uniqueList(prfx.lastPropertyFailures).join(', ') + '.' : '');
+};
+
 // Deselects everything currently published, then selects exactly the given
 // ranges. Premiere keeps stale TrackItem wrappers selected after QE moves, so
 // clearing by hand first is the only way to end with a clean selection.
@@ -5987,7 +7335,7 @@ prfx.describeMatchTier = function (entry) {
 prfx.writeDiagnostic = function (fileName, lines) {
     var path, file;
     try {
-        path = Folder.myDocuments.parent.fsName + '/Library/Logs/' + fileName;
+        path = prfx.logPath(fileName);
         file = new File(path);
         file.encoding = 'UTF-8';
         file.open('w');
@@ -6022,7 +7370,7 @@ prfx.previewBulkReplaceByName = function (publicSequence, qeSequence, tolerance)
     // Also written to disk: the panel truncates long output, and the interesting
     // part of a dry run is usually the skip list at the bottom.
     prfx.writeDiagnostic('PR FX Bulk Replace Preview.txt', lines);
-    return lines.join('\n') + '\n(also written to ~/Library/Logs/PR FX Bulk Replace Preview.txt)';
+    return lines.join('\n') + '\n(also written to ' + prfx.logPath('PR FX Bulk Replace Preview.txt') + ')';
 };
 
 prfx.bulkReplaceByName = function (publicSequence, qeSequence, tolerance) {
@@ -6218,156 +7566,6 @@ prfx.resolveQEPresetEffect = function (kind, displayName, matchName, presetName)
     return null;
 };
 
-prfx.isSimpleMockPresetValue = function (value) {
-    if (typeof value === 'number') return isFinite(value);
-    if (typeof value === 'boolean') return true;
-    return false;
-};
-
-prfx.mockPresetUnsupportedReason = function (preset) {
-    var i, j, entry, value;
-    if (!preset || !preset.effects || !preset.effects.length) return 'no readable effect data was found in the preset';
-    for (i = 0; i < preset.effects.length; i++) {
-        entry = preset.effects[i];
-        if (!entry.matchName && !entry.displayName) return 'one effect in the preset has no stable effect identity';
-        if (String(entry.matchName || '') === 'AE.ADBE Lumetri' || /lumetri/i.test(String(entry.displayName || ''))) {
-            return 'Lumetri presets store their real settings in private Premiere data';
-        }
-        if (entry.hasPrivateData === true || Number(entry.privateParams || 0) > 0) return 'it contains private Premiere preset data';
-        if (Number(entry.params && entry.params.length || 0) < 1 && Number(entry.unsupportedParams || 0) > 0) {
-            return 'it has no public scalar parameters to recreate';
-        }
-        for (j = 0; j < Number(entry.params && entry.params.length || 0); j++) {
-            value = entry.params[j].value;
-            if (!prfx.isSimpleMockPresetValue(value)) return 'it contains a non-scalar parameter value PR FX cannot safely recreate yet';
-        }
-    }
-    return '';
-};
-
-prfx.resolveAddedPresetComponent = function (publicSequence, entry, detail) {
-    var attempt, publicClip, component;
-    for (attempt = 0; attempt < 12; attempt++) {
-        publicClip = prfx.resolveMovePublicClipAt(publicSequence, { kind: entry.kind }, detail.trackIndex, detail.start, detail.end);
-        component = publicClip ? prfx.findLastComponentByMatchOrName(publicClip, entry.matchName, entry.displayName) : null;
-        if (component) return { clip: publicClip, component: component };
-        try { $.sleep(50); } catch (sleepError) {}
-    }
-    return { clip: publicClip || null, component: null };
-};
-
-prfx.findMockPresetProperty = function (component, param, usedIndices) {
-    var properties, count, i, property, wanted = String(param && param.name || ''), wantedNormalized = prfx.normalizedPresetLabel(wanted);
-    try { properties = component.properties; count = Number(properties.numItems || properties.length || 0); }
-    catch (error) { return null; }
-    for (i = 0; i < count; i++) {
-        if (usedIndices['i' + i]) continue;
-        try { property = properties[i]; } catch (propertyError) { continue; }
-        if (property && String(property.displayName || '') === wanted) {
-            usedIndices['i' + i] = true;
-            return property;
-        }
-    }
-    if (!wantedNormalized) return null;
-    for (i = 0; i < count; i++) {
-        if (usedIndices['i' + i]) continue;
-        try { property = properties[i]; } catch (normalizedError) { continue; }
-        if (property && prfx.normalizedPresetLabel(property.displayName) === wantedNormalized) {
-            usedIndices['i' + i] = true;
-            return property;
-        }
-    }
-    return null;
-};
-
-prfx.mockPresetClipStartTicks = function (detail) {
-    var ticks = prfx.numericTicks(detail && detail.startTicks);
-    if (!isNaN(ticks)) return ticks;
-    return Math.round(Number(detail && detail.start || 0) * 254016000000);
-};
-
-prfx.writeMockPresetKeyframes = function (property, param, detail) {
-    var keys = param && param.keyframes || [], baseTicks, firstTicks, i, time, wanted, landed, readBack;
-    if (!keys.length) return false;
-    baseTicks = prfx.mockPresetClipStartTicks(detail);
-    firstTicks = Number(keys[0].ticks);
-    if (isNaN(baseTicks) || isNaN(firstTicks)) return false;
-    try { if (typeof property.setTimeVarying === 'function') property.setTimeVarying(true); } catch (varyError) {}
-    if (!prfx.clearPropertyKeys(property)) return false;
-    for (i = 0; i < keys.length; i++) {
-        wanted = keys[i].value;
-        time = new Time();
-        time.ticks = String(Math.round(baseTicks + (Number(keys[i].ticks) - firstTicks)));
-        try { property.addKey(time); } catch (addError) {}
-        try { property.setValueAtKey(time, wanted, true); } catch (setError) {}
-        try {
-            readBack = property.getValueAtKey(time);
-            if (!prfx.capturedValuesMatch(wanted, readBack)) return false;
-        } catch (readError) { return false; }
-    }
-    landed = prfx.countPropertyKeys(property);
-    return landed >= keys.length;
-};
-
-prfx.applyMockPresetParams = function (component, params, detail) {
-    var usedIndices = {}, applied = 0, matched = 0, failed = 0, skippedDefault = 0, unmatched = 0, keyframed = 0, failedNames = [], unmatchedNames = [], i, property, value, hasKeys;
-    for (i = 0; i < Number(params && params.length || 0); i++) {
-        value = params[i].value;
-        if (!prfx.isSimpleMockPresetValue(value)) { unmatched++; continue; }
-        property = prfx.findMockPresetProperty(component, params[i], usedIndices);
-        if (!property) { unmatched++; unmatchedNames.push(String(params[i].name || 'parameter')); continue; }
-        matched++;
-        hasKeys = params[i].keyframes && params[i].keyframes.length;
-        if (hasKeys) {
-            if (prfx.writeMockPresetKeyframes(property, params[i], detail)) keyframed++;
-            else { failed++; failedNames.push(String(params[i].name || 'keyframed parameter')); }
-        } else if (prfx.propertyReadsAs(property, value)) {
-            skippedDefault++;
-        } else if (prfx.writePropertyValue(property, value)) {
-            applied++;
-        } else {
-            failed++;
-            failedNames.push(String(params[i].name || 'parameter'));
-        }
-    }
-    return { applied: applied + keyframed, matched: matched, failed: failed, skippedDefault: skippedDefault, unmatched: unmatched, keyframed: keyframed, failedNames: failedNames, unmatchedNames: unmatchedNames };
-};
-
-prfx.findPresetProperty = function (component, param, usedIndices) {
-    var properties, count, i, property, wanted = String(param && param.name || ''), wantedNormalized = prfx.normalizedPresetLabel(wanted);
-    try { properties = component.properties; count = Number(properties.numItems || properties.length || 0); }
-    catch (error) { return null; }
-    for (i = 0; i < count; i++) {
-        if (usedIndices['i' + i]) continue;
-        try { property = properties[i]; } catch (propertyError) { continue; }
-        if (property && String(property.displayName || '') === wanted) {
-            usedIndices['i' + i] = true;
-            return property;
-        }
-    }
-    if (!wantedNormalized) return null;
-    for (i = 0; i < count; i++) {
-        if (usedIndices['i' + i]) continue;
-        try { property = properties[i]; } catch (normalizedError) { continue; }
-        if (property && prfx.normalizedPresetLabel(property.displayName) === wantedNormalized) {
-            usedIndices['i' + i] = true;
-            return property;
-        }
-    }
-    return null;
-};
-
-prfx.applyPresetParams = function (component, params) {
-    var usedIndices = {}, applied = 0, matched = 0, failed = 0, i, property;
-    for (i = 0; i < Number(params && params.length || 0); i++) {
-        property = prfx.findPresetProperty(component, params[i], usedIndices);
-        if (!property) continue;
-        matched++;
-        if (prfx.writePropertyValue(property, params[i].value)) applied++;
-        else failed++;
-    }
-    return { applied: applied, matched: matched, failed: failed };
-};
 
 // Removing keys is undocumented; both known spellings are tried and the result
 // is confirmed by counting. Returns true only if the property ends up empty.
@@ -6591,7 +7789,7 @@ prfx.inspectSelectedClip = function (publicSequence, qeSequence) {
     }
     lines.push('');
 
-    path = Folder.myDocuments.parent.fsName + '/Library/Logs/PR FX Clip Inspection.txt';
+    path = prfx.logPath('PR FX Clip Inspection.txt');
     try {
         file = new File(path);
         file.encoding = 'UTF-8';
@@ -6942,6 +8140,38 @@ prfx.pitchRatioParameter = function (component) {
     return fallback;
 };
 
+// Writes one clip's correction and reads it back. Adds a Pitch Shifter when the
+// clip has none. Returns true when it had to add one; throws on any failure.
+// Shared by Perfect Pitch and Replace & Fit to Slot.
+prfx.writePitchCorrection = function (detail, displayed) {
+    var clip, component, qeClip, effect, parameter, wanted, readBack, added = false;
+    clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+    if (!clip) throw new Error('lost track of ' + detail.name);
+    component = prfx.preferredPitchComponent(clip);
+    if (!component) {
+        if (prfx.pitchShifterComponents(clip).length > 1) throw new Error(detail.name + ' has more than one Pitch Shifter and none named "speed"');
+        app.enableQE();
+        qeClip = prfx.resolveMoveQEClipAt(qe.project.getActiveSequence(), detail, detail.sourceTrackIndex, detail.start, detail.end);
+        effect = qe.project.getAudioEffectByName('Pitch Shifter');
+        if (!qeClip || !effect) throw new Error('Pitch Shifter is not available in this Premiere installation');
+        qeClip.addAudioEffect(effect);
+        added = true;
+        clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
+        component = clip ? prfx.preferredPitchComponent(clip) : null;
+        if (!component) throw new Error('Premiere did not publish Pitch Shifter on ' + detail.name);
+    }
+    parameter = prfx.pitchRatioParameter(component);
+    if (!parameter) throw new Error('Transpose Ratio is not exposed on ' + detail.name);
+    if (prfx.countPropertyKeys(parameter) > 0) throw new Error('Transpose Ratio is keyframed on ' + detail.name);
+    wanted = prfx.displayedPitchToParameter(displayed);
+    try { parameter.setValue(wanted, true); } catch (writeError) { throw new Error('Premiere refused the correction on ' + detail.name); }
+    try { readBack = Number(parameter.getValue()); } catch (readError) { readBack = NaN; }
+    if (isNaN(readBack) || Math.abs(readBack - wanted) > 0.001) {
+        throw new Error('the correction did not take on ' + detail.name);
+    }
+    return added;
+};
+
 prfx.applyPerfectPitch = function (publicSequence, qeSequence) {
     // Linked audio is included, so selecting the video half of a retimed pair
     // corrects its audio without the editor having to select it separately.
@@ -6990,30 +8220,7 @@ prfx.applyPerfectPitch = function (publicSequence, qeSequence) {
     checkpoint = prfx.undoCheckpoint();
     try {
         for (i = 0; i < plans.length; i++) {
-            detail = plans[i].detail;
-            clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
-            if (!clip) throw new Error('lost track of ' + detail.name);
-            component = plans[i].component;
-            if (!component) {
-                app.enableQE();
-                qeClip = prfx.resolveMoveQEClipAt(qe.project.getActiveSequence(), detail, detail.sourceTrackIndex, detail.start, detail.end);
-                effect = qe.project.getAudioEffectByName('Pitch Shifter');
-                if (!qeClip || !effect) throw new Error('Pitch Shifter is not available in this Premiere installation');
-                qeClip.addAudioEffect(effect);
-                added++;
-                clip = prfx.resolveMovePublicClipAt(app.project.activeSequence, detail, detail.sourceTrackIndex, detail.start, detail.end);
-                component = prfx.preferredPitchComponent(clip);
-                if (!component) throw new Error('Premiere did not publish Pitch Shifter on ' + detail.name);
-            }
-            parameter = prfx.pitchRatioParameter(component);
-            if (!parameter) throw new Error('Transpose Ratio is not exposed on ' + detail.name);
-            if (prfx.countPropertyKeys(parameter) > 0) throw new Error('Transpose Ratio is keyframed on ' + detail.name);
-            wanted = prfx.displayedPitchToParameter(plans[i].displayed);
-            try { parameter.setValue(wanted, true); } catch (writeError) { throw new Error('Premiere refused the correction on ' + detail.name); }
-            try { readBack = Number(parameter.getValue()); } catch (readError) { readBack = NaN; }
-            if (isNaN(readBack) || Math.abs(readBack - wanted) > 0.001) {
-                throw new Error('the correction did not take on ' + detail.name);
-            }
+            if (prfx.writePitchCorrection(plans[i].detail, plans[i].displayed)) added++;
             if (plans[i].resetOnly) reset++; else corrected++;
         }
     } catch (error) { failure = error.toString(); }
@@ -7060,14 +8267,26 @@ prfx.revertUnlessKeeping = function (checkpoint, maxSteps) {
 // Timeline -- which is worse than the failure it is reporting.
 prfx.failureOutcomeText = function () {
     return prfx.failurePolicy === 'keep'
-        ? 'changes were KEPT (failure policy). Check the Timeline; Undo Last PR FX Action (Any) reverts it'
+        ? 'changes were KEPT (failure policy). Check the Timeline; Undo Last Edie Action (Any) reverts it'
         : 'everything was rolled back';
 };
 
 prfx.LEDGER_FILE = 'PR FX Failures.json';
 prfx.REPORT_FILE = 'PR FX Failure Report.txt';
 
+prfx.isWindows = function () {
+    return String($.os || '').indexOf('Windows') !== -1;
+};
+
+// macOS: ~/Library/Logs. Windows: %APPDATA%\PR FX Palette\Logs, the same
+// folder the Windows listener and engine write to.
 prfx.logPath = function (fileName) {
+    var folder;
+    if (prfx.isWindows()) {
+        folder = new Folder(Folder.userData.fsName + '/PR FX Palette/Logs');
+        try { if (!folder.exists) { new Folder(Folder.userData.fsName + '/PR FX Palette').create(); folder.create(); } } catch (ignore) {}
+        return folder.fsName + '/' + fileName;
+    }
     return Folder.myDocuments.parent.fsName + '/Library/Logs/' + fileName;
 };
 
@@ -7535,6 +8754,7 @@ prfx.setProjectItemRange = function (item, outSeconds) {
 prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
     var snapshot = prfx.moveSelectionSnapshot(publicSequence, qeSequence, false), selected;
     var i, detail, spanStart = NaN, spanEnd = NaN, topTrack = -1, item, savedRange;
+    var spanStartTicks = NaN, spanEndTicks = NaN, detailTicks, frameSeconds, endTime, probe;
     var checkpoint, staging, live, target, snapshotLive, failure = null, created = [], staged, addError, resolved;
 
     selected = snapshot.selected;
@@ -7547,6 +8767,13 @@ prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
         if (detail.kind !== 'video') continue;
         if (isNaN(spanStart) || detail.start < spanStart) spanStart = detail.start;
         if (isNaN(spanEnd) || detail.end > spanEnd) spanEnd = detail.end;
+        // Ticks are the only exact currency here. Seconds are a float view of
+        // them, and every conversion back through Premiere's own frame grid
+        // rounds again — which is how the out point drifted a few frames.
+        detailTicks = prfx.numericTicks(detail.startTicks);
+        if (!isNaN(detailTicks) && (isNaN(spanStartTicks) || detailTicks < spanStartTicks)) spanStartTicks = detailTicks;
+        detailTicks = prfx.numericTicks(detail.endTicks);
+        if (!isNaN(detailTicks) && (isNaN(spanEndTicks) || detailTicks > spanEndTicks)) spanEndTicks = detailTicks;
         if (detail.sourceTrackIndex > topTrack) topTrack = detail.sourceTrackIndex;
     }
     if (isNaN(spanStart) || !(spanEnd > spanStart)) {
@@ -7599,9 +8826,34 @@ prfx.addAdjustmentLayerOverSelection = function (publicSequence, qeSequence) {
             throw new Error('the adjustment layer\'s duration could not be set to ' + (spanEnd - spanStart).toFixed(2) + 's');
         }
         staged = prfx.stageOneProjectItem(staging.tracks, item, spanStart, true);
-        if (Math.abs((staged.end - staged.start) - (spanEnd - spanStart)) > 0.5) {
-            throw new Error('the staged adjustment layer is ' + (staged.end - staged.start).toFixed(2) +
-                's, not the ' + (spanEnd - spanStart).toFixed(2) + 's the selection spans');
+
+        // The bin item's duration is set in seconds and Premiere re-rounds it to
+        // its own frame grid, so the staged clip lands a few frames off. Trim the
+        // staged clip to the selection's exact end in ticks instead of trusting
+        // that round trip.
+        frameSeconds = 1 / 30;
+        try { if (Number(publicSequence.videoFrameRate) > 0) frameSeconds = 1 / Number(publicSequence.videoFrameRate); }
+        catch (rateError) {}
+        if (!isNaN(spanEndTicks) && Math.abs(staged.end - spanEnd) > frameSeconds / 2) {
+            try {
+                endTime = new Time();
+                endTime.ticks = String(Math.round(spanEndTicks));
+                staged.video.end = endTime;
+            } catch (trimError) {
+                throw new Error('the adjustment layer could not be trimmed to the selection end');
+            }
+            live = app.project.activeSequence;
+            probe = prfx.stagingTrackClips(live, 'video', staged.fromTrackIndex)[0];
+            if (!probe) throw new Error('the adjustment layer disappeared while being trimmed to length');
+            staged.video = probe;
+            staged.start = prfx.timeInSeconds(probe.start);
+            staged.end = prfx.timeInSeconds(probe.end);
+        }
+        // Half a frame, not half a second. The old tolerance accepted a dozen
+        // frames of drift as correct, which is why this went unnoticed.
+        if (Math.abs(staged.end - spanEnd) > frameSeconds / 2 || Math.abs(staged.start - spanStart) > frameSeconds / 2) {
+            throw new Error('the adjustment layer covers ' + staged.start.toFixed(3) + '-' + staged.end.toFixed(3) +
+                ' but the selection spans ' + spanStart.toFixed(3) + '-' + spanEnd.toFixed(3));
         }
         prfx.moveStagedClipToTrack('video', staged.fromTrackIndex, target, staged.start, staged.end, 'the adjustment layer');
         created.push({ kind: 'video', trackIndex: target, start: staged.start, end: staged.end });

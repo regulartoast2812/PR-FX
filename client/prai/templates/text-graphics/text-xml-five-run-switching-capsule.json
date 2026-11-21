@@ -1,0 +1,96 @@
+{
+  "id": "text-xml-five-run-switching",
+  "name": "Text XML five-run switching Premiere template",
+  "sourceXml": "/Users/crossianllc/Documents/Text style PR.xml",
+  "workflow": "Clone the saved five-run Premiere Source Text blob for word-by-word style switching. This capsule proves the blob stores a run vector at offset 0xf8 with five text/style run records. Current host support can copy this component structure and same-byte replace the captured run strings; arbitrary run-count rebuilding still needs a Source Text blob builder.",
+  "sequence": {
+    "name": "Sequence 03",
+    "timebase": 50,
+    "width": 1920,
+    "height": 1080,
+    "clipStartFrame": 0,
+    "clipEndFrame": 250
+  },
+  "graphic": {
+    "clipName": "Graphic",
+    "mediaSource": "GraphicAndType",
+    "effectId": "GraphicAndType",
+    "effectName": "one two three four give",
+    "sourceTextHash": "4f8b4462-8e2c-5ffa-2d42-08da000004b4",
+    "fontStringsFound": [
+      "KitRounded-ExtraBold"
+    ],
+    "runVector": {
+      "byteOffset": 248,
+      "count": 5,
+      "runObjectOffsets": [868, 732, 532, 448, 272],
+      "note": "Offsets are decoded from the FlatBuffers-like vector. Each run object has a text pointer and a style pointer."
+    },
+    "styleRuns": [
+      {
+        "index": 0,
+        "text": "one ",
+        "byteLength": 4,
+        "textByteOffset": 1184,
+        "runObjectOffset": 868,
+        "styleObjectOffset": 936,
+        "styleName": "switchA"
+      },
+      {
+        "index": 1,
+        "text": "two",
+        "byteLength": 3,
+        "textByteOffset": 856,
+        "runObjectOffset": 732,
+        "styleObjectOffset": 800,
+        "styleName": "switchB"
+      },
+      {
+        "index": 2,
+        "text": " three ",
+        "byteLength": 7,
+        "textByteOffset": 724,
+        "runObjectOffset": 532,
+        "styleObjectOffset": 544,
+        "styleName": "switchA"
+      },
+      {
+        "index": 3,
+        "text": "four",
+        "byteLength": 4,
+        "textByteOffset": 516,
+        "runObjectOffset": 448,
+        "styleObjectOffset": 460,
+        "styleName": "switchB"
+      },
+      {
+        "index": 4,
+        "text": " give",
+        "byteLength": 5,
+        "textByteOffset": 440,
+        "runObjectOffset": 272,
+        "styleObjectOffset": 284,
+        "styleName": "switchA"
+      }
+    ],
+    "styleNames": {
+      "switchA": {
+        "description": "First alternating style from the five-run example. Used by runs 0, 2, and 4."
+      },
+      "switchB": {
+        "description": "Second alternating style from the five-run example. Used by runs 1 and 3."
+      }
+    },
+    "sourceTextBlobBase64": "nAQAAAAAAABEMyIRDAAAAAAABgAKAAQABgAAAGQAAAAAAF4AQAAQAAwAPAA4ADQAMAAAAAAAAAAAACwAKwAkAAAAIAAcABgAAAAAAAAAAAAAAAAAAAAAAAAAFgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAABcABwBeAAAAAAAAATgAAABIAAAAaAAAAAAAAQAAAEBBAADAQAAAQEAAAMhCAAAAASAAAAABAAAAAgAAAACAAkQAAKZELPz//zD8//80/P//Svz//wAAAAABAAAABAAAABQAAABLaXRSb3VuZGVkLUV4dHJhQm9sZAAAAAAFAAAAaAIAANwBAAAQAQAAuAAAAAQAAAAE////oAAAAAQAAACq/f//AgAAABwAAAAcAAAAAQAAAAAAQEAAAAABcAAAAAAAqkKs/P//bv3//wgAAAAkAAAAAgAAABQAAAAEAAAA+v7//wAAgD8AAAA/Vv3//wAAAD8CAAAAIAAAAAQAAABK/f//DAAAAAAAgD8AAAA/Cv3//wD3wInu/v//CAAAAAAAAD8e/f//APDbeSb9//8AGBgYHP3//wUAAAAgZ2l2ZQAAALT///88AAAABAAAAOL+//8CAAAAGAAAABgAAAAAAIBAAAAAARAAAAAAAKpCWP3//1z9//9y/f//ABgYGGj9//8EAAAAZm91cgAAAAAIAAwABAAIAAgAAAC4AAAABAAAAK7+//8CAAAAHAAAABwAAAABAAAAAABAQAAAAAGIAAAAAACqQrD9//9y/v//CAAAADAAAAACAAAAIAAAABAAAAAAAAoADAAAAAQACAAKAAAAAACAPwAAAD9m/v//AAAAPwIAAAAsAAAABAAAAFr+//8MAAAAAACAPwAAAD8u/v//AAAA98CJCgAMAAQAAAAIAAoAAAAIAAAAAAAAPzr+//8A8Nt5Qv7//wAYGBg4/v//BwAAACB0aHJlZSAAgP///3QAAAA8AAAAAAA2ACAAAAAcAAAAAAAYABcAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAgABAA2AAAAAgAAABgAAAAYAAAAAACAQAAAAAEQAAAAAACqQqz+//+w/v//xv7//wAYGBi8/v//AwAAAHR3bwAIAA4ABAAIAAgAAAA0AQAAPAAAAAAANgAkAAAAIAAAAAAAHAAbABQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAwAAAAIAAQANgAAAAIAAAAgAAAALAAAAAEAAAAAAEBAAAAAAcgAAAAAAKpCBAAGAAQAAAAAAAoADAAAAAgABAAKAAAACAAAADwAAAACAAAALAAAABAAAAAAAAoADgAAAAQACAAKAAAAAACAPwAAAD8AAAoACAAAAAAABAAKAAAAAAAAPwIAAAA4AAAAEAAAAAAACgAQAAQACAAMAAoAAAAMAAAAAACAPwAAAD/e////AAAA98CJCgAOAAQAAAAIAAoAAAAUAAAAAAAAPwAACgAKAAcACAAJAAoAAAAAAADw23kKAAgABQAGAAcACgAAAAAYGBgEAAQABAAAAAQAAABvbmUgAAAAAA=="
+  },
+  "testedReplacement": {
+    "sameByteOnly": true,
+    "replacements": [
+      { "from": "one ", "byteLength": 4 },
+      { "from": "two", "byteLength": 3 },
+      { "from": " three ", "byteLength": 7 },
+      { "from": "four", "byteLength": 4 },
+      { "from": " give", "byteLength": 5 }
+    ]
+  }
+}

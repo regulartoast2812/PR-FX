@@ -1,0 +1,1220 @@
+ObjC.import("Foundation");
+
+function readFile(path) {
+  var value = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, null);
+  if (!value) {
+    throw new Error("Could not read " + path);
+  }
+  return value.js;
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error("REGRESSION: " + message);
+  }
+}
+
+function capture(text, pattern, label) {
+  var match = text.match(pattern);
+  assert(match && match[1], "Could not find " + label + ".");
+  return match[1];
+}
+
+function sliceFn(text, name) {
+  var start = text.indexOf("function " + name + "(");
+  assert(start >= 0, "Could not find function " + name + ".");
+  var end = text.indexOf("\n  }\n", start);
+  assert(end > start, "Could not isolate the end of function " + name + ".");
+  return text.slice(start, end + 4);
+}
+
+var main = readFile("js/main.js");
+var host = readFile("../../jsx/prai/host.jsx"); // PR FX port: host lives in PR FX/jsx/prai
+var index = readFile("index.html");
+var styles = readFile("css/styles.css");
+
+/* The port's agent bridge used to exist on disk without being loaded by the
+   page. Send then silently fell through to the old one-shot CLI path and the
+   MCP server that can reach Premiere never started. Keep the dependency order:
+   tools -> server/chat -> chat UI -> main (which exposes prAIAgentHost). */
+var agentFiles = ["agent/tools.js", "agent/server.js", "agent/chat.js", "agent/chat-ui.js"];
+var previousAgentScript = -1;
+for (var agentIndex = 0; agentIndex < agentFiles.length; agentIndex++) {
+  var agentSource = readFile(agentFiles[agentIndex]);
+  new Function(agentSource);
+  if (agentIndex < 3) {
+    assert(agentSource.indexOf('typeof window === "undefined"') >= 0,
+      agentFiles[agentIndex] + " must prefer its browser export in CEP even though CEP exposes CommonJS globals.");
+  }
+  if (agentFiles[agentIndex] === "agent/chat.js") {
+    assert(/codex\.push\("--json", "--skip-git-repo-check", "--ignore-user-config"/.test(agentSource),
+      "Codex agent turns must ignore the user's config so an obsolete configured model cannot break Default from Codex.");
+  }
+  var agentScriptAt = index.indexOf('src="' + agentFiles[agentIndex]);
+  assert(agentScriptAt > previousAgentScript, agentFiles[agentIndex] + " is missing or loaded out of dependency order.");
+  previousAgentScript = agentScriptAt;
+}
+assert(previousAgentScript < index.indexOf('src="js/main.js'), "Agent chat must load before main.js attaches the Premiere host bridge.");
+assert(/window\.PRAIChatUI\.send\(request/.test(main), "Send is no longer routed through the agent chat bridge.");
+assert(/window\.PRAIChatUI\.attach\(window\.prAIAgentHost\)/.test(main), "PR AI no longer gives the agent bridge access to Premiere.");
+
+new Function(main);
+new Function(host);
+
+var hostVersion = capture(host, /prAI_hostVersion\s*=\s*"([^"]+)"/, "host version");
+var mainVersion = capture(main, /prAI_hostVersion!='([^']+)'/, "main host-version guard");
+var indexVersion = capture(index, /js\/main\.js\?v=([^"']+)/, "index cache version");
+assert(hostVersion === mainVersion, "Host and panel version guards differ.");
+assert(hostVersion === indexVersion, "Host and index cache versions differ.");
+assert(/id="promptHighlight"/.test(index), "The prompt pill layer is missing from the composer.");
+assert(/id="promptHighlight"[\s\S]{0,200}<textarea id="prompt"/.test(index), "The pill layer must precede the prompt so the textarea paints above it.");
+var pillLayerRule = capture(styles, /\.composer > \.prompt-highlight \{([^}]*)\}/, "prompt pill layer rule");
+var promptRule = capture(styles, /\.composer > textarea \{([^}]*)\}/, "composer textarea rule");
+assert(/white-space:\s*pre-wrap/.test(pillLayerRule), "The pill layer does not wrap like the textarea, so pills would drift off the text.");
+assert(/pointer-events:\s*none/.test(pillLayerRule), "The pill layer would swallow clicks meant for the prompt.");
+var pillPad = capture(pillLayerRule, /padding:\s*([^;]+);/, "pill layer padding");
+var promptPad = capture(promptRule, /padding:\s*([^;]+);/, "prompt padding");
+assert(pillPad === promptPad, "The pill layer padding (" + pillPad + ") no longer matches the prompt padding (" + promptPad + "), so pills are offset.");
+var pillFont = capture(pillLayerRule, /font-size:\s*([^;]+);/, "pill layer font size");
+var promptFont = capture(promptRule, /font-size:\s*([^;]+);/, "prompt font size");
+assert(pillFont === promptFont, "The pill layer font size no longer matches the prompt, so pills are misaligned.");
+assert(/z-index:\s*1/.test(promptRule), "The prompt does not paint above the pill layer.");
+var pillRule = capture(styles, /\.prompt-mention \{([^}]*)\}/, "prompt pill rule");
+var pillDeclarations = pillRule.replace(/\/\*[\s\S]*?\*\//g, "");
+assert(!/(^|[^-\w])padding\s*:/.test(pillDeclarations), "The pill uses padding, which advances the text and breaks alignment with the textarea; use box-shadow spread.");
+assert(/box-shadow:/.test(pillRule) && /border-radius:/.test(pillRule), "The script tag no longer renders as a pill.");
+assert(/function renderPromptHighlight/.test(main), "Script tags are not drawn as pills.");
+assert(/updateScriptMentionMenu\(\);\s*renderPromptHighlight\(\);/.test(main), "Typing does not redraw the script pills.");
+assert(/els\.prompt\.addEventListener\("scroll"/.test(main), "Scrolling the prompt would leave the pills behind.");
+assert(/id="scriptMentionMenu"/.test(index), "The script @-mention menu is missing from the composer.");
+assert(/\.composer \{[^}]*position:\s*relative/.test(styles), "The composer is not a positioning context, so the mention menu cannot anchor to the prompt.");
+assert(/\.script-mention-menu \{/.test(styles), "The script mention menu has no styles.");
+assert(/function handleScriptMentionKeydown/.test(main), "The mention menu has no keyboard handling.");
+assert(/if \(handleScriptMentionKeydown\(event\)\) \{\s*return;\s*\}/.test(main), "Enter would send the prompt instead of accepting the highlighted script.");
+assert(/els\.prompt\.addEventListener\("input", function \(\) \{\s*updateScriptMentionMenu\(\);/.test(main), "Typing @ does not open the script suggestions.");
+assert(/var mentionedScript = applyScriptMentionSelection\(request\)/.test(main), "Sending a prompt does not resolve its @tagged script.");
+assert(/if \(!mentionedScript && \(shouldUseDeterministicQuickMode/.test(main), "A tagged script is overridden back to the open tab.");
+var mentionApplyRule = capture(main, /(function applyScriptMentionSelection\(text\) \{[\s\S]*?\n  \})/, "mention selection");
+assert(/switchScript\(target\.id\)/.test(mentionApplyRule), "A tagged script is not made active, so its sheet content would not be saved before switching.");
+
+var mentionStart = main.indexOf("function scriptMentionContext");
+var mentionEnd = main.indexOf("function closeScriptMentionMenu", mentionStart);
+assert(mentionStart >= 0 && mentionEnd > mentionStart, "Script mention helpers could not be isolated.");
+var mentionResolveStart = main.indexOf("function scriptMentionsInText");
+var mentionResolveEnd = main.indexOf("function applyScriptMentionSelection", mentionResolveStart);
+assert(mentionResolveStart >= 0 && mentionResolveEnd > mentionResolveStart, "The @tag resolver could not be isolated.");
+assert(main.indexOf('var scriptMentionMarker = "\\u2060";') !== -1, "The script tag no longer uses the zero-width marker, so the pill would show a literal @.");
+var scriptMentionMarker = "⁠";
+var scriptDocuments = [{ id: "s1", name: "Script 1" }, { id: "s2", name: "Script 2" }, { id: "s3", name: "Script 2 Copy" }];
+function scriptMentionCandidates() {
+  return scriptDocuments.map(function (d) { return { id: d.id, name: d.name }; });
+}
+eval(main.slice(mentionStart, mentionEnd));
+eval(main.slice(mentionResolveStart, mentionResolveEnd));
+assert(scriptMentionContext("do @Scr", 7).query === "Scr", "An @token under the caret is not detected.");
+assert(scriptMentionContext("do @Script 2", 12).query === "Script 2", "A multi-word script name cannot be typed after @.");
+assert(scriptMentionContext("mail me@x", 9) === null, "An email address is treated as a script mention.");
+assert(scriptMentionContext("@a\nfoo", 6) === null, "An @mention leaks across a line break.");
+assert(matchScriptMentions("").length === 3, "An empty @query does not list every script.");
+assert(matchScriptMentions("script 2").length === 2, "A multi-word @query does not match by prefix.");
+assert(matchScriptMentions("zzz").length === 0, "A non-matching @query still returns suggestions.");
+function mentionNames(text) {
+  return scriptMentionsInText(text).map(function (m) { return m.name; }).join("|");
+}
+assert(mentionNames("let's do @Script 2") === "Script 2", "A tagged script does not resolve.");
+assert(mentionNames("do @Script 2 Copy now") === "Script 2 Copy", "A longer script name loses to its own prefix.");
+assert(mentionNames("do @Script 2, then stop") === "Script 2", "A tag followed by punctuation does not resolve.");
+assert(mentionNames("do @script 2") === "Script 2", "Script tags are case sensitive.");
+assert(mentionNames("@Script 2 and @Script 1") === "Script 2|Script 1", "Multiple tags do not resolve in order of appearance.");
+assert(mentionNames("nothing tagged here") === "", "Untagged text resolves a script anyway.");
+assert(mentionNames("do @Nope") === "", "An unknown tag resolves to a script.");
+assert(mentionNames("do " + scriptMentionMarker + "Script 2") === "Script 2", "A pill-form tag does not resolve.");
+assert(mentionNames(scriptMentionMarker + "Script 2 Copy here") === "Script 2 Copy", "A pill-form tag loses to its own prefix.");
+assert(/var token = scriptMentionMarker \+ chosen\.name \+ " ";/.test(main), "Accepting a suggestion inserts a visible @ again.");
+assert(/request = request\.split\(scriptMentionMarker\)\.join\(""\);/.test(main), "The invisible tag marker is sent to the agent.");
+var pillRadius = capture(styles, /\.prompt-mention \{[\s\S]*?border-radius:\s*(\d+)px/, "pill radius");
+assert(Number(pillRadius) <= 4, "The script pill is rounded again (" + pillRadius + "px).");
+var pillSpread = capture(styles, /\.prompt-mention \{[\s\S]*?0 0 0 (\d+)px rgba\(239, 132, 99, 0\.3\)/, "pill spread");
+assert(Number(pillSpread) >= 3, "The script pill border hugs the text again (" + pillSpread + "px spread).");
+
+var scriptEditorPanelRule = capture(styles, /\.script-editor-panel \{([^}]*)\}/, "script editor panel rule");
+assert(!/overflow:\s*hidden/.test(scriptEditorPanelRule), "The script editor clips its own overflow again, so a focus scroll can strand the header off-screen.");
+assert(/overflow:\s*auto/.test(scriptEditorPanelRule), "The script editor body cannot be scrolled.");
+assert(/\.script-editor-panel \.settings-header \{[^}]*position:\s*sticky/.test(styles), "The script editor header is not pinned, so Cancel/Save can scroll out of reach.");
+assert(/function resetScriptEditorScroll/.test(main), "The script editor does not reset its scroll position.");
+assert(/updateSheetRails\(\);\s*resetScriptEditorScroll\(\);/.test(main), "Opening the script editor no longer starts at the top.");
+
+var scriptProjectBarRule = capture(styles, /\.script-project-bar \{([^}]*)\}/, "script project bar rule");
+assert(!/flex:\s*0\s+0\s+\d/.test(scriptProjectBarRule), "The script project bar reserves a fixed width again, leaving dead space before the tabs.");
+assert(/width:\s*auto/.test(scriptProjectBarRule), "The script project bar no longer sizes to its contents.");
+assert(/max-width:\s*\d+%/.test(scriptProjectBarRule), "The script project bar is not capped, so a long project name can crowd out the tabs.");
+assert(/flex:\s*0\s+0\s+auto/.test(scriptProjectBarRule), "The script project bar can shrink again, so many tabs squeeze the project name.");
+var scriptStripRule = capture(styles, /\.script-strip \{([^}]*)\}/, "script strip rule");
+assert(/flex:\s*1\s+1\s+0/.test(scriptStripRule), "The script strip sizes from its tabs again, which pushes the project bar narrower.");
+var scriptTabsRule = capture(styles, /\.script-tabs \{([^}]*)\}/, "script tabs rule");
+assert(/overflow-y:\s*hidden/.test(scriptTabsRule), "The script tabs can grow a vertical scrollbar.");
+assert(/\.script-tabs::-webkit-scrollbar \{[^}]*height:\s*0/.test(styles), "The script-tab scrollbar takes layout height again and knocks the tabs off the project select's centerline.");
+assert(!/padding-bottom:\s*[1-9]/.test(scriptTabsRule), "Script-tab padding offsets the tabs from the row centerline.");
+assert(/\.script-tabs\.can-scroll-left\.can-scroll-right/.test(styles), "Script-tab two-sided overflow fade is missing.");
+assert(/-webkit-mask-image:\s*linear-gradient/.test(styles), "Script-tab overflow is hard-clipped instead of faded.");
+assert(/#000 96px/.test(styles) && /calc\(100% - 96px\)/.test(styles), "Script-tab overflow fade is too narrow to remain visually clear.");
+assert(/scriptTabs\.addEventListener\("scroll", updateScriptTabOverflowFade\)/.test(main), "Script-tab fade does not react to scrolling.");
+assert(/window\.addEventListener\("resize", updateScriptTabOverflowFade\)/.test(main), "Script-tab fade does not react to panel resizing.");
+assert(/\.is-active-cell\.is-empty-cell:not\(\.is-editing\)::after/.test(styles), "The active empty sheet cell has no visible caret target.");
+assert(/@keyframes sheet-caret-blink/.test(styles), "The empty-cell caret does not blink.");
+assert(/var structuredPaste =/.test(main) && /sheetEditMode && structuredPaste/.test(main), "Structured spreadsheet paste is not preserved while a cell is editing.");
+assert(/var clickedCell = sheetCellFromEventTarget\(event\.target\)/.test(main), "The script sheet does not distinguish cell clicks from blank-canvas clicks.");
+assert(/!sheetEditMode && !sheetCellText\(targetCell\)/.test(main) && /enterSheetEdit\(targetCell\)/.test(main), "Blank sheet targets do not enter text editing mode.");
+assert(/handleScriptOverlayPaste[\s\S]{0,500}isEditableTarget\(event\.target\)/.test(main), "Sheet paste interception may hijack another script-editor text field.");
+assert(/var sheetRedoStack = \[\]/.test(main), "Sheet redo history is missing.");
+assert(/function resetSheetHistory\(\)[\s\S]{0,120}sheetUndoStack = \[\][\s\S]{0,80}sheetRedoStack = \[\]/.test(main), "Sheet history does not reset undo and redo together.");
+assert(/enterSheetEdit[\s\S]{0,900}pushSheetUndo\(true\)/.test(main), "Cell editing still depends on unreliable beforeinput history capture.");
+assert(/function redoSheetChange\(\)/.test(main) && /sheetRedoStack\.push\(sheetHistorySnapshot\(\)\)/.test(main), "Sheet undo does not preserve a redo snapshot.");
+assert(/isSheetUndo[\s\S]{0,300}isSheetRedo[\s\S]{0,260}consumeSheetKey\(event\)/.test(main), "Sheet undo/redo shortcuts can escape to Premiere.");
+assert(/isSheetUndo = event\.ctrlKey && !event\.metaKey/.test(main), "Sheet undo is not restricted to Ctrl+Z.");
+assert(/isBlockedCommandHistory[\s\S]{0,180}consumeSheetKey\(event\)/.test(main), "Command+Z can still escape from the script sheet.");
+assert(/if \(sheetEditMode\)[\s\S]{0,180}document\.execCommand\(isSheetRedo \? "redo" : "undo"/.test(main), "In-cell Ctrl+Z does not use granular text undo.");
+assert(/function setScriptEditorKeyIsolation\(enabled\)/.test(main) && /registerKeyEventsInterest\(enabled \? JSON\.stringify/.test(main), "CEP script-editor key isolation is missing.");
+assert(/scriptEditorOverlay\.hidden = false;[\s\S]{0,80}setScriptEditorKeyIsolation\(true\)/.test(main), "Opening the script editor does not isolate its shortcuts.");
+assert((main.match(/setScriptEditorKeyIsolation\(false\)/g) || []).length >= 2, "Closing or canceling the script editor does not release shortcut isolation.");
+assert(/function moveSheetEditingCaret\(event\)/.test(main) && /selection\.modify\(event\.shiftKey \? "extend" : "move"/.test(main), "In-cell caret navigation is missing.");
+assert(/granularity = event\.ctrlKey \|\| event\.altKey \? "word" : "character"/.test(main), "Word-wise cell navigation is missing.");
+assert(/moveSheetEditingCaret\(event\)[\s\S]{0,80}consumeSheetKey\(event\)/.test(main), "Handled caret keys can still leak to Premiere.");
+assert(/selectSheetEditingCellText\(\)/.test(main), "Select-all cannot be scoped to the editing cell.");
+assert(/placeCaretFromPoint\(cell, event\.clientX, event\.clientY\)/.test(main), "Double-click editing does not preserve the clicked caret position.");
+assert(/editingNavigationKeys/.test(main) && /altKey: true/.test(main), "CEP key isolation does not include modified navigation keys.");
+assert(/scriptEditorOverlay[\s\S]{0,180}isEditableTarget\(event\.target\)/.test(main), "Global panel shortcuts can still intercept script text input.");
+var sheetKeyStart = main.indexOf("function sheetEventKey");
+var sheetKeyEnd = main.indexOf("function moveSheetEditingCaret", sheetKeyStart);
+assert(sheetKeyStart >= 0 && sheetKeyEnd > sheetKeyStart, "CEP key normalization is missing.");
+eval(main.slice(sheetKeyStart, sheetKeyEnd));
+assert(sheetEventKey({ key: "Left" }) === "ArrowLeft", "Legacy CEP Left key is not normalized.");
+assert(sheetEventKey({ key: "Unidentified", keyCode: 38 }) === "ArrowUp", "Numeric CEP Up key is not normalized.");
+assert(sheetEventKey({ code: "ArrowDown" }) === "ArrowDown", "CEP code fallback does not recognize ArrowDown.");
+assert(/function handleSheetCellMouseUp\(event\)[\s\S]{0,520}enterSheetEdit\(editCell\)[\s\S]{0,100}placeCaretFromPoint/.test(main), "A normal cell click does not enter direct text editing.");
+assert(/sheetPointerDragged[\s\S]{0,500}Math\.abs/.test(main), "Direct cell editing does not preserve drag-to-select behavior.");
+assert(/document\.addEventListener\("mousemove", handleSheetPointerMove\)/.test(main), "Cell drag detection is not wired.");
+assert(/function handleScriptEditorControlArrow\(event\)/.test(main), "Dedicated Ctrl+Arrow routing is missing.");
+assert(/handleScriptEditorControlArrow[\s\S]{0,900}moveSheetEditingCaret\(event\)[\s\S]{0,300}consumeSheetKey\(event\)/.test(main), "Ctrl+Arrow can escape while editing a cell.");
+assert(/handleScriptEditorControlArrow[\s\S]{0,1200}moveSheetSelection\(key, event\.shiftKey, false, false\)/.test(main), "Ctrl+Arrow does not navigate cells outside editing mode.");
+assert(/window\.addEventListener\("keydown", handleScriptEditorControlArrow, true\)/.test(main), "Ctrl+Arrow is not captured before document handlers.");
+assert(/\? \[51, 48, 36, 53, 49, 116, 121, 119, 115, 123, 126, 124, 125, 117\]/.test(main), "macOS CEP virtual key codes are missing or out of order.");
+assert(/editingNavigationKeys[\s\S]{0,180}\? \[51, 116, 121, 119, 115, 123, 126, 124, 125, 117\]/.test(main), "macOS modified navigation key registration is missing.");
+assert(!/for \(i = 48; i <= 90; i\+\+\)/.test(main), "Browser key-code ranges are still being registered as macOS virtual keys.");
+assert(/registerKeyEventsInterest\(enabled \? JSON\.stringify\(scriptEditorKeyInterests\(\)\) : null\)/.test(main), "CEP key interests are not cleared with Adobe's documented null value.");
+
+/* CEP key isolation used to switch on only while the script editor overlay (or
+   its sheet) had focus, so the main composer prompt and every ordinary
+   Settings/Styles field never claimed arrows, Home/End, Delete, or Ctrl+A/C/
+   V/X/Z from Premiere - keystrokes typed there moved the timeline playhead,
+   rippled clips, or triggered project-level undo instead of editing the
+   field. */
+assert(/function shouldIsolateKeysForFocus\(target\)/.test(main), "There is no general rule for when the panel should claim keyboard shortcuts.");
+assert(/function syncKeyIsolationForFocus\(target\)/.test(main), "Focus changes cannot re-evaluate CEP key isolation.");
+assert(/document\.addEventListener\("focusin", function \(event\) \{\s*bindEditableTarget\(event\.target\);\s*syncKeyIsolationForFocus\(event\.target\);/.test(main), "Focusing a field no longer isolates its keyboard shortcuts unconditionally - it is likely still gated to the script editor overlay, which reintroduces the original bug for the main composer prompt and Settings/Styles fields.");
+assert(/document\.addEventListener\("focusout", function \(\) \{\s*window\.setTimeout\(function \(\) \{\s*syncKeyIsolationForFocus\(document\.activeElement\)/.test(main), "Losing focus does not release CEP key isolation, so normal Premiere shortcuts would stay captured everywhere after the first text field is used.");
+
+var isolationStart = main.indexOf("function shouldIsolateKeysForFocus");
+var isolationEnd = main.indexOf("els.refreshBtn.addEventListener", isolationStart);
+assert(isolationStart >= 0 && isolationEnd > isolationStart, "Key isolation helpers could not be isolated for testing.");
+var isEditableStart = main.indexOf("function isEditableTarget(target)");
+var isEditableEnd = main.indexOf("function stopEditableEvent", isEditableStart);
+assert(isEditableStart >= 0 && isEditableEnd > isEditableStart, "isEditableTarget could not be isolated for testing.");
+var isolationCalls = [];
+var els = {
+  scriptEditorOverlay: { hidden: true, contains: function () { return false; } },
+  scriptInput: { contains: function () { return false; } }
+};
+function setScriptEditorKeyIsolation(enabled) { isolationCalls.push(enabled); }
+eval(main.slice(isEditableStart, isEditableEnd));
+eval(main.slice(isolationStart, isolationEnd));
+var fakeTextarea = { tagName: "TEXTAREA" };
+var fakeInput = { tagName: "INPUT" };
+var fakeSelect = { tagName: "SELECT" };
+var fakeButton = { tagName: "BUTTON" };
+var fakeBody = { tagName: "BODY" };
+assert(shouldIsolateKeysForFocus(fakeTextarea) === true, "A focused textarea anywhere in the panel does not claim keyboard shortcuts - this is the composer prompt bug.");
+assert(shouldIsolateKeysForFocus(fakeInput) === true, "A focused plain <input> (Settings/Styles fields, project name) does not claim keyboard shortcuts.");
+assert(shouldIsolateKeysForFocus(fakeSelect) === true, "A focused <select> does not claim keyboard shortcuts.");
+assert(shouldIsolateKeysForFocus(fakeButton) === false, "A focused plain button claims keyboard shortcuts it does not need, which would block normal Premiere shortcuts everywhere else in the panel.");
+assert(shouldIsolateKeysForFocus(fakeBody) === false, "Nothing focused still claims keyboard shortcuts.");
+assert(shouldIsolateKeysForFocus(null) === false, "A null focus target throws or claims keyboard shortcuts.");
+syncKeyIsolationForFocus(fakeTextarea);
+syncKeyIsolationForFocus(fakeButton);
+assert(isolationCalls.length === 2 && isolationCalls[0] === true && isolationCalls[1] === false, "syncKeyIsolationForFocus does not toggle isolation according to shouldIsolateKeysForFocus.");
+els.scriptEditorOverlay = { hidden: false, contains: function (t) { return t === fakeButton; } };
+assert(shouldIsolateKeysForFocus(fakeButton) === true, "A plain button inside the open script editor overlay no longer keeps keyboard shortcuts isolated (pre-existing behavior).");
+els.scriptEditorOverlay = { hidden: true, contains: function () { return false; } };
+els.scriptInput = { contains: function (t) { return t === fakeButton; } };
+assert(shouldIsolateKeysForFocus(fakeButton) === true, "Focus inside the sheet grid no longer keeps keyboard shortcuts isolated (pre-existing behavior).");
+assert(/id="undoSheetBtn"/.test(index) && /id="redoSheetBtn"/.test(index), "Visible sheet undo/redo controls are missing.");
+assert(/undoSheetBtn\.addEventListener\("click", undoSheetChange\)/.test(main) && /redoSheetBtn\.addEventListener\("click", redoSheetChange\)/.test(main), "Sheet history controls are not wired.");
+assert(/function requestLooksLikeImageScriptImport\(text, images, modes\)/.test(main), "Image-to-script intent detection is missing.");
+assert(/function scriptTablePayloadToHtml\(payload\)/.test(main) && /function normalizeAgentScriptPayload\(payload\)/.test(main), "Structured image-script responses cannot be installed as a sheet.");
+assert(/scriptWorkflowRequested && !scriptInput\.text && !imageScriptRequest/.test(main), "An empty active sheet still blocks image-to-script workflows before vision runs.");
+assert(/shouldUseDeterministicQuickMode\(requestForRouting, quickModes\) && !imageScriptRequest/.test(main), "Image-script requests can still bypass vision through the deterministic shortcut.");
+assert(/IMAGE-TO-SCRIPT MODE:[\s\S]{0,420}scriptTable/.test(main), "The agent prompt does not require screenshot transcription before assembly.");
+assert(/imageScriptRequest && \(!actions \|\| !actions\.scriptHtml\)/.test(main), "Image assembly can proceed without first producing a usable script table.");
+assert(/imageScriptInstalled[\s\S]{0,260}deterministicQuickModeActions\(getScriptInputPayload\(\), quickModes\)/.test(main), "Image workflow actions are not rebuilt from the installed script.");
+var imageIntentStart = main.indexOf("function requestLooksLikeImageScriptImport");
+var imageIntentEnd = main.indexOf("function requestLooksLikeGeneralChat", imageIntentStart);
+assert(imageIntentStart >= 0 && imageIntentEnd > imageIntentStart, "Image-script intent helpers could not be isolated.");
+eval(main.slice(imageIntentStart, imageIntentEnd));
+assert(requestLooksLikeImageScriptImport("convert this screenshot to a script", [{ path: "/tmp/script.png" }], []) === true, "Explicit screenshot conversion is not detected.");
+assert(requestLooksLikeImageScriptImport("", [{ path: "/tmp/script.png" }], []) === true, "An image-only request is not treated as script import.");
+assert(requestLooksLikeImageScriptImport("do this", [{ path: "/tmp/script.png" }], ["full-processing"]) === true, "A selected script workflow does not route its image through vision.");
+assert(requestLooksLikeImageScriptImport("match this visual style", [{ path: "/tmp/reference.png" }], []) === false, "Ordinary visual references are incorrectly forced into script import.");
+assert(requestWantsImageScriptAssembly("assemble this script image", [], [{ path: "/tmp/script.png" }]) === true, "Image-based assembly intent is not detected.");
+assert(requestWantsImageScriptAssembly("convert this script image", [], [{ path: "/tmp/script.png" }]) === false, "Transcription-only image requests incorrectly trigger timeline assembly.");
+
+var optimizeIntentStart = main.indexOf("function validationDeclinesOptimizedText");
+var optimizeIntentEnd = main.indexOf("function removeAutoGeneratedOptimizedTextColumn", optimizeIntentStart);
+assert(optimizeIntentStart >= 0 && optimizeIntentEnd > optimizeIntentStart, "Optimized subtitle split guard is missing.");
+var defaultScriptSplitText = capture(main, /var defaultScriptSplitText = (true|false);/, "default split-text flag") === "true";
+eval(main.slice(optimizeIntentStart, optimizeIntentEnd));
+assert(defaultScriptSplitText === true, "Splitting text is no longer part of the job by default.");
+assert(validationDeclinesOptimizedText("") === false, "Blank validation instructions are read as a refusal to split.");
+assert(validationDeclinesOptimizedText("do not split the captions") === true, "An explicit request not to split is ignored.");
+assert(validationDeclinesOptimizedText("check the source files") === false, "Ordinary validation instructions are read as a refusal to split.");
+assert(scriptWantsSplitText({}) === true, "Splitting text is no longer part of the job by default.");
+assert(scriptWantsSplitText({ splitText: false }) === false, "The per-script split toggle cannot turn splitting off.");
+assert(scriptWantsSplitText({ splitText: true, validationPrompt: "do not split text" }) === false, "Validation instructions can no longer override the split toggle.");
+assert(/splitScriptTextBtn/.test(index) && /scriptSplitTextToggle/.test(index), "The split-text control is missing from the script panel.");
+assert(/function splitScriptTextNow/.test(main), "Split text cannot be run on its own.");
+assert(/els\.splitScriptTextBtn\.addEventListener/.test(main), "The Split Text button is not wired up.");
+/* Validate has two modes: the default is pure logic (fast, local, no Claude
+   call) and "Validate with AI" is the slow path for hard cases. Logic mode must
+   never reach the agent - not even when split text is on or validation
+   instructions are present - and must not fall back to the rule-based splitter
+   for Optimized Text, which was rejected in favor of the AI split. */
+assert(/id="validateScriptBtn"[^>]*>Validate</.test(index) && /id="validateScriptAiBtn"[^>]*>Validate with AI</.test(index), "The script panel no longer has separate logic and AI Validate buttons.");
+var validateRule = capture(main, /(function validateScriptWithAgent\(options\) \{[\s\S]*?\n  \})/, "validate function");
+assert(/var useAgent = !!\(options && options\.useAgent\);/.test(validateRule), "Validate cannot tell logic mode from AI mode.");
+assert(/if \(useAgent\) \{\s*usedAgentValidation = true;/.test(validateRule), "Validate reaches the agent for a reason other than the user choosing AI mode.");
+assert(!/validationInstructions \|\| wantsSplitText/.test(validateRule), "Logic Validate routes to the agent again when split text is on or instructions are present, making it slow.");
+assert(/var wantsSplitText = useAgent && scriptWantsSplitText\(\);/.test(validateRule), "Logic Validate requests a text split it cannot perform without the agent.");
+assert(/if \(useAgent\) \{\s*applied \+= ensureOptimizedTextColumn\(agentSplitValues\);\s*\}/.test(validateRule), "Logic Validate writes Optimized Text with the rule-based splitter instead of leaving it for the AI split.");
+assert(/validateScriptWithAgent\(\{ useAgent: false \}\)/.test(main) && /validateScriptWithAgent\(\{ useAgent: true \}\)/.test(main), "The Validate buttons are not wired to their respective modes.");
+assert(/scriptWantsSplitText\(\) \? splitTextPromptSection\(scriptPayload\) : ""/.test(main), "The validation prompt no longer asks the agent to split the text.");
+
+/* The split must be the agent's call, not a local rule, and must fall back rather than fail. */
+assert(/function buildSplitTextPrompt/.test(main), "There is no agent prompt for splitting text.");
+assert(/function splitScriptTextWithAgent/.test(main), "Split Text no longer runs through the agent.");
+assert(/els\.splitScriptTextBtn\.addEventListener\("click", splitScriptTextWithAgent\)/.test(main), "The Split Text button does not run the agent pass.");
+assert(/function optimizedValuesFromAgentPayload/.test(main), "Agent caption rows are never read back.");
+assert(/function applyAgentColumnRoles/.test(main), "The agent cannot set the sheet column roles.");
+var splitAgentRule = capture(main, /(function splitScriptTextWithAgent\(\) \{[\s\S]*?\n  \})/, "agent split runner");
+assert(/splitScriptTextLocally\(/.test(splitAgentRule), "An agent failure does not fall back to the local split.");
+assert(/decide what every column is/i.test(main), "The agent is not asked to identify the columns itself.");
+assert(/never text and never optimizedText/i.test(main), "The agent is not told that feature/commentary columns are notes.");
+var rolesRule = capture(main, /(function applyAgentColumnRoles\(table, payload\) \{[\s\S]*?\n  \})/, "agent role application");
+assert(/setLogicalColumnRole\(table, c, wanted\)/.test(rolesRule), "Agent roles are not applied across every column, so a stale tag can survive.");
+assert(validationDeclinesOptimizedText("do not optimize subtitles") === true, "A negative subtitle instruction does not disable splitting.");
+assert(/generatedOptimizedText[\s\S]{0,220}!scriptWantsSplitText/.test(main), "Previously auto-generated optimized text can still alter captions when splitting is off.");
+assert(/function removeAutoGeneratedOptimizedTextColumn/.test(main), "There is no safe cleanup path for old auto-generated optimized columns.");
+assert(/data-generated-optimized-text[\s\S]{0,180}current !== \(expectedByRow\[info\.originRow\]/.test(main), "Generated optimized-column cleanup does not protect manually edited content.");
+
+var fullStart = main.indexOf("function runLocalFullProcessRowsAction");
+var fullEnd = main.indexOf("function applyLocalAndHostActions", fullStart);
+assert(fullStart >= 0 && fullEnd > fullStart, "Full Process implementation is missing.");
+var fullProcess = main.slice(fullStart, fullEnd);
+assert(!/trackType:\s*["']both["']/.test(fullProcess), "Full Process may not target both video and audio for deletion.");
+assert(!/type:\s*["']insertClipRange["'][\s\S]{0,160}trackType:\s*["']audio["']/.test(fullProcess), "Full Process may not insert replacement audio.");
+assert(/type:\s*["']splitTrackAtTimes["'][\s\S]{0,160}trackType:\s*["']audio["']/.test(fullProcess), "Full Process must razor existing audio.");
+assert(/validateFullProcessPlan\s*\(/.test(fullProcess), "Full Process must run its plan preflight.");
+assert(/preserveAudioTrackIndex/.test(fullProcess), "Full Process must enable host audio protection.");
+assert(/preserveImportedSrt:\s*true/.test(fullProcess), "Full Process must enable SRT protection.");
+assert(/fullProcessMediaResolutionPolicy/.test(fullProcess) && /mostly empty timeline/.test(fullProcess), "Full Process has no guard against a mostly unresolved footage plan.");
+assert(/strictProjectItemLookup:\s*true/.test(fullProcess) && /Premiere will retry the literal name/.test(fullProcess), "Unresolved panel sources are not retried against Premiere's live project tree.");
+assert(/mediaActions\[mi\]\.abortOnFailure\s*=\s*false/.test(fullProcess), "One failed footage insert can still cancel every later source.");
+assert(/later sources were still processed/.test(fullProcess), "Partial footage results do not explain that later sources continue after a failure.");
+
+var mediaPolicyStart = main.indexOf("function fullProcessMediaResolutionPolicy");
+var autoMediaStart = main.indexOf("function automaticMediaDurationForGroup");
+var mediaPolicyEnd = main.indexOf("function runLocalFullProcessRowsAction", mediaPolicyStart);
+assert(autoMediaStart >= 0 && mediaPolicyStart > autoMediaStart && mediaPolicyEnd > mediaPolicyStart, "Full Process media timing or resolution policy is missing.");
+eval(main.slice(autoMediaStart, mediaPolicyEnd));
+assert(fullProcessMediaResolutionPolicy(20, 18).canProceed === true, "Full Process blocks a mostly resolved script with two missing clips.");
+assert(fullProcessMediaResolutionPolicy(20, 3).canProceed === false, "Full Process permits the old three-of-many partial placement failure.");
+assert(fullProcessMediaResolutionPolicy(3, 0).canProceed === false, "Full Process permits a timeline with no resolved footage.");
+assert(fullProcessMediaResolutionPolicy(20, 3, 17).canProceed === true, "Strict live-project retries are blocked by the stale panel resolution ratio.");
+assert(automaticMediaDurationForGroup(3, 0, 3) === 1, "Three source-only media cells do not divide a three-second audio row evenly.");
+assert(Math.abs(automaticMediaDurationForGroup(4, 1, 2) - 1.5) < 0.001, "Source-only media does not use the audio time remaining after explicit cuts.");
+assert(/autoDuration:\s*true/.test(main) && /groupAlignedAudioDuration/.test(fullProcess), "Source rows with blank Cut cells still produce no timed placement plan.");
+assert(/refreshProjectContextForWork\(\{ quiet: true, requireFresh: true \}\)/.test(main), "Deterministic workflows may silently reuse stale project context.");
+assert(/action\.projectItemId\s*\|\|\s*action\.strictProjectItemLookup\s*===\s*true/.test(host), "Strict live source lookup can fall through to unsafe fuzzy matching.");
+assert(/function prAI_findProjectItemUniqueCompact/.test(host) && /state\.count\s*===\s*1/.test(host), "Compact source IDs are not resolved globally and uniquely.");
+assert(/sourceReference:\s*action\s*&&\s*action\.sourceReference/.test(host), "Failed footage actions do not report their original script source.");
+
+var cutParserStart = main.indexOf("function parseScriptNumber");
+var cutParserEnd = main.indexOf("function defaultCompactScriptRanges", cutParserStart);
+assert(cutParserStart >= 0 && cutParserEnd > cutParserStart, "Script cut parser is missing.");
+eval(main.slice(cutParserStart, cutParserEnd));
+var vietnameseCuts = parseCutDurationSeconds("1-2s\ngiây 9s");
+assert(vietnameseCuts.ranges.length === 2 && vietnameseCuts.unresolved.length === 0, "Vietnamese single-second cuts with a trailing s are dropped.");
+var bulletCuts = parseCutDurationSeconds("-2-3\n- giây 2\n- cuối giây 3 đầu giây 4 (động tác)");
+assert(bulletCuts.ranges.length === 3 && bulletCuts.unresolved.length === 0, "Bullet-prefixed or edge-described source cuts are dropped.");
+var repeatedSeconds = parseCutDurationSeconds("giây 1, giây 9");
+assert(repeatedSeconds.ranges.length === 2 && repeatedSeconds.ranges[0].sourceLineIndex === repeatedSeconds.ranges[1].sourceLineIndex, "Multiple single-second cuts no longer map to one source row.");
+assert(parseCutDurationSeconds("So many women in their 60s have made the switch.").ranges.length === 1, "Regression fixture no longer reproduces the 60s text/cut ambiguity.");
+var multipleRanges = parseCutDurationSeconds("54-56\n1:17-1:18, 1:20-1:21\n1:15-1:16, 1:21-1:22 (speed-up 8-10, ignore these notes)");
+assert(multipleRanges.ranges.length === 5 && multipleRanges.unresolved.length === 0, "Multiple second/MM:SS ranges in one cut cell are dropped.");
+assert(multipleRanges.ranges[1].start === 77 && multipleRanges.ranges[2].start === 80, "MM:SS source ranges are not converted to seconds.");
+assert(multipleRanges.ranges[1].sourceLineIndex === multipleRanges.ranges[2].sourceLineIndex && multipleRanges.ranges[3].sourceLineIndex === multipleRanges.ranges[4].sourceLineIndex, "Multiple ranges on one line do not remain attached to one source.");
+var noteFreeRanges = parseCutDurationSeconds("1-2 [ignore 8-10] {also 12-14}");
+assert(noteFreeRanges.ranges.length === 1 && noteFreeRanges.ranges[0].start === 1, "Ranges inside script notes are being treated as footage cuts.");
+
+var authoritativeTextStart = main.indexOf("function scriptColumnIsAuthoritativeText");
+var authoritativeTextEnd = main.indexOf("function scriptOverlayTextForRow", authoritativeTextStart);
+assert(authoritativeTextStart >= 0 && authoritativeTextEnd > authoritativeTextStart, "Authoritative text-column guard is missing.");
+eval(main.slice(authoritativeTextStart, authoritativeTextEnd));
+assert(scriptColumnIsAuthoritativeText(0, ["text", "cut", "source"], 0) === true, "Assigned Text columns are not authoritative.");
+assert(scriptColumnIsAuthoritativeText(1, ["text", "cut", "source"], 0) === false, "Cut columns are incorrectly authoritative text.");
+assert(/!authoritativeText\s*&&\s*\(parsedCut\.ranges\.length\s*\|\|\s*definiteSource\)/.test(main), "Text rows containing values such as 60s can still be discarded as source cuts.");
+function cleanOverlayCaptionText(value) {
+  return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+function scriptCellLooksLikeProductionNote() {
+  return false;
+}
+var overlayTextEnd = main.indexOf("function parseCompactSourceCut", authoritativeTextEnd);
+assert(overlayTextEnd > authoritativeTextEnd, "Script overlay row parser is missing.");
+eval(main.slice(authoritativeTextEnd, overlayTextEnd));
+var ageSentence = "So many women in their 60s have made the switch and never looked back.";
+assert(scriptOverlayTextForRow([ageSentence, "01-02", "K23.2 O1.mp4"], [], ["text", "cut", "source"], 0, 2, 1) === ageSentence, "A valid text row containing '60s' is still dropped with all of its footage.");
+assert(scriptOverlayTextForRow(["", "", "crop close and speed up", "K11.mp4"], [], ["text", "cut", "notes", "source"], 0, 3, 1) === "", "A production-note column is still promoted into an extra subtitle when Text is blank.");
+
+var sourceAliasStart = main.indexOf("function normalizeScriptSourceName");
+var sourceAliasEnd = main.indexOf("function validationBinHints", sourceAliasStart);
+assert(sourceAliasStart >= 0 && sourceAliasEnd > sourceAliasStart, "Script source alias normalization is missing.");
+eval(main.slice(sourceAliasStart, sourceAliasEnd));
+assert(normalizeScriptSourceAlias("seed 2.3") === "S2.3", "Seedance source aliases do not normalize to compact S IDs.");
+assert(normalizeScriptSourceAlias("seed 2.11\nseed 2.3") === "S2.11\nS2.3", "Multiple Seedance source aliases in one cell are not normalized.");
+assert(normalizeScriptSourceAlias("Seedance 2.11 - pull on.mp4") === "S2.11 - pull on.mp4", "Seedance project-item names do not normalize to compact S IDs.");
+assert(normalizeScriptSourceAlias("Source/Seed 2.3 detail.mp4") === "Source/S2.3 detail.mp4", "Seed aliases inside project paths do not normalize to compact S IDs.");
+assert(normalizeScriptSourceName("Seed 2.3.mp4") === normalizeScriptSourceName("S2.3"), "Script and project Seed aliases do not share one canonical lookup name.");
+assert(normalizeScriptSourceName("K24.1.png") === "k241", "Still-image extensions are not removed for exact source matching.");
+assert(sourceLookupTokens("Seedance 2.11 - pull on.mp4").indexOf("s211") !== -1, "Project-item token lookup does not index Seedance aliases as compact S IDs.");
+assert(sourceKeywordTokens("K21.2 Beige O1.mp4").indexOf("beige") !== -1, "Variant keywords are not available to disambiguate compact source IDs.");
+assert(sourceKeywordTokens("Sandy 29 (1).mp4").indexOf("sandy") !== -1, "Named source keywords are not indexed for fuzzy matching.");
+
+function firstScriptSourceName(value) {
+  return String(value || "");
+}
+function activeScriptDocument() {
+  return { validationPrompt: "" };
+}
+function validationBinHints() {
+  return [];
+}
+var sourceMatcherStart = main.indexOf("function sourceMatchForScriptSource");
+var sourceMatcherEnd = main.indexOf("function firstScriptSourceName", sourceMatcherStart);
+assert(sourceMatcherStart >= 0 && sourceMatcherEnd > sourceMatcherStart, "Script source matcher is missing.");
+eval(main.slice(sourceMatcherStart, sourceMatcherEnd));
+eval(sliceFn(main, "collapseDuplicateSourceCandidates"));
+var state = {
+  projectItems: [
+    { name: "K1.1-Purple2 O3.mp4", nodeId: "wrong", type: 1, mediaPath: "/Easy/K1.1-Purple2 O3.mp4" },
+    { name: "K1.1 Pink O1.mp4", nodeId: "correct", type: 1, mediaPath: "/Deep/Nested/K1.1 Pink O1.mp4" }
+  ]
+};
+assert(sourceMatchForScriptSource("K1.1 Pink O1.mp4").item.nodeId === "correct", "A shallow fuzzy source overrides the exact filename in a deeper bin.");
+state.projectItems = [{ name: "K1.1-Purple2 O3.mp4", nodeId: "wrong", type: 1, mediaPath: "/Easy/K1.1-Purple2 O3.mp4" }];
+assert(sourceMatchForScriptSource("K1.1 Pink O1.mp4").item === null, "Contradictory Pink/O1 qualifiers still resolve to Purple/O3 footage.");
+assert(sourceMatchForScriptSource("K1.1").item.nodeId === "wrong", "A unique shortened source ID can no longer resolve without a full filename.");
+state.projectItems = [
+  { name: "V2-fabric.mp4", nodeId: "generic-v2", type: 1, mediaPath: "/Easy/V2-fabric.mp4" },
+  { name: "hook v2", nodeId: "hook-v2", type: 1, mediaPath: "/Deep/hook v2.mp4" },
+  { name: "hook v2 extend", nodeId: "hook-v2-extend", type: 1, mediaPath: "/Deep/hook v2 extend.mp4" }
+];
+assert(sourceMatchForScriptSource("hook v2").item.nodeId === "hook-v2", "Literal source 'hook v2' resolves to a generic V2 clip.");
+assert(sourceMatchForScriptSource("hook v2 extend").item.nodeId === "hook-v2-extend", "Literal source 'hook v2 extend' loses its distinguishing descriptor.");
+assert(/function prAI_findProjectItemByNodeId/.test(host) && /function prAI_findProjectItemExact/.test(host), "Host lookup does not perform project-wide ID and exact-name passes.");
+assert(/if \(action\.projectItemId\s*\|\|\s*action\.strictProjectItemLookup\s*===\s*true\) \{\s*return null;\s*\}/.test(host), "Host lookup can still replace a selected project-item ID with an easier fuzzy match.");
+
+var mediaLineStart = main.indexOf("function isScriptMediaExtensionToken");
+var mediaLineEnd = main.indexOf("function sourceLabelsFromValidationText", mediaLineStart);
+assert(mediaLineStart >= 0 && mediaLineEnd > mediaLineStart, "Full source filename parsing helpers are missing.");
+eval(main.slice(mediaLineStart, mediaLineEnd));
+assert(isScriptMediaExtensionToken("mp4") && isScriptMediaExtensionToken(".MP4"), "Bare media extensions are not recognized as invalid source tokens.");
+assert(isScriptMediaExtensionToken("png") && isScriptMediaExtensionToken(".JPG"), "Still-image extensions are not recognized as media tokens.");
+assert(mediaFilenameFromScriptLine("Stretch Outside.mp4") === "Stretch Outside.mp4", "Source filenames without numeric IDs are not preserved.");
+assert(mediaFilenameFromScriptLine("K24.1.png") === "K24.1.png", "Still-image source filenames are dropped by script parsing.");
+assert(mediaFilenameFromScriptLine("18- product, waist, zip, details, .mp4 g") === "18- product, waist, zip, details, .mp4", "Source filenames containing commas or trailing notes are truncated.");
+var validationLabelStart = main.indexOf("function sourceLabelsFromValidationText");
+var validationLabelEnd = main.indexOf("function reconcileValidationPayloadWithProject", validationLabelStart);
+eval(main.slice(validationLabelStart, validationLabelEnd));
+assert(sourceLabelsFromValidationText("mp4").length === 0 && sourceLabelsFromValidationText(".MP4").length === 0, "Validation still invents source IDs from bare media extensions.");
+var literalSourceStart = main.indexOf("function scriptSourceLineHasDescriptors");
+var literalSourceEnd = main.indexOf("function extractScriptSourceLabels", literalSourceStart);
+assert(literalSourceStart >= 0 && literalSourceEnd > literalSourceStart, "Literal descriptive-source guard is missing.");
+eval(main.slice(literalSourceStart, literalSourceEnd));
+assert(scriptSourceLineHasDescriptors("hook v2") === true && scriptSourceLineHasDescriptors("hook v2 extend") === true, "Descriptive extensionless source names are reduced to generic IDs.");
+assert(scriptSourceLineHasDescriptors("D2.5") === false, "A compact shorthand source is incorrectly treated as a descriptive full name.");
+assert(/compactLabels\.length\s*&&\s*scriptSourceLineHasDescriptors\(line\)/.test(main), "Source extraction does not preserve descriptive source cells literally.");
+assert(/function prAI_normalizeProjectItemLookupName[\s\S]{0,220}png\|jpe\?g/.test(host), "The host resolver does not normalize still-image extensions.");
+
+var rangeStart = main.indexOf("function paddedAudioLineRanges");
+var rangeEnd = main.indexOf("function runLocalFullProcessRowsAction", rangeStart);
+var ranges = main.slice(rangeStart, rangeEnd);
+assert(ranges.indexOf("boundaries[0] = 0") >= 0, "Audio pre-roll must belong to the first row.");
+assert(ranges.indexOf("boundaries[blocks.length] = audioDuration") >= 0, "Audio tail must belong to the final row.");
+assert(/planned audio coverage changed/.test(main), "Full Process must compare planned and original audio coverage.");
+
+eval(ranges);
+var sampleRanges = paddedAudioLineRanges([
+  { start: 0.4, end: 2.0 },
+  { start: 2.6, end: 4.2 },
+  { start: 5.1, end: 6.7 }
+], 8, 0.25, 0.25);
+assert(sampleRanges.length === 3, "Audio range builder changed the script-row count.");
+assert(sampleRanges[0].start === 0 && sampleRanges[2].end === 8, "Audio range builder trimmed the sample head or tail.");
+assert(Math.abs(sampleRanges[0].end - sampleRanges[1].start) < 0.001 && Math.abs(sampleRanges[1].end - sampleRanges[2].start) < 0.001, "Audio range builder introduced a gap or overlap.");
+
+var planStart = main.indexOf("function validateFullProcessPlan");
+var planEnd = main.indexOf("function paddedAudioLineRanges", planStart);
+eval(main.slice(planStart, planEnd));
+var validPlan = {
+  rowCount: 2,
+  lineRanges: [{ start: 0, end: 2 }, { start: 2, end: 4 }],
+  audioDuration: 4,
+  rangeStart: 0,
+  rangeEnd: 4,
+  sourceClips: [{ startSeconds: 0, endSeconds: 4 }],
+  audioMoveActions: [
+    { projectItemId: "audio", targetStartSeconds: 0, durationSeconds: 2 },
+    { projectItemId: "audio", targetStartSeconds: 2, durationSeconds: 2 }
+  ],
+  hostActions: [
+    { type: "splitTrackAtTimes", trackType: "audio", trackIndex: 0 },
+    { type: "moveClip", trackType: "audio", trackIndex: 0 },
+    { type: "deleteTrackRange", trackType: "video", trackIndex: 0 },
+    { type: "importSrtFile", cleanupAfterImport: false, removeProjectItemAfterCaptionTrack: false }
+  ]
+};
+validateFullProcessPlan(validPlan);
+var rejectedAudioDelete = false;
+try {
+  validPlan.hostActions.push({ type: "deleteTrackRange", trackType: "audio", trackIndex: 0 });
+  validateFullProcessPlan(validPlan);
+} catch (expectedDeleteError) {
+  rejectedAudioDelete = true;
+}
+assert(rejectedAudioDelete, "Full Process preflight accepted destructive audio deletion.");
+
+assert(/function prAI_validateActionProtections/.test(host), "Host action protection preflight is missing.");
+assert(/function prAI_assertAudioTrackIntegrity/.test(host), "Host audio integrity monitor is missing.");
+assert(/stopped to prevent audio trimming/.test(host), "Move operations must reject source-range trimming.");
+assert(/removeProjectItemAfterCaptionTrack !== true/.test(host), "Imported SRT removal must remain opt-in.");
+assert(!/cleanupAfterImport:\s*true/.test(main), "Panel workflows may not enable SRT cleanup.");
+assert(!/removeProjectItemAfterCaptionTrack:\s*true/.test(main), "Panel workflows may not remove imported SRT items.");
+
+var offsetRangeStart = host.indexOf("function prAI_resolveSourceOffsetRange");
+var offsetRangeEnd = host.indexOf("function prAI_normalizeProjectItemRange", offsetRangeStart);
+assert(offsetRangeStart >= 0 && offsetRangeEnd > offsetRangeStart, "Source timecode offset conversion is missing.");
+eval(host.slice(offsetRangeStart, offsetRangeEnd));
+var timecodedRange = prAI_resolveSourceOffsetRange(20985.08, 2, 4, true);
+assert(timecodedRange.inPointSeconds === 2 && timecodedRange.outPointSeconds === 4, "Source-relative offsets were shifted by embedded media timecode.");
+assert(Math.abs((timecodedRange.outPointSeconds - timecodedRange.inPointSeconds) - 2) < 0.0001, "Source-relative handling changed the requested cut duration.");
+var embeddedTimecodeRange = prAI_resolveSourceOffsetRange(20985.08, 20987.08, 20989.08, "timecode");
+assert(Math.abs(embeddedTimecodeRange.inPointSeconds - 2) < 0.0001 && Math.abs(embeddedTimecodeRange.outPointSeconds - 4) < 0.0001, "Explicit embedded timecode was not converted to source-relative offsets.");
+var zeroStartRange = prAI_resolveSourceOffsetRange(0, 11, 12, true);
+assert(zeroStartRange.inPointSeconds === 11 && zeroStartRange.outPointSeconds === 12, "Zero-timecode sources changed under offset conversion.");
+var absoluteRange = prAI_resolveSourceOffsetRange(20985.08, 2, 4, false);
+assert(absoluteRange.inPointSeconds === 2 && absoluteRange.outPointSeconds === 4, "Absolute source in/out actions were incorrectly shifted.");
+assert(/item\.startTime\(\)/.test(host) && /mediaStartSeconds:\s*prAI_projectItemMediaStartSeconds\(item\)/.test(host), "Project snapshots do not expose source media start timecode.");
+assert(/action\.sourceRangeResolved === true/.test(host), "Resolved source ranges can be converted more than once.");
+assert(/sourceRangeMode:\s*"offset"/.test(main), "Panel-built script media ranges are not marked as source offsets.");
+var normalizeRangeStart = host.indexOf("function prAI_projectItemMediaStartSeconds");
+var normalizeRangeEnd = host.indexOf("function prAI_applyProjectItemRange", normalizeRangeStart);
+var prAI_timeValueSeconds = function (value) { return value && value.seconds !== undefined ? Number(value.seconds) : null; };
+eval(host.slice(normalizeRangeStart, normalizeRangeEnd));
+var timecodedItem = { startTime: function () { return { seconds: 20985.08 }; } };
+var offsetAction = { inPointSeconds: 2, outPointSeconds: 4, sourceRangeMode: "offset" };
+var firstResolvedRange = prAI_normalizeProjectItemRange(timecodedItem, offsetAction);
+assert(firstResolvedRange.inPointSeconds === 2 && firstResolvedRange.outPointSeconds === 4, "Host shifted a source-relative range by media start timecode.");
+offsetAction.inPointSeconds = firstResolvedRange.inPointSeconds;
+offsetAction.outPointSeconds = firstResolvedRange.outPointSeconds;
+offsetAction.sourceRangeResolved = true;
+var secondResolvedRange = prAI_normalizeProjectItemRange(timecodedItem, offsetAction);
+assert(secondResolvedRange.inPointSeconds === 2 && secondResolvedRange.outPointSeconds === 4, "Host changed an already resolved source-relative range.");
+assert(/stopped before inserting an incorrectly long clip/.test(host), "Host does not verify source range duration before timeline insertion.");
+
+var guardStart = host.indexOf("function prAI_actionTargetsAudioTrack");
+var guardEnd = host.indexOf("function prAI_audioTrackIntegritySnapshot", guardStart);
+var prAI_normalizeAction = function (action) { return action; };
+eval(host.slice(guardStart, guardEnd));
+prAI_validateActionProtections([
+  { type: "splitTrackAtTimes", trackType: "audio", trackIndex: 1 },
+  { type: "moveClip", trackType: "audio", trackIndex: 1 },
+  { type: "deleteTrackRange", trackType: "video", trackIndex: 0 },
+  { type: "importSrtFile", cleanupAfterImport: false }
+], { preserveAudioTrackIndex: 1, preserveImportedSrt: true });
+var hostRejectedAudioDelete = false;
+try {
+  prAI_validateActionProtections([
+    { type: "deleteTrackRange", trackType: "both", videoTrackIndex: 0, audioTrackIndex: 1 }
+  ], { preserveAudioTrackIndex: 1, preserveImportedSrt: true });
+} catch (expectedHostGuardError) {
+  hostRejectedAudioDelete = true;
+}
+assert(hostRejectedAudioDelete, "Host protection accepted deletion of the configured audio track.");
+var hostRejectedSrtDelete = false;
+try {
+  prAI_validateActionProtections([
+    { type: "importSrtFile", deleteSrtAfterImport: true }
+  ], { preserveAudioTrackIndex: 1, preserveImportedSrt: true });
+} catch (expectedSrtGuardError) {
+  hostRejectedSrtDelete = true;
+}
+assert(hostRejectedSrtDelete, "Host protection accepted SRT cleanup.");
+
+var headerCellRule = capture(main, /(function headerCellForColumn\(table, colIndex\) \{[\s\S]*?\n  \})/, "header cell lookup");
+assert(!/rows\[0\]\.children\[colIndex\]/.test(headerCellRule), "Column roles are read by physical cell position again, so merged cells shift every role.");
+assert(/logicalSheetGrid\(table\)\.refs\[0\]/.test(headerCellRule), "Column roles are not resolved through the logical grid.");
+assert(/originCol === colIndex/.test(headerCellRule), "A merged header cell can claim a role for every column it spans.");
+assert(/function appendLogicalSheetColumn/.test(main), "Appending a sheet column is not merged-cell aware.");
+assert(/optimizedIndex = appendLogicalSheetColumn\(table, "Optimized Text", dataStart\)/.test(main), "The Optimized Text column is appended without aligning its logical index.");
+var ensureRule = capture(main, /(function ensureOptimizedTextColumn\(valuesByRow\) \{[\s\S]*?\n  \})/, "optimized text column builder");
+assert(!/physicalRows\[r\]\.appendChild/.test(ensureRule), "The Optimized Text column is appended per physical row again, which scatters it across logical columns.");
+assert(/data-generated-optimized-text"\) !== "true"\)\s*\{\s*continue/.test(ensureRule), "Split text can overwrite hand-authored script cells.");
+assert(/function repairOptimizedTextColumnRoles/.test(main), "Sheets tagged by the column-index bug cannot self-repair.");
+assert(/repaired = repairOptimizedTextColumnRoles\(table\)/.test(ensureRule), "The Optimized Text role repair never runs.");
+assert(/function logicalColumnForCell/.test(main), "Column role writes can still resolve a physical cell index.");
+assert(/sheetActiveColumnIndex = Math\.max\(0, logicalColumnForCell\(cell\)\)/.test(main), "A selection-less column role write uses the physical cell index again.");
+assert(/function logicalSheetGrid/.test(main), "Merged-cell logical grid support is missing.");
+assert(/rowspan/.test(main) && /colspan/.test(main), "Merged-cell span handling is missing.");
+assert(/function canonicalScriptColumnMap/.test(main), "Canonical script column-role mapping is missing.");
+assert(/mediaGroupKey/.test(main), "Merged source/media grouping is missing.");
+assert(/subtitleStart = audioCursor/.test(fullProcess) && /subtitleEnd = audioCursor \+ lineDuration/.test(fullProcess), "Subtitle timing must follow each audio row.");
+
+assert(/function getCaptionChunkSettings/.test(main), "Caption chunk sizing is no longer configurable.");
+assert(/captionMaxWords/.test(index) && /captionMaxChars/.test(index) && /captionSplitMode/.test(index), "Caption granularity settings are missing from the panel.");
+assert(/captionMaxWordsStorageKey/.test(main) && /captionMaxCharsStorageKey/.test(main) && /captionSplitModeStorageKey/.test(main), "Caption granularity settings are not persisted.");
+var captionWords = Number(capture(main, /defaultCaptionMaxWords\s*=\s*(\d+)/, "default caption word limit"));
+var captionChars = Number(capture(main, /defaultCaptionMaxChars\s*=\s*(\d+)/, "default caption character limit"));
+assert(captionWords <= 6 && captionChars <= 34, "Default captions are no longer split into small pieces.");
+assert(/function captionGapScores/.test(main), "Context-scored caption break points are missing.");
+assert(/function captionChunkPlan/.test(main), "Caption splitting no longer optimizes break placement.");
+assert(/function captionStickyAfter/.test(main), "Caption splitting can again break inside a phrase.");
+assert(/captionSentenceCrossCost/.test(main), "Captions can again span a sentence boundary.");
+assert(/captionDeterminers/.test(main) && /captionPrepositions/.test(main) && /captionAuxiliaries/.test(main), "Caption phrase-boundary vocabulary is missing.");
+
+var captionModule = new Function("finiteNumber", "defaultCaptionMaxWords", "defaultCaptionMaxChars", "defaultCaptionSplitMode", "els",
+  capture(main, /(\n  var captionChunkCost[\s\S]*?)\n  function subtitleChunksFromOptimizedCell/, "caption chunking module") +
+  "\nreturn optimizedSubtitleChunks;")(function (v, f) { var n = Number(v); return isFinite(n) ? n : f; }, 6, 34, "readability", {});
+
+function captionRows(text, maxWords, maxCharacters) {
+  return captionModule(text, { maxWords: maxWords, maxCharacters: maxCharacters, mode: "readability" });
+}
+var captionSample = captionRows("So here is the deal: you pay once, you own it forever, and there are no subscriptions.", 6, 34);
+assert(captionSample.length > 1, "Caption splitting produced a single row for a long line.");
+for (var ci = 0; ci < captionSample.length; ci++) {
+  var rowWords = captionSample[ci].split(" ");
+  assert(rowWords.length <= 6, "Caption row exceeds the word bound: " + captionSample[ci]);
+  assert(rowWords.length === 1 || captionSample[ci].length <= 34, "Caption row exceeds the character bound: " + captionSample[ci]);
+  if (ci < captionSample.length - 1) {
+    assert(!/\b(?:the|a|an|and|but|or|to|of|in|on|for|with|is|are|was|were|not|very|just|first)$/i.test(captionSample[ci]),
+      "Caption row ends mid-phrase: " + captionSample[ci]);
+  }
+}
+assert(captionSample.join(" | ").indexOf("you pay once | you own it forever") !== -1, "Caption splitting no longer breaks at comma boundaries.");
+var captionSentences = captionRows("I spent 3 years learning this the hard way. You do not have to.", 4, 24);
+for (var si = 0; si < captionSentences.length; si++) {
+  assert(!/[.!?]\s+\S/.test(captionSentences[si]), "A caption row spans a sentence boundary: " + captionSentences[si]);
+}
+assert(captionRows("", 6, 34).length === 0, "Empty text produced caption rows.");
+
+assert(/captionTrimEndPunctuation/.test(index), "Caption end-punctuation trimming is missing from the panel.");
+assert(/captionTrimEndPunctuationStorageKey/.test(main), "Caption end-punctuation trimming is not persisted.");
+var trimmedRows = captionRows("So here is the deal: you pay once, you own it forever, and there are no subscriptions.", 6, 34);
+for (var ti = 0; ti < trimmedRows.length; ti++) {
+  assert(!/[.,]$/.test(trimmedRows[ti]), "Caption row still ends in a period or comma: " + trimmedRows[ti]);
+}
+assert(trimmedRows.join(" | ").indexOf("you pay once | you own it forever") !== -1, "Trimming broke comma-aligned caption splitting.");
+var untrimmedRows = captionModule("So here is the deal: you pay once, you own it forever, and there are no subscriptions.",
+  { maxWords: 6, maxCharacters: 34, mode: "readability", trimEndPunctuation: false });
+assert(/,$/.test(untrimmedRows[1]), "Caption end punctuation cannot be kept when trimming is off.");
+var tonePreserved = captionRows("Wait... did that really just work? Yes it did.", 6, 34);
+assert(tonePreserved.join(" | ").indexOf("Wait...") !== -1, "Caption trimming ate an ellipsis.");
+assert(tonePreserved.join(" | ").indexOf("work?") !== -1, "Caption trimming ate a question mark.");
+var dashRows = captionModule("You press it and it disappears - completely gone, no trace at all.", { maxWords: 6, maxCharacters: 34, mode: "readability" });
+assert(dashRows.length > 1, "The dash caption sample no longer splits, so the dash trim is untested.");
+for (var di = 0; di < dashRows.length; di++) {
+  assert(!/^[\s\u2013\u2014-]/.test(dashRows[di]), "A caption row starts with a stray dash: " + dashRows[di]);
+  assert(!/[\s\u2013\u2014-]$/.test(dashRows[di]), "A caption row still ends with a dash: " + dashRows[di]);
+}
+assert(captionModule("it disappears\u2014 completely gone", { maxWords: 12, maxCharacters: 80, mode: "readability" })
+  .join(" | ").indexOf("\u2014") !== -1, "A dash inside a caption row is being removed too.");
+assert(captionModule("the state-of-the-art fabric", { maxWords: 12, maxCharacters: 80, mode: "readability" })
+  .join(" | ").indexOf("state-of-the-art") !== -1, "Caption trimming broke a hyphenated word.");
+var abbreviationPreserved = captionRows("The rule applies across the U.S. and Canada too.", 6, 34);
+assert(abbreviationPreserved.join(" | ").indexOf("U.S.") !== -1, "Caption trimming broke an abbreviation.");
+assert(captionRows("Honestly, yes it works.", 6, 34).join(" | ").indexOf("Honestly,") !== -1, "Caption trimming removed mid-row punctuation.");
+assert(captionRows("One", 6, 34).join("") === "One", "A single word is no longer preserved.");
+assert(/function defaultAiModelValue/.test(main), "Default AI model selection is missing.");
+var claudeDefaultModel = capture(main, /var defaultAiClaudeModel = "([^"]+)";/, "default Claude model");
+assert(claudeDefaultModel === "claude-opus-5", "Claude Code no longer defaults to the Opus 5 model id, it defaults to: " + claudeDefaultModel);
+assert(/provider === "codex" \? "" : defaultAiClaudeModel/.test(main), "The Claude default no longer uses the shared Opus 5 constant.");
+assert(/stored === null \? defaultAiModelValue\(provider\)/.test(main), "A fresh install would not pick up the default model.");
+assert(/function upgradeStoredClaudeModel/.test(main), "An existing panel is never moved off its previously stored model.");
+assert(/upgradeStoredClaudeModel\(\);\s*syncAiSettingsControls\(\);/.test(main), "The stored-model upgrade does not run when settings load.");
+var upgradeRule = capture(main, /(function upgradeStoredClaudeModel\(\) \{[\s\S]*?\n  \})/, "stored model upgrade");
+assert(/aiClaudeModelUpgradeStorageKey\) === defaultAiClaudeModel/.test(upgradeRule), "The model upgrade is not recorded, so it would override a later manual choice on every launch.");
+assert(/defaultAiClaudeModel, "claude-sonnet-5", "claude-haiku-4-5"/.test(main), "The Claude model list no longer offers current model ids.");
+
+/* Right-clicking a merged (rowspan/colspan) sheet cell for Delete/Insert
+   Row/Column used raw DOM position (cell.cellIndex, a physical <td> count
+   local to that one <tr>) as the logical row/column target. A rowspan from an
+   earlier row leaves a later row with one fewer physical cell than the
+   logical column count, so the physical index silently pointed one column
+   off - Delete Column removed the column adjacent to the one right-clicked.
+   A rowspan cell is also one DOM node stretched across several rows, so
+   clicking its lower half still hit the same node and resolved to its origin
+   row rather than the row visually under the cursor. */
+assert(!/sheetContextColumnIndex = cell\.cellIndex;/.test(main), "The sheet context menu again takes its target column from raw DOM position, which drifts off by the width of any rowspan/colspan above the clicked cell.");
+assert(/sheetContextColumnIndex = coords \? coords\.col : logicalColumnForCell\(cell\);/.test(main), "The sheet context menu's column target is not resolved through the logical grid.");
+assert(/function rowIndexFromCellClick\(cell, clientY\)/.test(main), "Right-clicking a merged cell can no longer resolve which visual sub-row was clicked.");
+assert(/sheetContextRowIndex = rowIndexFromCellClick\(cell, event\.clientY\);/.test(main), "The sheet context menu's row target ignores where inside a merged cell it was clicked.");
+assert(!/insertIndex = selectedCell \? selectedCell\.cellIndex \+ 1/.test(main), "Adding a column again inserts by raw DOM position instead of the logical column.");
+assert(/insertIndex = coords \? coords\.col \+ 1/.test(main), "Adding a column does not resolve the selected cell's logical column.");
+var insertColumnRule = capture(main, /(function insertSheetColumnAt\(index\) \{[\s\S]*?\n  \})/, "insertSheetColumnAt");
+assert(!/rows\[r\]\.children\[index\]/.test(insertColumnRule), "Inserting a sheet column again assumes every row has the same physical cell count at the target index.");
+assert(/physicalInsertionIndexForRow\(grid, r, index\)/.test(insertColumnRule), "Inserting a sheet column is not aligned to the logical grid, so it drifts on any sheet with a rowspan.");
+
+var sheetFns = ["createSheetCell", "sheetInfoForCell", "sheetCellCoordinates", "sheetCellFromEventTarget",
+  "sheetColumnCount", "cellAt", "rowIndexForCell", "rowIndexFromCellClick", "openSheetCellMenu",
+  "physicalInsertionIndexForRow", "insertSheetColumnAt", "deleteSheetColumn", "logicalSheetGrid",
+  "logicalColumnForCell", "logicalSheetCellAt"];
+var sheetFnSource = sheetFns.map(function (name) { return sliceFn(main, name); }).join("\n");
+
+var app = Application.currentApplication();
+app.includeStandardAdditions = true;
+var sheetTestPage = "/tmp/pr-ai-sheet-merge-check.html";
+var sheetTestHtml = [
+  "<!doctype html><html><body><div id=\"scriptInput\"></div><script>",
+  "var els = { scriptInput: document.getElementById('scriptInput') };",
+  "var sheetContextRowIndex = null, sheetContextColumnIndex = null;",
+  "var results = {};",
+  "function pushSheetUndo(){} function closeSheetRowMenu(){} function focusSheetCell(){}",
+  "function updateSheetRails(){} function saveActiveScriptDocument(){} function setStatus(){}",
+  "function setSheetSelection(){} function ensureScriptTable(){ return els.scriptInput.querySelector('table'); }",
+  sheetFnSource,
+  "els.scriptInput.addEventListener('contextmenu', openSheetCellMenu);",
+  "function rightClick(el, atFraction) {",
+  "  var r = el.getBoundingClientRect();",
+  "  var y = atFraction === undefined ? r.top + r.height/2 : r.top + r.height*atFraction;",
+  "  el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left+5, clientY: y }));",
+  "}",
+  "function cellsOf(rowIndex) { return Array.prototype.map.call(document.querySelector('table').querySelectorAll('tr')[rowIndex].children, function (c) { return c.textContent; }); }",
+  "",
+  "els.scriptInput.innerHTML = '<table><tbody>' +",
+  "  '<tr><td>Text A</td><td rowspan=\"2\">Cut A</td><td>Source A</td></tr>' +",
+  "  '<tr><td>Text B</td><td>Source B</td></tr>' +",
+  "  '</tbody></table>';",
+  "var table = els.scriptInput.querySelector('table');",
+  "var sourceB = table.querySelectorAll('tr')[1].children[1];",
+  "rightClick(sourceB);",
+  "results.clickedRow = sheetContextRowIndex;",
+  "results.clickedCol = sheetContextColumnIndex;",
+  "deleteSheetColumn();",
+  "results.afterDeleteRow0 = cellsOf(0);",
+  "results.afterDeleteRow1 = cellsOf(1);",
+  "",
+  "els.scriptInput.innerHTML = '<table><tbody>' +",
+  "  '<tr><td>Text A</td><td rowspan=\"2\">Cut A</td><td>Source A</td></tr>' +",
+  "  '<tr><td>Text B</td><td>Source B</td></tr>' +",
+  "  '</tbody></table>';",
+  "table = els.scriptInput.querySelector('table');",
+  "sourceB = table.querySelectorAll('tr')[1].children[1];",
+  "rightClick(sourceB);",
+  "insertSheetColumnAt(sheetContextColumnIndex + 1);",
+  "results.afterInsertRow0 = cellsOf(0);",
+  "results.afterInsertRow1 = cellsOf(1);",
+  "",
+  "els.scriptInput.innerHTML = '<table><tbody>' +",
+  "  '<tr style=\"height:40px\"><td>Text A</td><td rowspan=\"2\" style=\"height:80px\">Cut A tall</td><td>Source A</td></tr>' +",
+  "  '<tr style=\"height:40px\"><td>Text B</td><td>Source B</td></tr>' +",
+  "  '</tbody></table>';",
+  "table = els.scriptInput.querySelector('table');",
+  "var cutCell = table.querySelectorAll('tr')[0].children[1];",
+  "rightClick(cutCell, 0.75);",
+  "results.lowerHalfRow = sheetContextRowIndex;",
+  "rightClick(cutCell, 0.25);",
+  "results.upperHalfRow = sheetContextRowIndex;",
+  "",
+  "els.scriptInput.innerHTML = '<table><tbody>' +",
+  "  '<tr><td>A0</td><td>B0</td><td>C0</td><td>D0</td></tr>' +",
+  "  '<tr><td>A1</td><td>B1</td><td>C1</td><td>D1</td></tr>' +",
+  "  '</tbody></table>';",
+  "table = els.scriptInput.querySelector('table');",
+  "rightClick(table.querySelectorAll('tr')[1].children[2]);",
+  "deleteSheetColumn();",
+  "results.plainAfterDeleteRow0 = cellsOf(0);",
+  "results.plainAfterDeleteRow1 = cellsOf(1);",
+  "",
+  "document.title = JSON.stringify(results);",
+  "</script></body></html>"
+].join("\n");
+$.NSString.alloc.initWithUTF8String(sheetTestHtml).writeToFileAtomicallyEncodingError(sheetTestPage, true, $.NSUTF8StringEncoding, null);
+var chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+var sheetCheckOutput = app.doShellScript("\"" + chromePath + "\" --headless --disable-gpu --window-size=700,400 --virtual-time-budget=1200 --dump-dom 'file://" + sheetTestPage + "' 2>/dev/null | grep -o '<title>[^<]*</title>'");
+var sheetTitleMatch = sheetCheckOutput.match(/<title>([\s\S]*?)<\/title>/);
+assert(sheetTitleMatch, "Merged-cell sheet check produced no result.");
+var sheetResults = JSON.parse(sheetTitleMatch[1].replace(/&quot;/g, "\"").replace(/&amp;/g, "&"));
+app.doShellScript("rm -f '" + sheetTestPage + "'");
+
+assert(sheetResults.clickedRow === 1 && sheetResults.clickedCol === 2, "Right-clicking a cell after a rowspan resolves to the wrong row/column: " + JSON.stringify(sheetResults));
+assert(sheetResults.afterDeleteRow0.indexOf("Source A") === -1 && sheetResults.afterDeleteRow1.indexOf("Source B") === -1, "Delete Column removed the wrong column when a rowspan precedes the clicked cell: " + JSON.stringify(sheetResults.afterDeleteRow0) + " / " + JSON.stringify(sheetResults.afterDeleteRow1));
+assert(sheetResults.afterDeleteRow0.indexOf("Cut A") !== -1, "Delete Column removed the adjacent Cut column instead of Source.");
+assert(sheetResults.afterInsertRow0.indexOf("Source A") === 2 && sheetResults.afterInsertRow1.indexOf("Source B") === 1, "Insert Column Right lands in the wrong logical position when a rowspan precedes the clicked cell: " + JSON.stringify(sheetResults.afterInsertRow0) + " / " + JSON.stringify(sheetResults.afterInsertRow1));
+assert(sheetResults.lowerHalfRow === 1, "Right-clicking the lower half of a rowspan-merged cell does not resolve to the visually-clicked row.");
+assert(sheetResults.upperHalfRow === 0, "Right-clicking the upper half of a rowspan-merged cell does not resolve to the origin row.");
+assert(sheetResults.plainAfterDeleteRow0.length === 3 && sheetResults.plainAfterDeleteRow0.indexOf("C0") === -1 && sheetResults.plainAfterDeleteRow1.indexOf("C1") === -1, "Delete Column on an ordinary, unmerged sheet no longer removes the clicked column: " + JSON.stringify(sheetResults));
+
+/* A plain "transcribe/caption this audio" request with no script at all used
+   to keep Whisper's own sentence-length SRT blocks verbatim - no readability
+   splitting applied, unlike every script-driven caption path. This exercises
+   the real splitter + re-timer against a synthetic Whisper transcript with
+   word-level timing, the same way a WhisperX run would supply it. */
+assert(/action\.type === "transcribeAudioTrackToSrt" && action\.optimizeCaptions !== false/.test(main), "transcribeAudioTrackToSrt no longer applies Optimized Text splitting when no script is given.");
+assert(/function optimizedCaptionItemsFromTimedBlocks/.test(main), "There is no script-free caption re-splitter.");
+assert(/function wordIndexRangeForTimeWindow/.test(main), "Script-free captions cannot be timed from Whisper's own word output.");
+assert(/function generateCaptionsFromAudioOnly/.test(main), "There is no standalone action to generate captions from audio alone.");
+assert(/id="generateAudioCaptionsBtn"/.test(index), "The audio-only caption generator has no button in the panel.");
+var whisperActionsRule = capture(styles, /\.whisper-actions \{([^}]*)\}/, "whisper-actions row rule");
+assert(/flex-wrap:\s*wrap/.test(whisperActionsRule), "The Audio settings action row can no longer wrap, so a button can render past the panel's edge with no way to reach it.");
+assert(/els\.generateAudioCaptionsBtn\.addEventListener\("click", generateCaptionsFromAudioOnly\)/.test(main), "The audio-only caption button is not wired to its handler.");
+assert(/runLocalAudioSubtitleAction\(\{\s*type: "transcribeAudioTrackToSrt",\s*optimizeCaptions: true/.test(main), "The audio-only caption button does not run the no-script transcription path.");
+assert(/var whisperContents = contents;/.test(main) && /if \(contents !== whisperContents\)/.test(main), "Optimized caption contents are no longer separated from Whisper's raw SRT.");
+assert(/srtPath = optimizedSrtPath;/.test(main), "The subtitle workflow still returns Whisper's raw SRT path after Optimized Text changes the rows.");
+var agentTools = readFile("agent/tools.js");
+var agentChat = readFile("agent/chat.js");
+assert(/name: "create_optimized_subtitles"/.test(agentTools), "Edie has no deterministic Whisper -> Optimized Text -> SRT tool.");
+assert(/handlers\.transcribe_audio_to_srt[\s\S]*handlers\.optimize_srt[\s\S]*handlers\.save_srt[\s\S]*handlers\.import_srt_as_captions/.test(agentTools), "The optimized subtitle tool no longer runs transcribe, optimize, save and import in order.");
+assert(/For any request to create subtitles\/captions[\s\S]*create_optimized_subtitles/.test(agentChat), "The agent is not explicitly routed to the optimized subtitle tool.");
+assert(/Never use the Audio \+ Text preset for ordinary subtitle\/caption requests/.test(agentChat), "The agent can regress to Audio + Text for ordinary subtitle requests.");
+
+var audioFns = ["secondsToSrtTime", "srtTimeToSeconds", "parseSrtBlocks", "buildSrtFromBlocks", "alignmentTokens",
+  "wordIndexRangeForTimeWindow", "optimizedCaptionItemsFromTimedBlocks", "optimizedCaptionBlocksForAlignedLine",
+  "proportionalCaptionBlocks", "pad2"];
+var chunkerStart = main.indexOf("var captionChunkCost = 25;");
+var chunkerEnd = main.indexOf("function subtitleChunksFromOptimizedCell(");
+assert(chunkerStart >= 0 && chunkerEnd > chunkerStart, "Could not isolate the caption chunker for the audio-only check.");
+var audioFnSource = audioFns.map(function (name) { return sliceFn(main, name); }).join("\n") + "\n" + main.slice(chunkerStart, chunkerEnd);
+
+var audioTestScript = [
+  "function finiteNumber(v,f){var n=Number(v);return isFinite(n)?n:f;}",
+  "var defaultCaptionMaxWords=6, defaultCaptionMaxChars=34, defaultCaptionSplitMode=\"readability\";",
+  "var els={};",
+  audioFnSource,
+  "",
+  "var block1Words = [",
+  "  {word:\"So\",start:0.10,end:0.25},{word:\"here\",start:0.25,end:0.45},{word:\"is\",start:0.45,end:0.55},",
+  "  {word:\"the\",start:0.55,end:0.65},{word:\"deal:\",start:0.65,end:0.95},{word:\"you\",start:1.00,end:1.15},",
+  "  {word:\"pay\",start:1.15,end:1.35},{word:\"once,\",start:1.35,end:1.65},{word:\"you\",start:1.70,end:1.85},",
+  "  {word:\"own\",start:1.85,end:2.05},{word:\"it\",start:2.05,end:2.15},{word:\"forever,\",start:2.15,end:2.55},",
+  "  {word:\"and\",start:2.60,end:2.75},{word:\"there\",start:2.75,end:2.90},{word:\"are\",start:2.90,end:3.00},",
+  "  {word:\"no\",start:3.00,end:3.15},{word:\"subscriptions.\",start:3.15,end:3.75}",
+  "];",
+  "var blocks = [{ start: 0.10, end: 3.75, text: \"So here is the deal: you pay once, you own it forever, and there are no subscriptions.\" }];",
+  "",
+  "var wordTimed = optimizedCaptionItemsFromTimedBlocks(blocks, block1Words, {maxWords:6, maxCharacters:34, mode:\"readability\"});",
+  "var proportional = optimizedCaptionItemsFromTimedBlocks(blocks, [], {maxWords:6, maxCharacters:34, mode:\"readability\"});",
+  "var result = { wordTimed: wordTimed, proportional: proportional };",
+  "console.log(JSON.stringify(result));"
+].join("\n");
+
+var app = Application.currentApplication();
+app.includeStandardAdditions = true;
+var audioTestPath = "/tmp/pr-ai-audio-caption-check.js";
+$.NSString.alloc.initWithUTF8String(audioTestScript).writeToFileAtomicallyEncodingError(audioTestPath, true, $.NSUTF8StringEncoding, null);
+var audioCheckOutput = app.doShellScript("node '" + audioTestPath + "'");
+app.doShellScript("rm -f '" + audioTestPath + "'");
+var audioResults = JSON.parse(audioCheckOutput);
+
+assert(audioResults.wordTimed.length > 1, "A full-sentence Whisper block is not split into shorter caption rows.");
+for (var ai = 0; ai < audioResults.wordTimed.length; ai++) {
+  var row = audioResults.wordTimed[ai];
+  assert(row.text.split(" ").length <= 6, "A script-free caption row exceeds the configured word bound: " + row.text);
+  if (ai > 0) {
+    assert(row.start >= audioResults.wordTimed[ai - 1].end - 0.001, "Script-free caption rows overlap in time: " + JSON.stringify(audioResults.wordTimed));
+  }
+}
+assert(Math.abs(audioResults.wordTimed[0].start - 0.10) < 0.01, "The first script-free caption row does not start at the block's own start time.");
+assert(Math.abs(audioResults.wordTimed[audioResults.wordTimed.length - 1].end - 3.75) < 0.01, "The last script-free caption row does not end at the block's own end time.");
+assert(audioResults.proportional.length > 1, "Without word-level timing, script-free captions fail to fall back to proportional timing.");
+assert(Math.abs(audioResults.proportional[0].start - 0.10) < 0.01 && Math.abs(audioResults.proportional[audioResults.proportional.length - 1].end - 3.75) < 0.01, "The proportional fallback does not cover the block's full time range.");
+
+/* A plain "caption this audio" request with no script and no named track
+   used to always default to one hardcoded configured track, silently
+   ignoring every other audio track in the sequence - unlike Premiere's own
+   built-in transcription, which listens to everything. Verifies the dispatch
+   to the whole-sequence mixdown, that naming a track still overrides it, and
+   that the razor-based cut/full-process actions (which only make sense
+   against one physical track) are entirely unaffected. */
+assert(/function audioExportTrackWasRequested/.test(main), "There is no way to tell whether a specific audio track was requested.");
+assert(/function buildSequenceAudioExport/.test(main), "There is no whole-sequence audio export path.");
+assert(/function buildTrackStripCommands/.test(main), "Per-track audio strips cannot be built for a sequence mixdown.");
+assert(/action\.type === "transcribeAudioTrackToSrt" && action\.allTracks !== false && !audioExportTrackWasRequested\(action\)/.test(main), "Plain audio captioning no longer defaults to listening to the whole sequence.");
+assert(/amix=inputs=/.test(main), "The whole-sequence export does not mix multiple audio tracks together.");
+assert(/Leave audioTrack\/track\/trackIndex unset unless the user names a specific track/.test(main), "The agent is no longer told to leave the track unset by default.");
+
+var mixFns = ["shellQuote", "normalizeAudioTrackIndex", "ffmpegConcatPath", "writeTextFile",
+  "audioExportTrackWasRequested", "buildAudioTrackExport", "buildTrackStripCommands", "buildSequenceAudioExport"];
+var mixFnSource = mixFns.map(function (name) { return sliceFn(main, name); }).join("\n");
+var mixTestScript = [
+  "function getNodeRequire(){ return require; }",
+  "function getWhisperSettings(){ return { audioTrack: \"A1\" }; }",
+  "function resolveFfmpegShell(){ return \"FFMPEG=ffmpeg\"; }",
+  "var state = { activeSequence: { audioTracks: [",
+  "  { index: 0, clips: [",
+  "    { disabled: false, sourcePath: \"/media/vo1.wav\", startSeconds: 0, endSeconds: 5, durationSeconds: 5, inPointSeconds: 0, name: \"VO part 1\" },",
+  "    { disabled: false, sourcePath: \"/media/vo2.wav\", startSeconds: 10, endSeconds: 15, durationSeconds: 5, inPointSeconds: 0, name: \"VO part 2\" }",
+  "  ] },",
+  "  { index: 1, clips: [ { disabled: false, sourcePath: \"/media/music.wav\", startSeconds: 2, endSeconds: 8, durationSeconds: 6, inPointSeconds: 0, name: \"Music bed\" } ] },",
+  "  { index: 2, clips: [] }",
+  "] } };",
+  mixFnSource,
+  "var whole = buildAudioTrackExport({ type: \"transcribeAudioTrackToSrt\" });",
+  "var single = buildAudioTrackExport({ type: \"transcribeAudioTrackToSrt\", audioTrack: \"A2\" });",
+  "var optOut = buildAudioTrackExport({ type: \"transcribeAudioTrackToSrt\", allTracks: false });",
+  "var cutAction = buildAudioTrackExport({ type: \"cutAudioAndTimeSubtitles\" });",
+  "console.log(JSON.stringify({",
+  "  whole: { rangeStart: whole.rangeStart, rangeEnd: whole.rangeEnd, trackLabel: whole.trackLabel, allTracks: !!whole.allTracks, mentionsAmix: whole.command.indexOf(\"amix=inputs=2\") !== -1, mentionsVo: whole.command.indexOf(\"vo1.wav\") !== -1 && whole.command.indexOf(\"vo2.wav\") !== -1, mentionsMusic: whole.command.indexOf(\"music.wav\") !== -1 },",
+  "  single: { trackIndex: single.trackIndex, allTracks: !!single.allTracks, mentionsMusic: single.command.indexOf(\"music.wav\") !== -1, mentionsVo: single.command.indexOf(\"vo1.wav\") !== -1 },",
+  "  optOut: { trackIndex: optOut.trackIndex, allTracks: !!optOut.allTracks },",
+  "  cutAction: { trackIndex: cutAction.trackIndex, allTracks: !!cutAction.allTracks }",
+  "}));"
+].join("\n");
+
+var app = Application.currentApplication();
+app.includeStandardAdditions = true;
+var mixTestPath = "/tmp/pr-ai-audio-mixdown-check.js";
+$.NSString.alloc.initWithUTF8String(mixTestScript).writeToFileAtomicallyEncodingError(mixTestPath, true, $.NSUTF8StringEncoding, null);
+var mixCheckOutput = app.doShellScript("node '" + mixTestPath + "'");
+app.doShellScript("rm -f '" + mixTestPath + "'");
+var mixResults = JSON.parse(mixCheckOutput);
+
+assert(mixResults.whole.rangeStart === 0 && mixResults.whole.rangeEnd === 15, "A plain audio captioning request does not span the sequence's full audible range: " + JSON.stringify(mixResults.whole));
+assert(mixResults.whole.trackLabel === "A1+A2", "The whole-sequence export does not report which tracks it mixed: " + mixResults.whole.trackLabel);
+assert(mixResults.whole.allTracks === true, "The whole-sequence export is not flagged as covering every track.");
+assert(mixResults.whole.mentionsAmix, "The whole-sequence export does not actually mix the tracks together.");
+assert(mixResults.whole.mentionsVo && mixResults.whole.mentionsMusic, "The whole-sequence export is missing one of the sequence's audio tracks.");
+assert(mixResults.single.trackIndex === 1 && mixResults.single.allTracks === false, "Naming a specific track no longer overrides the whole-sequence default.");
+assert(mixResults.single.mentionsMusic && !mixResults.single.mentionsVo, "An explicitly named track still pulls in audio from other tracks.");
+assert(mixResults.optOut.allTracks === false, "allTracks:false can no longer opt back into the single configured track.");
+assert(mixResults.cutAction.allTracks === false, "cutAudioAndTimeSubtitles was changed to a whole-sequence mixdown, which breaks its single-track razor contract.");
+
+/* The audio-only caption generator lived only in Settings > Audio, a spot a
+   user already reported not finding once. It now also sits directly on the
+   main screen's quick-action row, styled distinctly from the mode-toggle
+   pills beside it (it runs immediately, it does not arm a mode for the next
+   Send), and must not be swept into their toggle/aria-pressed machinery. */
+assert(/id="generateAudioCaptionsQuickBtn"/.test(index), "The audio-only caption generator has no direct button on the main screen.");
+assert(/id="generateAudioCaptionsQuickBtn" class="quick-action quick-action-run"/.test(index), "The main-screen caption button is not visually distinguished from the mode-toggle pills beside it.");
+assert(!/id="generateAudioCaptionsQuickBtn"[^>]*data-quick-action/.test(index), "The main-screen caption button was given a data-quick-action, which would make it behave like a mode toggle instead of running immediately.");
+assert(/if \(!button\.hasAttribute\("data-quick-action"\)\) \{\s*return;\s*\}/.test(main), "Quick-action click handling no longer guards against a non-toggle button, so the caption button would get an incorrect pressed/active state.");
+assert(/els\.generateAudioCaptionsQuickBtn\.addEventListener\("click", generateCaptionsFromAudioOnly\)/.test(main), "The main-screen caption button is not wired to the caption generator.");
+assert(/\.quick-action-run \{/.test(styles), "The direct-run caption button has no distinct styling from the toggle pills.");
+
+/* A real scene/shot CSV export (comma-delimited, quoted fields with embedded
+   commas and newlines) could not be read at all before this - the paste
+   parser only ever understood tab-separated text, and nothing merged a
+   shot_start/shot_end column pair into the single Cut cell PR AI's model
+   expects. Runs the real parser and column mapper against an export shaped
+   exactly like one, including the Vietnamese multi-line note a prior bug
+   would have mis-split on its embedded comma. */
+assert(/function parseCsvText/.test(main), "There is no comma-delimited CSV parser.");
+assert(/function buildScriptTableFromCsvRows/.test(main), "There is no column mapper for a scene/shot CSV export.");
+assert(/function importScriptCsvFile/.test(main), "There is no way to import a CSV file as a script.");
+assert(/id="importScriptCsvBtn"/.test(index), "The CSV import button is missing from the script tabs bar.");
+assert(/els\.importScriptCsvBtn\.addEventListener\("click", importScriptCsvFile\)/.test(main), "The CSV import button is not wired to the importer.");
+assert(/function prAI_selectCsvFile/.test(host), "There is no host-side file picker for CSV import.");
+assert(/roles\[c\] === "notes" \|\| roles\[c\] === "optimizedText" \|\| roles\[c\] === "skip"/.test(main) || /roles\[columnIndex\] === "notes" \|\| roles\[columnIndex\] === "optimizedText" \|\| roles\[columnIndex\] === "skip"/.test(main), "The Skip column role is not excluded from column-role inference, so an imported reference-only column could get mistaken for Text/Source/Cut.");
+
+var csvFns = ["parseCsvText", "friendlyCsvColumnLabel", "csvCutValueForRow", "buildScriptTableFromCsvRows", "createSheetCell"];
+var csvFnSource = csvFns.map(function (name) { return sliceFn(main, name); }).join("\n");
+var csvSample = "scene,content,text_overlay,effects,voice_over,visual,notes,shot_name,footage_name,shot_start,shot_end,s3_path,drive_path,drive_link,duration_seconds\n1,,\"Spills? One wipe, gone\",,,,\"T\u0103ng s\u00e1ng, c\u00fat ph\u1ea7n d\u01b0 scene sau gi\u00fap e \u1ea1\",Water spill (studio),Hv10x.05 [mv9cmlpg].mp4,0:00,0:03,MeadowEase/Video/Source/AI/Hv10x.05 [mv9cmlpg].mp4,SAMX_WORKSPACE/MeadowEase/Video/Source/AI/Hv10x.05 [mv9cmlpg].mp4,https://drive.google.com/file/d/1o5PCiEMM-imBkxRrhNDX4XAb-E6DUDun/view,\n2,,Your old jeans would still be soaked,,,,\"Speed up gi\u00fap e \u1ea1. \nScene walking c\u00f3 th\u1ec3 trim b\u1edbt l\u1ea5y t\u1eeb c\u1ea3nh b\u1ecf \u0111i\u1ec7n tho\u1ea1i v\u00e0o t\u00fai\",water repellent (compare),Hv10x.04 [mv9clkoq].mp4,0:20,0:23,MeadowEase/Video/Source/AI/Hv10x.04 [mv9clkoq].mp4,SAMX_WORKSPACE/MeadowEase/Video/Source/AI/Hv10x.04 [mv9clkoq].mp4,https://drive.google.com/file/d/1Db9mMCELf7GSqvukmEzcNAPiHyF433Sd/view,\n5,,\"No wet patch, no changing clothes\",,,,,beads off,Hv10x.05 [mv9cmlpg].mp4,0:14,0:16,MeadowEase/Video/Source/AI/Hv10x.05 [mv9cmlpg].mp4,SAMX_WORKSPACE/MeadowEase/Video/Source/AI/Hv10x.05 [mv9cmlpg].mp4,https://drive.google.com/file/d/1o5PCiEMM-imBkxRrhNDX4XAb-E6DUDun/view,\n";
+var csvTestScript = [
+  "<!doctype html><html><body><script>",
+  csvFnSource,
+  "var raw = " + JSON.stringify(csvSample) + ";",
+  "var rows = parseCsvText(raw);",
+  "var mapped = buildScriptTableFromCsvRows(rows);",
+  "var table = mapped.table;",
+  "var headerCells = table.querySelectorAll(\"tr\")[0].children;",
+  "var headerInfo = Array.prototype.map.call(headerCells, function (c) { return c.getAttribute(\"data-column-role\") + \":\" + c.textContent; });",
+  "function rowCells(i) { return Array.prototype.map.call(table.querySelectorAll(\"tr\")[i].children, function (c) { return c.textContent; }); }",
+  "document.title = JSON.stringify({",
+  "  parsedRowCount: rows.length,",
+  "  colCounts: rows.map(function (r) { return r.length; }),",
+  "  mappedRowCount: mapped.rowCount,",
+  "  extraColumnCount: mapped.extraColumnCount,",
+  "  mapped: { text: mapped.mappedText, source: mapped.mappedSource, cut: mapped.mappedCut, notes: mapped.mappedNotes },",
+  "  headerInfo: headerInfo,",
+  "  row1: rowCells(1),",
+  "  row2Notes: rowCells(2)[headerInfo.indexOf(\"notes:Notes\")],",
+  "  row3: rowCells(3)",
+  "});",
+  "<\/script></body></html>"
+].join("\n");
+
+var app = Application.currentApplication();
+app.includeStandardAdditions = true;
+var csvTestPath = "/tmp/pr-ai-csv-import-check.html";
+$.NSString.alloc.initWithUTF8String(csvTestScript).writeToFileAtomicallyEncodingError(csvTestPath, true, $.NSUTF8StringEncoding, null);
+var chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+var csvCheckOutput = app.doShellScript("\"" + chromePath + "\" --headless --disable-gpu --window-size=500,400 --virtual-time-budget=1200 --dump-dom 'file://" + csvTestPath + "' 2>/dev/null | grep -o '<title>[^<]*</title>'");
+app.doShellScript("rm -f '" + csvTestPath + "'");
+var csvTitleMatch = csvCheckOutput.match(/<title>([\s\S]*?)<\/title>/);
+assert(csvTitleMatch, "CSV import check produced no result.");
+var csvResults = JSON.parse(csvTitleMatch[1].replace(/&quot;/g, "\"").replace(/&amp;/g, "&"));
+
+assert(csvResults.parsedRowCount === 4, "The CSV parser does not produce the expected row count (header + 3 data rows): " + JSON.stringify(csvResults.colCounts));
+assert(csvResults.colCounts.every(function (n) { return n === 15; }), "A quoted field with an embedded comma or newline split into extra columns: " + JSON.stringify(csvResults.colCounts));
+assert(csvResults.mapped.text && csvResults.mapped.source && csvResults.mapped.cut && csvResults.mapped.notes, "text_overlay/footage_name/shot_start+shot_end/notes did not all map to Text/Source/Cut/Notes: " + JSON.stringify(csvResults.mapped));
+assert(csvResults.extraColumnCount === 10, "The columns with no PR AI equivalent (scene, content, effects, voice_over, visual, shot_name, s3_path, drive_path, drive_link, duration_seconds) were not all preserved: extraColumnCount=" + csvResults.extraColumnCount);
+assert(csvResults.headerInfo.indexOf("text:Text") !== -1 && csvResults.headerInfo.indexOf("source:Source") !== -1 && csvResults.headerInfo.indexOf("cut:Cut") !== -1 && csvResults.headerInfo.indexOf("notes:Notes") !== -1, "The mapped columns are not tagged with the roles PR AI's script model expects: " + JSON.stringify(csvResults.headerInfo));
+assert(csvResults.headerInfo.filter(function (h) { return h.indexOf("skip:") === 0; }).length === 10, "The unmapped CSV columns are not tagged skip, so they could be mistaken for Text/Source/Cut during validation.");
+assert(csvResults.row1.indexOf("Spills? One wipe, gone") !== -1, "A quoted field containing a comma (\"Spills? One wipe, gone\") was corrupted by CSV parsing: " + JSON.stringify(csvResults.row1));
+assert(csvResults.row2Notes.indexOf("\n") !== -1 && csvResults.row2Notes.indexOf("Scene walking") !== -1, "A quoted field containing an embedded newline was not preserved intact: " + JSON.stringify(csvResults.row2Notes));
+var cutIndex1 = csvResults.headerInfo.indexOf("cut:Cut");
+assert(csvResults.row1[cutIndex1] === "0:00-0:03", "shot_start and shot_end were not merged into a single \"start-end\" Cut value PR AI's timestamp parser already understands: " + csvResults.row1[cutIndex1]);
+var cutIndex3 = cutIndex1;
+assert(csvResults.row3[cutIndex3] === "0:14-0:16", "A second row's shot_start/shot_end merge does not match its own timecodes: " + csvResults.row3[cutIndex3]);
+
+/* Production notes need to stay visible on the timeline while editing without
+   polluting the real dialogue captions or being torn into short fragments -
+   and because Premiere's ExtendScript API cannot enumerate or remove a
+   caption track once made, a rerun can only ever add another one, never
+   replace it. Runs the real row/column resolution and caption-pairing logic
+   against a script with a Notes column, verifying the notes land on the same
+   per-row timing as the dialogue captions, stay as one unsplit block each,
+   skip rows with no note, and that scripts with no Notes column produce none
+   at all. */
+assert(/notes: notesIndex/.test(main), "canonicalScriptColumnMap no longer resolves a Notes column.");
+assert(/function scriptNotesRowsFromScriptPayload/.test(main), "There is no way to read the Notes column per script row.");
+assert(/function notesCaptionItemsFromAlignedBlocks/.test(main), "There is no way to pair Notes text with the dialogue captions' own timing.");
+assert(/function scriptWantsNotesTrack/.test(main), "There is no per-script Notes-track toggle.");
+assert(/function warnIfNotesTrackMayAlreadyExist/.test(main), "Reruns give no warning that Premiere cannot remove the previous Notes track automatically.");
+assert(/id="scriptNotesTrackToggle"/.test(index), "The Notes-track toggle is missing from the script panel.");
+assert(/notesTextByRow\[groupRow\.row\]/.test(main), "Full Process no longer pairs each row's note with that row's own subtitle timing.");
+assert(/source: "scriptNotesTrack"/.test(main), "The generated Notes caption track is not tagged so it can be told apart from the dialogue captions.");
+assert(/functionName: "Notes - delete before export"/.test(main), "The generated Notes caption file is not named so it is identifiable for manual deletion before export.");
+var notesApplyRule = capture(main, /(if \(action\.createCaptionTrack !== false && scriptWantsNotesTrack\(\)\) \{[\s\S]*?\n        \})/, "notes track application in runLocalAudioSubtitleAction");
+assert(/notesCaptionItemsFromAlignedBlocks\(notesRowsForTrack, splitItems\)/.test(notesApplyRule), "The audio-subtitle action does not time Notes from the same per-row blocks as the dialogue captions.");
+
+var notesFns = ["validationColumnFromInstructions", "scriptNotesRowsFromScriptPayload", "notesCaptionItemsFromAlignedBlocks",
+  "optimizedSubtitleRowsFromScriptPayload", "scriptWantsNotesTrack", "parseCompactSourceCut", "firstScriptSourceName",
+  "parseCutDurationSeconds", "parseScriptTimestamp", "parseScriptNumber", "subtitleChunksFromOptimizedCell",
+  "scriptWantsSplitText", "validationDeclinesOptimizedText", "normalizeHeaderCell", "findScriptColumn",
+  "cleanOverlayCaptionText", "findScriptColumnWithRoles", "scriptCellLooksLikeSource", "scriptCellLooksLikeProductionNote",
+  "inferTextColumnFromRows", "inferSourceColumnFromRows", "inferCutColumnFromRows", "scriptHasHeaderRow",
+  "scriptDataStartIndex", "inferScriptColumnIndex", "canonicalScriptColumnMap", "canonicalScriptModel", "scriptOverlayTextForRow"];
+var notesFnSource = notesFns.map(function (name) { return sliceFn(main, name); }).join("\n");
+var notesTestScript = [
+  "function activeScriptDocument(){ return { splitText: true }; }",
+  "function findProjectItemForScriptSource(){ return null; }",
+  "function getCaptionChunkSettings(){ return {maxWords:6,maxCharacters:34,mode:'readability'}; }",
+  "function optimizedSubtitleChunks(t){ return [t]; }",
+  notesFnSource,
+  "var payload = { tableRows: [",
+  "  ['Text', 'Source', 'Cut', 'Notes'],",
+  "  ['Spills? One wipe, gone', 'A.mp4', '0-3', 'Brighten this, trim excess after'],",
+  "  ['Your old jeans would be soaked', 'B.mp4', '20-23', 'Speed up please'],",
+  "  ['Women over 50 wear these', 'C.mp4', '6-8', ''],",
+  "  ['4 secured pockets', 'D.mp4', '15-19', 'Cut the bad takes, use clip from 0:18']",
+  "], columnRoles: [], tableCells: [] };",
+  "var model = canonicalScriptModel(payload);",
+  "var notesRows = scriptNotesRowsFromScriptPayload(payload);",
+  "var optimizedRows = optimizedSubtitleRowsFromScriptPayload(payload);",
+  "var alignedBlocks = [{start:0,end:3},{start:3,end:6.5},{start:6.5,end:9},{start:9,end:13}];",
+  "var items = notesCaptionItemsFromAlignedBlocks(notesRows, alignedBlocks);",
+  "var noNotesPayload = { tableRows: [['Text','Source','Cut'],['Hi','A.mp4','0-2']], columnRoles: [], tableCells: [] };",
+  "console.log(JSON.stringify({",
+  "  notesColumnIndex: model.columns.notes,",
+  "  rowCountMatch: optimizedRows.length === notesRows.length,",
+  "  items: items,",
+  "  mismatchGuard: notesCaptionItemsFromAlignedBlocks(notesRows, alignedBlocks.slice(0,2)),",
+  "  noNotesColumnIndex: canonicalScriptModel(noNotesPayload).columns.notes,",
+  "  noNotesRows: scriptNotesRowsFromScriptPayload(noNotesPayload),",
+  "  toggleDefaultTrue: scriptWantsNotesTrack({}),",
+  "  toggleOff: scriptWantsNotesTrack({notesTrack:false})",
+  "}));"
+].join("\n");
+
+var app = Application.currentApplication();
+app.includeStandardAdditions = true;
+var notesTestPath = "/tmp/pr-ai-notes-track-check.js";
+$.NSString.alloc.initWithUTF8String(notesTestScript).writeToFileAtomicallyEncodingError(notesTestPath, true, $.NSUTF8StringEncoding, null);
+var notesCheckOutput = app.doShellScript("node '" + notesTestPath + "'");
+app.doShellScript("rm -f '" + notesTestPath + "'");
+var notesResults = JSON.parse(notesCheckOutput);
+
+assert(notesResults.notesColumnIndex === 3, "The Notes column header is not recognized: index=" + notesResults.notesColumnIndex);
+assert(notesResults.rowCountMatch, "Notes rows do not line up 1:1 with the dialogue caption rows, so they cannot share the same timing by index.");
+assert(notesResults.items.length === 3, "A row with no note still produced a caption, or a real note was dropped: " + JSON.stringify(notesResults.items));
+assert(notesResults.items.every(function (it) { return it.text.indexOf("\n") === -1; }), "A Notes caption was split into more than one block, unlike the \"not broken down\" requirement: " + JSON.stringify(notesResults.items));
+assert(notesResults.items[0].start === 0 && notesResults.items[0].end === 3, "The first Notes caption does not use that row's own dialogue-caption timing: " + JSON.stringify(notesResults.items[0]));
+assert(notesResults.items[2].start === 9 && notesResults.items[2].end === 13, "A later row's Notes caption does not use that row's own dialogue-caption timing: " + JSON.stringify(notesResults.items[2]));
+assert(Array.isArray(notesResults.mismatchGuard) && notesResults.mismatchGuard.length === 0, "Mismatched notes/timing array lengths silently produce captions instead of being rejected.");
+assert(notesResults.noNotesColumnIndex === -1 && notesResults.noNotesRows.every(function (r) { return !r.text; }), "A script with no Notes column still produces Notes caption content.");
+assert(notesResults.toggleDefaultTrue === true, "The Notes-track toggle no longer defaults to on.");
+assert(notesResults.toggleOff === false, "Turning the Notes-track toggle off is ignored.");
+
+/* AI Validate must stay scoped and lean - the old shape (whole sheet sent four
+   ways + every project item + timelineActions, one long Opus call) took ~65s on
+   a 30-row script; the scoped shape is ~7s. Validation also skips the per-clip
+   component read during refresh. */
+var aiValidateRule = capture(main, /(function validateScriptWithAgent\(options\) \{[\s\S]*?\n  \})/, "validate function (speed)");
+assert(/runScopedAiValidation\(/.test(aiValidateRule) && !/buildScriptValidationPrompt\(/.test(aiValidateRule), "AI Validate sends the full-sheet prompt again instead of only the flagged rows.");
+assert(/refreshProjectContextForWork\(\{ quiet: true, skipComponents: true \}\)/.test(aiValidateRule), "Validation refresh reads every clip's effect components again.");
+assert(/var skipComponents = payload\.skipComponents === true;/.test(host) && (host.match(/skipComponents \? \[\] : prAI_readClipComponents\(/g) || []).length === 2, "The host snapshot ignores skipComponents for video or audio clips.");
+var leanArgs = capture(main, /(var leanClaudeArgs = [\s\S]*?;\n)/, "lean CLI args");
+["--tools \\\"\\\"", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources \\\"\\\"", "--effort low", "--system-prompt"].forEach(function (flag) {
+  assert(leanArgs.indexOf(flag) !== -1, "Lean CLI mode lost " + flag + ".");
+});
+var scopedRule = capture(main, /(function runScopedAiValidation\([\s\S]*?\n  \})/, "scoped AI validation");
+assert(/localScriptValidationPayload\(/.test(scopedRule) && /buildScopedRepairPrompt\(/.test(scopedRule) && /\{ lean: true \}/.test(scopedRule), "Scoped AI validation no longer runs the local check first or no longer uses lean mode.");
+assert(/Promise\.all\(\[repairPromise, splitPromise\]\)/.test(scopedRule), "Repair and split no longer run in parallel.");
+var repairRule = capture(main, /(function buildScopedRepairPrompt\([\s\S]*?\n  \})/, "scoped repair prompt");
+assert(/if \(!issues\.length\) \{\s*return null;/.test(repairRule), "AI Validate calls Claude even when the local check found nothing to fix.");
+assert(!/timelineActions/.test(repairRule) && !/scriptPayload\.html/.test(repairRule), "The scoped repair prompt asks for timelineActions or sends the sheet HTML again.");
+assert(/runAgent\(provider, buildSplitTextPrompt\(scriptPayload\), \[\], undefined, \{ lean: true \}\)/.test(main), "Split Text no longer runs in lean mode.");
+
+var parallelScript = [
+  sliceFn(main, "runInLimitedParallel"),
+  "var active = 0, peak = 0, tasks = [];",
+  "for (var i = 0; i < 10; i++) { (function (n) { tasks.push(function () { active++; peak = Math.max(peak, active); return new Promise(function (r) { setTimeout(function () { active--; r(n * 10); }, 5 + (n % 3) * 4); }); }); })(i); }",
+  "runInLimitedParallel(tasks, 4).then(function (res) { console.log(JSON.stringify({ peak: peak, res: res })); });"
+].join("\n");
+var parallelPath = "/tmp/pr-ai-parallel-check.js";
+$.NSString.alloc.initWithUTF8String(parallelScript).writeToFileAtomicallyEncodingError(parallelPath, true, $.NSUTF8StringEncoding, null);
+var parallelResults = JSON.parse(app.doShellScript("node '" + parallelPath + "'"));
+app.doShellScript("rm -f '" + parallelPath + "'");
+assert(parallelResults.peak === 4, "Split batches exceed or underuse the parallel limit: peak=" + parallelResults.peak);
+assert(JSON.stringify(parallelResults.res) === JSON.stringify([0,10,20,30,40,50,60,70,80,90]), "Parallel split batches come back out of row order: " + JSON.stringify(parallelResults.res));
+
+/* AI Validate moves editor notes it finds in Source/Cut cells (e.g. "Sale tag
+   70%", "Variants bra đổi màu") into the Notes column, creating it when
+   missing, so they reach the Notes caption track instead of being reported as
+   missing footage. Exercised against a real DOM sheet. */
+assert(/moveToNotes/.test(capture(main, /(function buildScopedRepairPrompt\([\s\S]*?\n  \})/, "repair prompt (notes)")), "The AI repair prompt no longer offers moveToNotes.");
+assert(/var movedNotes = usedAgentValidation \? applyMoveToNotes\(payload\) : \[\];/.test(main), "AI Validate no longer applies moveToNotes to the sheet.");
+var notesMoveFns = ["createSheetCell", "setCellText", "sheetCellText", "columnIndexFromValidationEdit", "logicalSheetGrid",
+  "appendLogicalSheetColumn", "normalizedNoteLine", "applyMoveToNotes"].map(function (name) { return sliceFn(main, name); }).join("\n");
+var notesMovePage = "/tmp/pr-ai-notes-move-check.html";
+var notesMoveHtml = [
+  "<!doctype html><html><body><div id=\"scriptInput\"></div><script>",
+  "var els = { scriptInput: document.getElementById('scriptInput') };",
+  "var fakeColumns;",
+  "function pushSheetUndo(){} function updateSheetRails(){} function saveActiveScriptDocument(){}",
+  "function getScriptInputPayload(){ return {}; }",
+  "function canonicalScriptModel(){ return { dataStartIndex: 1, columns: fakeColumns }; }",
+  notesMoveFns,
+  "function rowsText(){ return Array.prototype.map.call(document.querySelectorAll('tr'), function (tr) { return Array.prototype.map.call(tr.children, function (c) { return sheetCellText(c); }); }); }",
+  "var results = {};",
+  "els.scriptInput.innerHTML = '<table><tbody><tr><th>Text</th><th>Cut</th><th>Source</th></tr>' +",
+  "  '<tr><td>Hello</td><td>1-2<br>Sale tag 70%</td><td>12</td></tr>' +",
+  "  '<tr><td>World</td><td>3-4</td><td>14<br>Variants bra đổi màu</td></tr></tbody></table>';",
+  "fakeColumns = { text: 0, cut: 1, source: 2, optimizedText: -1, notes: -1 };",
+  "results.moved = applyMoveToNotes({ moveToNotes: [ { row: 2, column: 2, text: 'Sale tag 70%' }, { row: 3, column: 'C', text: 'variants  bra đổi màu' }, { row: 3, column: 2, text: '3-4' }, { row: 3, column: 1, text: 'World' }, { row: 2, column: 3, text: 'not in cell' } ] });",
+  "results.created = rowsText();",
+  "results.role = document.querySelector('tr').children[3] ? document.querySelector('tr').children[3].getAttribute('data-column-role') : null;",
+  "els.scriptInput.innerHTML = '<table><tbody><tr><th>Text</th><th>Cut</th><th>Notes</th></tr>' +",
+  "  '<tr><td>Hello</td><td>1-2<br>Logo top left</td><td>Keep bright</td></tr></tbody></table>';",
+  "fakeColumns = { text: 0, cut: 1, source: -1, optimizedText: -1, notes: 2 };",
+  "results.moved2 = applyMoveToNotes({ moveToNotes: [ { row: 2, column: 2, text: 'Logo top left' } ] });",
+  "results.existing = rowsText();",
+  "results.loneTiming = applyMoveToNotes({ moveToNotes: [ { row: 2, column: 2, text: '1-2' } ] });",
+  "results.afterLone = rowsText();",
+  "document.title = JSON.stringify(results);",
+  "</script></body></html>"
+].join("\n");
+$.NSString.alloc.initWithUTF8String(notesMoveHtml).writeToFileAtomicallyEncodingError(notesMovePage, true, $.NSUTF8StringEncoding, null);
+var notesMoveOutput = app.doShellScript("\"" + chromePath + "\" --headless --disable-gpu --window-size=500,400 --virtual-time-budget=1200 --dump-dom 'file://" + notesMovePage + "' 2>/dev/null | grep -o '<title>[^<]*</title>'");
+app.doShellScript("rm -f '" + notesMovePage + "'");
+var notesMoveMatch = notesMoveOutput.match(/<title>([\s\S]*?)<\/title>/);
+assert(notesMoveMatch, "Move-to-Notes check produced no result.");
+var nm = JSON.parse(notesMoveMatch[1].replace(/&quot;/g, "\"").replace(/&amp;/g, "&"));
+assert(nm.moved.length === 2, "Move-to-Notes moved the wrong number of lines (must skip the Text column and lines not in the cell): " + JSON.stringify(nm.moved));
+assert(JSON.stringify(nm.created[0]) === JSON.stringify(["Text", "Cut", "Source", "Notes"]) && nm.role === "notes", "Move-to-Notes did not create a Notes column with the notes role: " + JSON.stringify(nm.created[0]) + " role=" + nm.role);
+assert(JSON.stringify(nm.created[1]) === JSON.stringify(["Hello", "1-2", "12", "Sale tag 70%"]), "Row with a note in Cut was not cleaned/moved correctly: " + JSON.stringify(nm.created[1]));
+assert(JSON.stringify(nm.created[2]) === JSON.stringify(["World", "", "14", "Variants bra đổi màu (3-4)"]), "Row with a note in Source (column given as a letter) was not cleaned/moved correctly: " + JSON.stringify(nm.created[2]));
+assert(nm.loneTiming.length === 0 && nm.afterLone[1][1] === "1-2", "A timing line moved without any note was removed from its Cut cell: " + JSON.stringify(nm.afterLone[1]));
+assert(nm.moved2.length === 1 && JSON.stringify(nm.existing[1]) === JSON.stringify(["Hello", "1-2", "Keep bright\nLogo top left"]), "Move-to-Notes overwrote or skipped an existing Notes cell instead of appending: " + JSON.stringify(nm.existing[1]));
+
+/* "H13.mp4" was flagged Needs Context because two project items share that
+   name - typically a sequence made with "New Sequence From Clip" or the same
+   file imported into two bins. Neither is a real ambiguity. A genuine clash
+   (two different files) must still be flagged, and must name where they are. */
+var matchFns = ["normalizeScriptSourceName", "normalizeScriptSourceAlias", "sourceLookupTokens", "sourceKeywordTokens",
+  "validationBinHints", "collapseDuplicateSourceCandidates", "ambiguousSourceDescription", "firstScriptSourceName",
+  "sourceMatchForScriptSource"].map(function (name) { return sliceFn(main, name); }).join("\n");
+var matchScript = [
+  "function activeScriptDocument(){ return {}; }",
+  "function parseCompactSourceCut(){ return []; } function extractScriptSourceLabels(){ return []; }",
+  "var state;",
+  matchFns,
+  "var clip = { nodeId: '1', name: 'H13.mp4', type: 1, path: 'Proj/Footage/H13.mp4', mediaPath: '/Media/H13.mp4' };",
+  "state = { projectItems: [ clip, { nodeId: '2', name: 'H13.mp4', type: 1, path: 'Proj/Sequences/H13.mp4', mediaPath: '' } ] };",
+  "var seq = sourceMatchForScriptSource('H13.mp4');",
+  "state = { projectItems: [ clip, { nodeId: '3', name: 'H13.mp4', type: 1, path: 'Proj/Selects/H13.mp4', mediaPath: '/Media/h13.MP4' } ] };",
+  "var dup = sourceMatchForScriptSource('H13.mp4');",
+  "state = { projectItems: [ clip, { nodeId: '4', name: 'H13.mp4', type: 1, path: 'Proj/Old/H13.mp4', mediaPath: '/Other/H13.mp4' } ] };",
+  "var clash = sourceMatchForScriptSource('H13.mp4');",
+  "console.log(JSON.stringify({ seq: seq.item && seq.item.nodeId, seqAmb: seq.ambiguous, dup: dup.item && dup.item.nodeId, dupAmb: dup.ambiguous, clashAmb: clash.ambiguous, clashText: ambiguousSourceDescription('H13.mp4', clash) }));"
+].join("\n");
+var matchPath = "/tmp/pr-ai-dup-source-check.js";
+$.NSString.alloc.initWithUTF8String(matchScript).writeToFileAtomicallyEncodingError(matchPath, true, $.NSUTF8StringEncoding, null);
+var mr = JSON.parse(app.doShellScript("node '" + matchPath + "'"));
+app.doShellScript("rm -f '" + matchPath + "'");
+assert(mr.seq === "1" && !mr.seqAmb, "A sequence named like a clip still makes that clip ambiguous: " + JSON.stringify(mr));
+assert(mr.dup === "1" && !mr.dupAmb, "The same file imported into two bins is still reported as ambiguous: " + JSON.stringify(mr));
+assert(mr.clashAmb === true, "Two different files with the same name are silently resolved to one: " + JSON.stringify(mr));
+assert(/Proj\/Footage\/H13\.mp4/.test(mr.clashText) && /Proj\/Old\/H13\.mp4/.test(mr.clashText), "A real source clash does not say which project items collide: " + mr.clashText);
+
+/* A b-roll row whose Text is "None" (no voiceover) was dropped from the
+   cached timeline: the planner only emitted plans for spoken lines, so a
+   5-row script placed just its one row with text, at 0:00, and its caption at
+   0:00 too. Uses the user's real VAP sheet shape. Full Process still sees only
+   spoken lines (it aligns one audio block per line). */
+var silentFns = notesFns.concat(["scriptSourceLines", "extractScriptSourceLabels", "normalizeScriptSourceAlias",
+  "defaultCompactScriptRanges", "rowMediaPlansFromScript", "cachedTimelineActionsFromScript", "buildCutTimedSrtPlan",
+  "proportionalCaptionBlocks", "secondsToSrtTime", "alignmentTokens", "pad2", "mediaFilenameFromScriptLine", "isScriptMediaExtensionToken", "normalizeScriptSourceName", "sourceLabelsFromValidationText"]);
+var silentScript = [
+  "function activeScriptDocument(){ return { splitText: true }; }",
+  "function findProjectItemForScriptSource(name){ return { name: name, nodeId: 'id:' + name, mediaPath: '/m/' + name }; }",
+  "function getCaptionChunkSettings(){ return {maxWords:6,maxCharacters:34,mode:'readability'}; }",
+  "function optimizedSubtitleChunks(t){ return [t]; }",
+  silentFns.map(function (name) { return sliceFn(main, name); }).join("\n"),
+  "var payload = { tableRows: [",
+  "  ['None', '6-9s\\n21-25s\\n11-13\\n2.5-4', 'H19 xếp bút.mp4\\nH6.mp4\\nH22 full clip.mp4\\nH12 utility 2.mp4', '', '', '', ''],",
+  "  ['None', '4-6s\\n0-4 speed up', 'CraftyHold v1.0 [anh.vtdinh][the.ducnguyen].mp4', '', '', '', ''],",
+  "  ['None', '32-37s', 'CraftyHold v1.2 [anh.vtdinh][the.ducnguyen].mp4', '', '', '', ''],",
+  "  ['None', '18-20s', 'H24 full video3.mp4', '', '', '', ''],",
+  "  ['None haha', '2-3s\\n9-12s', 'H13.mp4', '', '', '', 'None haha']",
+  "], columnRoles: ['text', 'cut', 'source', '', '', '', 'optimizedText'], tableCells: [] };",
+  "function getScriptInputPayload(){ return payload; }",
+  "payload.cutTimedSrtPlan = buildCutTimedSrtPlan(payload);",
+  "var actions = cachedTimelineActionsFromScript(payload, { includeText: true });",
+  "var clips = actions[0] ? actions[0].clips : [];",
+  "console.log(JSON.stringify({",
+  "  clipRows: clips.map(function (c) { return c.row; }),",
+  "  clipSources: clips.map(function (c) { return c.source; }),",
+  "  totalSeconds: clips.reduce(function (a, c) { return a + c.durationSeconds; }, 0),",
+  "  captions: payload.cutTimedSrtPlan ? payload.cutTimedSrtPlan.captions : null,",
+  "  spokenPlans: rowMediaPlansFromScript(payload).length",
+  "}));"
+].join("\n");
+var silentPath = "/tmp/pr-ai-silent-rows-check.js";
+$.NSString.alloc.initWithUTF8String(silentScript).writeToFileAtomicallyEncodingError(silentPath, true, $.NSUTF8StringEncoding, null);
+var sr = JSON.parse(app.doShellScript("node '" + silentPath + "' 2>&1"));
+app.doShellScript("rm -f '" + silentPath + "'");
+assert(JSON.stringify(sr.clipRows) === JSON.stringify([1,1,1,1,2,2,3,4,5,5]), "Rows with no voiceover (Text = None) are missing from the cached timeline: rows " + JSON.stringify(sr.clipRows) + " / " + JSON.stringify(sr.clipSources));
+assert(sr.clipSources[0] === "H19 xếp bút.mp4" && sr.clipSources[9] === "H13.mp4", "Cached timeline clips are out of script order: " + JSON.stringify(sr.clipSources));
+assert(sr.captions && sr.captions.length === 1 && Math.abs(sr.captions[0].startSeconds - 23.5) < 0.01 && Math.abs(sr.captions[0].endSeconds - 27.5) < 0.01, "The caption for the spoken row is not timed after the preceding no-voiceover footage (expected 23.5-27.5s: 10.5 + 6 + 5 + 2 of no-voiceover footage first): " + JSON.stringify(sr.captions));
+assert(sr.spokenPlans === 1, "Full Process now sees no-voiceover rows as spoken lines, which breaks its one-block-per-line audio alignment: " + sr.spokenPlans);
+
+"PR AI regression checks passed (" + hostVersion + ").";

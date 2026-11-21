@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Edie detection</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 12px -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  .box { position: absolute; box-sizing: border-box; border-radius: 6px; pointer-events: none; transition: left .12s, top .12s, width .12s, height .12s, opacity .2s; }
+  .live { border: 3px solid #3fbf6f; background: rgba(63,191,111,.07); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+  .live.off { border-color: #e0a030; background: rgba(224,160,48,.06); }
+  .saved { border: 2px dashed #e0a030; opacity: .9; }
+  .tag { position: absolute; left: 6px; top: 6px; padding: 3px 8px; border-radius: 5px; color: #fff; background: rgba(20,20,20,.82); white-space: nowrap; font-weight: 600; letter-spacing: .01em; }
+  .tag i { font-style: normal; font-weight: 400; color: #cfcbc0; margin-left: 6px; }
+  .dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #fff; background: #3fbf6f; box-shadow: 0 0 0 2px rgba(0,0,0,.5); transition: left .1s, top .1s; }
+  .dot.outside { background: #8a8a8a; }
+  .banner { position: absolute; display: flex; align-items: center; gap: 9px; max-width: 620px; padding: 9px 15px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; background: rgba(19,19,22,.97); color: #fff; font-weight: 600; transform: translateX(-50%); box-shadow: 0 8px 22px rgba(0,0,0,.35); }
+  .banner::before { content: "!"; flex: none; color: #ffa147; font-size: 14px; font-weight: 800; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="saved" class="box saved" hidden><span class="tag">Remembered Timeline<i>used when the live lookup fails</i></span></div>
+  <div id="live" class="box live" hidden><span class="tag" id="liveTag">Timeline detected</span></div>
+  <div id="dot" class="dot" hidden></div>
+  <div id="banner" class="banner" hidden></div>
+<script src="web-bridge.js"></script>
+<script src="overlay.js"></script>
+</body>
+</html>

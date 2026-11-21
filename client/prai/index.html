@@ -1,0 +1,605 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>PR AI</title>
+    <link rel="stylesheet" href="css/styles.css?v=20261120-agent-menu1" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-bot" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 10h10a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-4a3 3 0 0 1 3-3zM9 6h6M12 3v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 15h.01M15 15h.01" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+          </span>
+          <h1>PR AI</h1>
+        </div>
+        <div class="top-actions">
+          <select id="targetSequence" title="Target sequence">
+            <option value="">Target: Active sequence</option>
+          </select>
+          <button id="stylesBtn" class="top-icon top-icon-styles" title="Styles" aria-label="Styles">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h16M17 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Styles</span>
+          </button>
+          <button id="captionsBtn" class="top-icon top-icon-captions" title="Captions" aria-label="Captions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H8l-3 4zM8 9h8M8 12h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Captions</span>
+          </button>
+          <button id="editGuideBtn" class="top-icon top-icon-guide" title="Edit Guide" aria-label="Edit Guide">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Edit Guide</span>
+          </button>
+          <button id="workflowMapBtn" class="top-icon top-icon-map" title="Logic Map" aria-label="Logic Map">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h5v5H5zM14 4h5v5h-5zM14 15h5v5h-5zM10 8h4M16.5 9v6M10 10.5l4 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Logic Map</span>
+          </button>
+          <button id="settingsBtn" class="top-icon top-icon-settings" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 12h2M18 12h2M12 4v2M12 18v2M6.6 6.6 8 8M16 16l1.4 1.4M17.4 6.6 16 8M8 16l-1.4 1.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Settings</span>
+          </button>
+          <button id="refreshBtn" class="top-icon top-icon-refresh" title="Refresh" aria-label="Refresh project context">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.2 9A7 7 0 0 0 6.3 7.3L4 10M5.8 15A7 7 0 0 0 17.7 16.7L20 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="top-tooltip" role="tooltip">Refresh Project</span>
+          </button>
+        </div>
+      </header>
+
+      <section id="settingsOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+          <div class="settings-header">
+            <h2 id="settingsTitle">Settings</h2>
+            <button id="closeSettingsBtn" type="button">Close</button>
+          </div>
+          <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button class="settings-tab is-active" type="button" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+            <button class="settings-tab" type="button" data-settings-tab="ai" role="tab" aria-selected="false">AI</button>
+            <button class="settings-tab" type="button" data-settings-tab="audio" role="tab" aria-selected="false">Audio</button>
+            <button class="settings-tab" type="button" data-settings-tab="log" role="tab" aria-selected="false">Log</button>
+          </div>
+
+          <div class="settings-tab-panel is-active" data-settings-panel="general" role="tabpanel">
+            <label for="textTempFolder">Text file folder</label>
+            <div class="setting-row">
+              <input id="textTempFolder" type="text" spellcheck="false" placeholder="Default: system temp/PR_AI_Text" />
+              <button id="browseTextFolderBtn" type="button">Browse</button>
+              <button id="resetTextFolderBtn" type="button">Reset</button>
+            </div>
+            <label for="xmlOutputFolder">XML export folder</label>
+            <div class="setting-row">
+              <input id="xmlOutputFolder" type="text" spellcheck="false" placeholder="Default: project folder/XML" />
+              <button id="browseXmlFolderBtn" type="button">Browse</button>
+              <button id="resetXmlFolderBtn" type="button">Reset</button>
+            </div>
+            <label for="xmlAfterCreateAction">XML action when done</label>
+            <div class="setting-row">
+              <select id="xmlAfterCreateAction">
+                <option value="import">Import</option>
+                <option value="openFolder">Open Folder</option>
+                <option value="open">Open</option>
+              </select>
+            </div>
+            <label class="checkbox-row">
+              <input id="includeComponents" type="checkbox" />
+              Include clip component details in agent context
+            </label>
+          </div>
+
+          <div class="settings-tab-panel ai-settings-panel" data-settings-panel="ai" role="tabpanel" hidden>
+            <div class="ai-settings-intro">
+              <h3>Agents</h3>
+              <p>Choose the model and effort Edie uses. Each connection test checks the choices on its own card.</p>
+            </div>
+
+            <div id="aiDetectStage" class="connector-card agent-tools-card install-stage">
+              <div class="agent-card-header">
+                <div><strong>Agent tools</strong><span>Find the signed-in CLIs and read their available models.</span></div>
+                <span id="aiDetectState" class="agent-state">Not checked</span>
+              </div>
+              <div class="agent-card-actions">
+                <button id="detectAiBtn" type="button">Detect agents</button>
+                <button id="refreshAiModelsBtn" type="button">Refresh models</button>
+              </div>
+              <div class="install-progress" aria-hidden="true"><span></span></div>
+              <pre id="aiDetectLog"></pre>
+            </div>
+
+            <div class="ai-provider-grid" aria-label="AI agents">
+              <div class="connector-card ai-provider-card" data-agent-provider="claude">
+                <div class="agent-card-header">
+                  <div><strong>Claude Code</strong><span>Claude CLI · used by Edie when Claude is selected</span></div>
+                  <span id="claudeTestState" class="agent-state">Not tested</span>
+                </div>
+                <div class="agent-choice-row">
+                  <div class="agent-choice-field">
+                    <span class="agent-field-label">Model and effort</span>
+                    <details id="claudeAgentMenu" class="agent-choice-menu">
+                      <summary id="claudeAgentMenuLabel">Choose a model</summary>
+                      <div class="agent-choice-popover" role="menu" aria-label="Claude model and effort">
+                        <div class="agent-menu-heading">Claude Code</div>
+                        <div class="agent-menu-section">Model</div>
+                        <div id="claudeAgentModelItems" class="agent-menu-items"></div>
+                        <div class="agent-menu-separator"></div>
+                        <div class="agent-menu-section">Effort</div>
+                        <div id="claudeAgentModeItems" class="agent-menu-items"></div>
+                      </div>
+                    </details>
+                    <select id="claudeModelSelect" class="agent-native-source" aria-hidden="true" tabindex="-1"><option value="">Default from Claude</option></select>
+                    <select id="claudeModeSelect" class="agent-native-source" aria-hidden="true" tabindex="-1"><option value="">Default</option></select>
+                  </div>
+                  <button id="testClaudeBtn" class="agent-test-button" type="button">Test connection</button>
+                </div>
+                <div id="claudeTestStage" class="install-stage agent-test-result">
+                  <div class="install-progress" aria-hidden="true"><span></span></div>
+                  <pre id="claudeTestLog"></pre>
+                </div>
+              </div>
+
+              <div class="connector-card ai-provider-card" data-agent-provider="codex">
+                <div class="agent-card-header">
+                  <div><strong>Codex CLI</strong><span>OpenAI Codex CLI · used by Edie when Codex is selected</span></div>
+                  <span id="codexTestState" class="agent-state">Not tested</span>
+                </div>
+                <div class="agent-choice-row">
+                  <div class="agent-choice-field">
+                    <span class="agent-field-label">Model and mode</span>
+                    <details id="codexAgentMenu" class="agent-choice-menu">
+                      <summary id="codexAgentMenuLabel">Choose a model</summary>
+                      <div class="agent-choice-popover" role="menu" aria-label="Codex model and mode">
+                        <div class="agent-menu-heading">Codex CLI</div>
+                        <div class="agent-menu-section">Model</div>
+                        <div id="codexAgentModelItems" class="agent-menu-items"></div>
+                        <div class="agent-menu-separator"></div>
+                        <div class="agent-menu-section">Mode</div>
+                        <div id="codexAgentModeItems" class="agent-menu-items"></div>
+                      </div>
+                    </details>
+                    <select id="codexModelSelect" class="agent-native-source" aria-hidden="true" tabindex="-1"><option value="">Default from Codex</option></select>
+                    <select id="codexModeSelect" class="agent-native-source" aria-hidden="true" tabindex="-1"><option value="">Default</option></select>
+                  </div>
+                  <button id="testCodexBtn" class="agent-test-button" type="button">Test connection</button>
+                </div>
+                <div id="codexTestStage" class="install-stage agent-test-result">
+                  <div class="install-progress" aria-hidden="true"><span></span></div>
+                  <pre id="codexTestLog"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-tab-panel" data-settings-panel="audio" role="tabpanel" hidden>
+            <h3 class="settings-section-title">Whisper Audio Alignment</h3>
+            <label for="ffmpegPath">ffmpeg command or path</label>
+            <div class="setting-row">
+              <input id="ffmpegPath" type="text" spellcheck="false" placeholder="Auto: ffmpeg, /opt/homebrew/bin/ffmpeg" />
+              <button id="detectWhisperBtn" type="button">Detect</button>
+              <button id="installFfmpegBtn" type="button">Install</button>
+            </div>
+            <label for="whisperCommand">Whisper align command</label>
+            <div class="setting-row">
+              <input id="whisperCommand" type="text" spellcheck="false" placeholder="python /path/to/align_script.py" />
+              <button id="testWhisperBtn" type="button">Test</button>
+              <button id="installWhisperBtn" type="button">Install</button>
+            </div>
+            <div class="caption-grid">
+              <label>
+                Model
+                <select id="whisperModel">
+                  <option value="large-v3-turbo" selected>large-v3-turbo | fast | ~1.5 GB</option>
+                  <option value="turbo">turbo | fast | ~1.5 GB</option>
+                  <option value="distil-large-v3">distil-large-v3 | fast | ~1.5 GB</option>
+                  <option value="distil-large-v2">distil-large-v2 | fast | ~1.5 GB</option>
+                  <option value="large-v3">large-v3 | best | ~2.9 GB</option>
+                  <option value="large-v2">large-v2 | best | ~2.9 GB</option>
+                  <option value="large-v1">large-v1 | best | ~2.9 GB</option>
+                  <option value="large">large | best | ~2.9 GB</option>
+                  <option value="medium">medium multi | ~1.5 GB</option>
+                  <option value="medium.en">medium.en | ~1.5 GB</option>
+                  <option value="small">small multi | ~461 MB</option>
+                  <option value="small.en">small.en | ~461 MB</option>
+                  <option value="base">base multi | ~142 MB</option>
+                  <option value="base.en">base.en | ~142 MB</option>
+                  <option value="tiny">tiny multi | ~75 MB</option>
+                  <option value="tiny.en">tiny.en | ~75 MB</option>
+                </select>
+              </label>
+              <label>
+                Device
+                <select id="whisperDevice">
+                  <option value="auto" selected>auto</option>
+                  <option value="cpu">cpu</option>
+                  <option value="cuda">cuda</option>
+                  <option value="mps">mps</option>
+                </select>
+              </label>
+              <label>
+                Audio track
+                <input id="defaultAudioTrack" type="text" spellcheck="false" value="A1" />
+              </label>
+              <label>
+                Head pad
+                <input id="audioHeadPad" type="number" min="0" step="0.01" value="0.25" />
+              </label>
+              <label>
+                Tail pad
+                <input id="audioTailPad" type="number" min="0" step="0.01" value="0.25" />
+              </label>
+              <label>
+                Caption breaks
+                <select id="captionSplitMode">
+                  <option value="readability" selected>Context &amp; readability</option>
+                  <option value="punctuation">Punctuation only</option>
+                  <option value="even">Even length</option>
+                </select>
+              </label>
+              <label>
+                Caption max words
+                <input id="captionMaxWords" type="number" min="1" max="20" step="1" value="6" />
+              </label>
+              <label>
+                Caption max chars
+                <input id="captionMaxChars" type="number" min="8" max="90" step="1" value="34" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input id="captionTrimEndPunctuation" type="checkbox" checked />
+              Trim trailing periods and commas from caption rows
+            </label>
+            <div class="setting-row whisper-actions">
+              <button id="testWhisperModelBtn" type="button">Test Model</button>
+              <button id="downloadWhisperModelBtn" type="button">Download Model</button>
+              <button id="generateAudioCaptionsBtn" type="button">Auto Captions</button>
+            </div>
+            <div class="install-stages" aria-label="Install progress">
+              <div id="ffmpegInstallStage" class="install-stage">
+                <div class="install-stage-header">
+                  <strong>1. ffmpeg</strong>
+                  <span id="ffmpegInstallState">Idle</span>
+                </div>
+                <div class="install-progress" aria-hidden="true"><span></span></div>
+                <pre id="ffmpegInstallLog"></pre>
+              </div>
+              <div id="whisperInstallStage" class="install-stage">
+                <div class="install-stage-header">
+                  <strong>2. WhisperX</strong>
+                  <span id="whisperInstallState">Idle</span>
+                </div>
+                <div class="install-progress" aria-hidden="true"><span></span></div>
+                <pre id="whisperInstallLog"></pre>
+              </div>
+              <div id="modelInstallStage" class="install-stage">
+                <div class="install-stage-header">
+                  <strong>3. Model</strong>
+                  <span id="modelInstallState">Idle</span>
+                </div>
+                <div class="install-progress" aria-hidden="true"><span></span></div>
+                <pre id="modelInstallLog"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-tab-panel" data-settings-panel="log" role="tabpanel" hidden>
+            <h3 class="settings-section-title">Activity Log</h3>
+            <p id="status">Starting panel...</p>
+            <pre id="statusLog" class="settings-log"></pre>
+          </div>
+
+          <p id="settingsStatus">XML files use YYYY-MM-DD-HH-mm - AutoEdit - Function.xml and ignore custom names.</p>
+        </div>
+      </section>
+
+      <section id="workflowMapOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel workflow-map-panel" role="dialog" aria-modal="true" aria-labelledby="workflowMapTitle">
+          <div class="settings-header">
+            <h2 id="workflowMapTitle">Logic Map</h2>
+            <div class="settings-header-actions">
+              <select id="workflowMapSelect" aria-label="Logic map">
+                <option value="functions">All Functions</option>
+                <option value="fullProcess">Full Process</option>
+                <option value="layout">Layout</option>
+                <option value="audioText">Audio + Text</option>
+                <option value="script">Script/Projects</option>
+              </select>
+              <button id="insertWorkflowGuideBtn" type="button">Insert Guide</button>
+              <button id="closeWorkflowMapBtn" type="button">Close</button>
+            </div>
+          </div>
+          <div class="workflow-map-stage">
+            <canvas id="workflowMapCanvas" width="900" height="520" aria-label="Node based logic map"></canvas>
+          </div>
+          <div id="workflowMapDetails" class="workflow-map-details" aria-live="polite"></div>
+          <p id="workflowMapStatus">Select a node.</p>
+        </div>
+      </section>
+
+      <section id="stylesOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel styles-panel" role="dialog" aria-modal="true" aria-labelledby="stylesTitle">
+          <div class="settings-header">
+            <h2 id="stylesTitle">XML Text Styles</h2>
+            <button id="closeStylesBtn" type="button">Close</button>
+          </div>
+          <div id="styleTemplateInfo" class="style-template-info"></div>
+          <div id="styleGlobalControls" class="style-global-controls"></div>
+          <div id="stylePreviewList" class="style-preview-list"></div>
+          <div class="style-actions">
+            <button id="addStyleBtn" type="button">Add Style</button>
+            <button id="insertStylePromptBtn" type="button">Use in Prompt</button>
+          </div>
+          <p id="stylesStatus">Previewing saved styled XML capsule.</p>
+        </div>
+      </section>
+
+      <section id="captionOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel caption-panel" role="dialog" aria-modal="true" aria-labelledby="captionTitle">
+          <div class="settings-header">
+            <h2 id="captionTitle">Captions</h2>
+            <button id="closeCaptionBtn" type="button">Close</button>
+          </div>
+          <label for="captionText">Caption text or SRT</label>
+          <textarea id="captionText" class="caption-text" spellcheck="false" placeholder="Paste SRT here, or type one caption per line."></textarea>
+          <div class="caption-grid">
+            <label>
+              Start
+              <input id="captionStart" type="number" min="0" step="0.1" value="0" />
+            </label>
+            <label>
+              Duration
+              <input id="captionDuration" type="number" min="0.1" step="0.1" value="3" />
+            </label>
+            <label>
+              Gap
+              <input id="captionGap" type="number" min="0" step="0.1" value="0.2" />
+            </label>
+          </div>
+          <label class="checkbox-row">
+            <input id="captionCreateTrack" type="checkbox" checked />
+            Create caption track after importing
+          </label>
+          <label class="checkbox-row">
+            <input id="captionShowImportDialog" type="checkbox" />
+            Show Premiere import dialog
+          </label>
+          <div class="caption-actions">
+            <button id="importCaptionsBtn" type="button">Import Captions</button>
+            <button id="clearCaptionsBtn" type="button">Clear</button>
+          </div>
+          <p id="captionStatus">Uses the text file folder from Settings.</p>
+        </div>
+      </section>
+
+      <section id="editGuideOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel edit-guide-panel" role="dialog" aria-modal="true" aria-labelledby="editGuideTitle">
+          <div class="settings-header">
+            <h2 id="editGuideTitle">Edit Guide</h2>
+            <button id="closeEditGuideBtn" type="button">Close</button>
+          </div>
+          <textarea id="editGuide" class="edit-guide-text" spellcheck="false"></textarea>
+        </div>
+      </section>
+
+      <section id="agentPanel" class="view-panel is-active" data-main-panel="agent">
+        <section id="chatLog" class="chat-log" aria-label="Chat"></section>
+      </section>
+
+      <section class="input-dock" aria-label="Input controls">
+      <section id="scriptEditorOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel script-editor-panel" role="dialog" aria-modal="true" aria-labelledby="scriptEditorTitle">
+          <div class="settings-header">
+            <h2 id="scriptEditorTitle">Script</h2>
+            <div class="settings-header-actions">
+              <button id="cancelScriptEditorBtn" type="button">Cancel</button>
+              <button id="closeScriptEditorBtn" type="button">Save</button>
+            </div>
+          </div>
+          <div class="script-controls" aria-label="Script controls">
+            <input id="scriptNameInput" type="text" spellcheck="false" aria-label="Script name" />
+            <button id="renameScriptBtn" type="button">Rename</button>
+            <button id="duplicateScriptBtn" type="button">Duplicate</button>
+            <button id="validateScriptBtn" type="button" title="Fast: source lookup and structure checks only, no AI">Validate</button>
+            <button id="validateScriptAiBtn" type="button" title="Slow: Claude repairs sources and splits Optimized Text - for hard cases">Validate with AI</button>
+            <button id="splitScriptTextBtn" type="button">Split Text</button>
+            <button id="clearScriptBtn" type="button">Clear</button>
+            <button id="deleteScriptBtn" type="button">Delete</button>
+          </div>
+          <label class="checkbox-row script-split-toggle">
+            <input id="scriptSplitTextToggle" type="checkbox" checked />
+            Split text into Optimized Text rows when validating with AI
+          </label>
+          <label class="checkbox-row script-split-toggle">
+            <input id="scriptNotesTrackToggle" type="checkbox" checked />
+            Also import Notes as their own caption track (full text, not split - for editing reference, delete before export)
+          </label>
+          <label class="script-validation-prompt" for="scriptValidationPrompt">
+            <span>Validation instructions</span>
+            <textarea id="scriptValidationPrompt" spellcheck="false" placeholder="Optional: tell validation what to assume, check, ignore, or repair before caching actions."></textarea>
+          </label>
+          <div id="scriptWorkspaceState" class="script-workspace-state" aria-live="polite">
+            <div class="script-workspace-main">
+              <span id="scriptWorkspaceStatus" class="script-workspace-status">Not validated</span>
+              <span id="scriptWorkspacePercent" class="script-workspace-percent">0%</span>
+              <span id="scriptValidationTimer" class="script-validation-timer">0.0s</span>
+            </div>
+            <div class="script-progress-track" aria-hidden="true">
+              <div id="scriptValidationProgressFill" class="script-progress-fill"></div>
+            </div>
+            <button id="applyValidatedScriptBtn" class="script-apply-btn" type="button" hidden>Apply to timeline</button>
+          </div>
+        <div class="sheet-board" aria-label="Sheet input">
+          <div class="sheet-corner">
+            <button id="clearSheetBtn" class="sheet-clear" type="button" title="Clear sheet" aria-label="Clear sheet">x</button>
+          </div>
+          <div id="sheetColumnRail" class="sheet-column-rail" aria-label="Column handles">
+            <button id="addSheetColumnBtn" class="sheet-rail-add" type="button" title="Add column" aria-label="Add column">+</button>
+          </div>
+          <div id="sheetRowRail" class="sheet-row-rail" aria-label="Row handles">
+            <button id="addSheetRowBtn" class="sheet-rail-add" type="button" title="Add row" aria-label="Add row">+</button>
+          </div>
+          <div id="scriptInput" class="script-input" contenteditable="false" tabindex="0" role="grid" aria-multiline="true" data-placeholder="Paste sheet rows here."></div>
+        </div>
+        <div class="sheet-tools" aria-label="Sheet selection tools">
+          <span id="sheetSelectionSummary" class="sheet-selection-summary">No cells selected</span>
+          <div class="sheet-history-actions" aria-label="Sheet edit history">
+            <button id="undoSheetBtn" class="sheet-history-button" type="button" title="Undo sheet edit (Ctrl+Z)" aria-label="Undo sheet edit" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5M5 12h8a6 6 0 0 1 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="redoSheetBtn" class="sheet-history-button" type="button" title="Redo sheet edit (Ctrl+Shift+Z or Ctrl+Y)" aria-label="Redo sheet edit" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <label class="sheet-role-control" for="sheetColumnRole">
+            Column
+            <select id="sheetColumnRole">
+              <option value="">Auto role</option>
+              <option value="text">Text timing</option>
+              <option value="optimizedText">Optimized subtitles</option>
+              <option value="source">Source file</option>
+              <option value="cut">Cut range</option>
+              <option value="notes">Notes</option>
+              <option value="skip">Skip</option>
+            </select>
+          </label>
+        </div>
+        <div id="sheetContextMenu" class="sheet-context-menu" hidden>
+          <button id="insertSheetRowAboveBtn" type="button">Insert Row Above</button>
+          <button id="insertSheetRowBelowBtn" type="button">Insert Row Below</button>
+          <button id="deleteSheetRowBtn" type="button">Delete Row</button>
+          <hr />
+          <button id="insertSheetColumnLeftBtn" type="button">Insert Column Left</button>
+          <button id="insertSheetColumnRightBtn" type="button">Insert Column Right</button>
+          <button id="deleteSheetColumnBtn" type="button">Delete Column</button>
+        </div>
+        </div>
+      </section>
+
+      <section id="scriptValidationOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel script-validation-panel" role="alertdialog" aria-modal="true" aria-labelledby="scriptValidationTitle">
+          <div class="settings-header">
+            <h2 id="scriptValidationTitle">Script Validation</h2>
+            <button id="closeScriptValidationBtn" type="button">Close</button>
+          </div>
+          <div id="scriptValidationBody" class="script-validation-body"></div>
+        </div>
+      </section>
+
+        <div id="runStatus" class="run-status is-ready" aria-live="polite">
+            <div class="quick-actions" aria-label="Agent mode toggles">
+              <button class="quick-action" type="button" data-quick-action="full-processing" aria-pressed="false" aria-label="Full processing">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5v4H4zM15 6h5v4h-5zM4 15h5v4H4zM15 15h5v4h-5zM9 8h6M9 17h6M12 10v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>Full Process</span>
+                <span class="quick-tooltip" role="tooltip">Audio, text, media rows.</span>
+              </button>
+              <button class="quick-action" type="button" data-quick-action="auto-cut-textbound" aria-pressed="false" aria-label="Layout sources and text">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v6H4zM13 5h7v6h-7zM4 13h16M4 17h10M4 21h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>Layout</span>
+                <span class="quick-tooltip" role="tooltip">Place sources and text only.</span>
+              </button>
+              <button class="quick-action" type="button" data-quick-action="audio-text-cuts" aria-pressed="false" aria-label="Audio plus text">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6v12M8 9v6M12 4v16M16 8v8M20 11v2M5 21h14M6 3h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                <span>Audio + Text</span>
+                <span class="quick-tooltip" role="tooltip">Whisper splits audio.</span>
+              </button>
+              <button class="quick-action" type="button" data-quick-action="create-new-sequence" aria-pressed="false" aria-label="New sequence">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10v10H4zM10 11h10v8H10zM17 3v5M14.5 5.5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>New sequence</span>
+                <span class="quick-tooltip" role="tooltip">Clone clean sequence.</span>
+              </button>
+              <button id="generateAudioCaptionsQuickBtn" class="quick-action quick-action-run" type="button" aria-label="Generate captions from audio now">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H8l-3 4zM8 9h8M8 12h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>Auto Captions</span>
+                <span class="quick-tooltip" role="tooltip">Runs now: no script needed, listens to the whole sequence unless a track is set in Settings &gt; Audio.</span>
+              </button>
+            </div>
+            <div class="run-metrics">
+              <span class="run-dot" aria-hidden="true"></span>
+              <span id="runState">Ready to send</span>
+            </div>
+        </div>
+        <section class="composer">
+          <div id="promptHighlight" class="prompt-highlight" aria-hidden="true"></div>
+          <textarea id="prompt" spellcheck="false" placeholder="Ask for an edit, e.g. trim V1 clip 0 to end at 8 seconds. Type @ to tag a script."></textarea>
+          <div id="scriptMentionMenu" class="script-mention-menu" role="listbox" aria-label="Script suggestions" hidden></div>
+          <div class="composer-controls" aria-label="Agent controls">
+            <select id="provider" class="composer-select composer-provider" title="Agent">
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex CLI</option>
+            </select>
+            <select id="composerModelSelect" class="composer-select composer-model" title="Model">
+              <option value="">Default model</option>
+            </select>
+            <select id="composerModeSelect" class="composer-select composer-mode" title="Mode">
+              <option value="">Default</option>
+            </select>
+          </div>
+          <div id="attachments" class="attachments" aria-live="polite"></div>
+          <div class="actions">
+            <input id="imageInput" class="file-input" type="file" accept="image/*" multiple />
+            <button id="attachBtn" class="icon-button" title="Attach image" aria-label="Attach image">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <button id="diagnoseBtn" class="icon-button" title="Diagnose" aria-label="Diagnose">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h4l2-7 4 14 2-7h4M5 5h14M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="undoBtn" class="icon-button" title="Undo" aria-label="Undo" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5M5 12h9a5 5 0 1 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="sendBtn" class="icon-button send-button" title="Send" aria-label="Send">
+              <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="cancel-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h8v8H8z" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </section>
+        <section class="workspace script-manager" aria-label="Script manager">
+          <div class="script-project-bar" aria-label="Script projects">
+            <button id="scriptProjectSettingsBtn" class="script-project-settings-btn" type="button" title="Project settings" aria-label="Project settings" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7zM3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </button>
+            <select id="scriptProjectSelect" aria-label="Script project"></select>
+          </div>
+          <div class="script-strip" aria-label="Scripts">
+            <div id="scriptTabs" class="script-tabs" role="tablist" aria-label="Scripts"></div>
+            <button id="addScriptBtn" class="script-add-btn" type="button" title="Add script" aria-label="Add script">+</button>
+            <button id="importScriptCsvBtn" class="script-add-btn script-import-csv-btn" type="button" title="Import CSV as new script" aria-label="Import CSV as new script">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M8 11l4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section id="scriptProjectOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel script-project-panel" role="dialog" aria-modal="true" aria-labelledby="scriptProjectTitle">
+          <div class="settings-header">
+            <h2 id="scriptProjectTitle">Project Folder</h2>
+            <button id="closeScriptProjectBtn" type="button">Close</button>
+          </div>
+          <div class="script-project-actions">
+            <button id="addScriptProjectPanelBtn" class="script-project-btn" type="button">New Project</button>
+          </div>
+          <div id="scriptProjectList" class="script-project-list" aria-label="Project folders"></div>
+          <div class="script-project-edit" aria-label="Project edit controls">
+            <div class="script-project-name-head">
+              <label for="scriptProjectNameInput">Project name</label>
+              <button id="scriptProjectCount" class="script-count-btn" type="button" disabled>0 scripts</button>
+            </div>
+            <div class="setting-row">
+              <input id="scriptProjectNameInput" type="text" spellcheck="false" placeholder="Product name" aria-label="Product project name" />
+              <button id="renameScriptProjectBtn" class="script-project-btn" type="button">Rename</button>
+              <button id="deleteScriptProjectBtn" class="script-project-btn" type="button">Delete</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="js/cep-bridge.js?v=20261119-prfx-port1"></script>
+    <script src="js/csinterface.js?v=20260729-activeworkflow1"></script>
+    <!-- Agent chat runs before main.js so main can route Send through its
+         Premiere tool server. mcp.js is the separate Node stdio process and
+         is intentionally not loaded in the panel. -->
+    <script src="agent/tools.js?v=20261119-agent1"></script>
+    <script src="agent/server.js?v=20261119-agent1"></script>
+    <script src="agent/chat.js?v=20261119-agent1"></script>
+    <script src="agent/chat-ui.js?v=20261119-agent1"></script>
+    <script src="js/main.js?v=20261120-agent-menu1"></script>
+  </body>
+</html>

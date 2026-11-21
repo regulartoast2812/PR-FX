@@ -2,6 +2,7 @@
 <ExtensionManifest Version="7.0" ExtensionBundleId="com.prfx.palette" ExtensionBundleVersion="1.0.0" ExtensionBundleName="PR FX Palette" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
     <Extension Id="com.prfx.palette.settings" Version="1.0.0"/>
+    <Extension Id="com.prfx.palette.engine" Version="1.0.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
@@ -23,17 +24,21 @@
           <CEFCommandLine>
             <Parameter>--enable-nodejs</Parameter>
             <Parameter>--mixed-context</Parameter>
+            <!-- Edie's hidden Premiere-tool runtime shares the panel's file://
+                 origin so it can borrow __adobe_cep__ and Node. -->
+            <Parameter>--allow-file-access</Parameter>
+            <Parameter>--allow-file-access-from-files</Parameter>
           </CEFCommandLine>
         </Resources>
         <Lifecycle>
           <AutoVisible>true</AutoVisible>
-          <StartOnEvents>
+          <StartOn>
             <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
-          </StartOnEvents>
+          </StartOn>
         </Lifecycle>
         <UI>
           <Type>Panel</Type>
-          <Menu>PR FX Palette Settings</Menu>
+          <Menu>Edie</Menu>
           <Geometry>
             <Size>
               <Width>360</Width>
@@ -43,6 +48,38 @@
               <Width>300</Width>
               <Height>360</Height>
             </MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+    <!-- Hidden command engine. Starts with Premiere and runs shortcut
+         commands whether or not the settings panel is open, the way
+         Excalibur's background extension does. -->
+    <Extension Id="com.prfx.palette.engine">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./client/engine.html</MainPath>
+          <!-- No ScriptPath: the settings panel already loads host.jsx, and a
+               second load would reset its in-memory undo stacks. engine.js
+               loads it only when it is missing or stale. -->
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>false</AutoVisible>
+          <StartOn>
+            <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
+          </StartOn>
+        </Lifecycle>
+        <UI>
+          <Type>Custom</Type>
+          <Geometry>
+            <Size>
+              <Width>100</Width>
+              <Height>100</Height>
+            </Size>
           </Geometry>
         </UI>
       </DispatchInfo>

@@ -56,6 +56,9 @@ enum ShortcutDetectionChecks {
                     timelineTab, CGRect(x: 1260, y: 91, width: 467, height: 24)]
         let expected = CGRect(x: 72, y: 633, width: 1132, height: 484)
         precondition(TimelinePanelGeometry.region(window: window, markers: [controls], tabs: tabs) == expected)
+        // The status bar (y 1097 on that machine) ends the panel, not the window.
+        precondition(TimelinePanelGeometry.region(window: window, markers: [controls], tabs: tabs, statusBarTop: 1097)
+            == CGRect(x: 72, y: 633, width: 1132, height: 462))
 
         // Hidden/invalid controls must not drag the union toward another panel.
         let hidden = CGRect(x: -500, y: 50, width: 20, height: 20)
@@ -80,6 +83,48 @@ enum ShortcutDetectionChecks {
             markers: [controls.offsetBy(dx: -1728, dy: -300)],
             tabs: tabs.map { $0.offsetBy(dx: -1728, dy: -300) })
         precondition(shifted == expected.offsetBy(dx: -1728, dy: -300), "Negative display coordinates are valid")
+        // Export/Import/Home mode: a healthy scan with no tab strips. The saved
+        // rectangle stays for the return to Edit, but must not be trusted now.
+        var modes = TimelineRegionCache()
+        modes.recordLookup(oldPanel, at: start)
+        modes.recordLookup(nil, panelsHidden: true, at: start.addingTimeInterval(3))
+        precondition(modes.panelsHidden && modes.liveRegion == nil && modes.lastKnownRegion == oldPanel)
+        modes.invalidate()
+        precondition(modes.panelsHidden, "Invalidating for a refresh must not re-arm plain keys before the next scan")
+        modes.recordLookup(nil, at: start.addingTimeInterval(6))
+        precondition(!modes.panelsHidden, "A redraw miss is not a mode switch")
+        modes.recordLookup(nil, panelsHidden: true, at: start.addingTimeInterval(8))
+        modes.recordLookup(oldPanel, at: start.addingTimeInterval(10))
+        precondition(!modes.panelsHidden, "Finding the Timeline clears full-window mode")
+
+        // Resize (2026-11-19): the Timeline's top dragged up 200pt. Premiere moved
+        // the controls but kept publishing the tab strip at its old place.
+        let premiere = CGRect(x: 0, y: 33, width: 1728, height: 1084)
+        let tlStrip = CGRect(x: 463, y: 612, width: 700, height: 40)
+        let topStrips = [CGRect(x: 411, y: 74, width: 804, height: 40), CGRect(x: 1219, y: 74, width: 508, height: 24)]
+        let before = [CGRect(x: 476, y: 680, width: 24, height: 24), CGRect(x: 500, y: 1026, width: 24, height: 24)]
+        let lastPanel = TimelinePanelGeometry.region(window: premiere, markers: before, tabs: topStrips + [tlStrip], statusBarTop: 1097)!
+        precondition(lastPanel == CGRect(x: 463, y: 612, width: 700, height: 483))
+        let lastControls = TimelinePanelGeometry.controls(window: premiere, markers: before)
+        let after = [CGRect(x: 476, y: 480, width: 24, height: 24), CGRect(x: 500, y: 1026, width: 24, height: 24)]
+        precondition(TimelinePanelGeometry.region(window: premiere, markers: after, tabs: topStrips + [tlStrip], statusBarTop: 1097) == nil)
+        precondition(TimelinePanelGeometry.inferred(window: premiere, markers: after, tabs: topStrips + [tlStrip], statusBarTop: 1097,
+                                                    last: lastPanel, lastControls: lastControls)
+            == CGRect(x: 463, y: 412, width: 700, height: 683), "A moved panel follows its controls")
+        // Once Premiere republishes the strip at its new place, the strip wins.
+        let moved = CGRect(x: 463, y: 411, width: 700, height: 40)
+        precondition(TimelinePanelGeometry.inferred(window: premiere, markers: after, tabs: topStrips + [moved], statusBarTop: 1097,
+                                                    last: lastPanel, lastControls: lastControls)
+            == CGRect(x: 463, y: 411, width: 700, height: 684))
+        // No controls (Export mode): nothing is inferred.
+        precondition(TimelinePanelGeometry.inferred(window: premiere, markers: [], tabs: topStrips, statusBarTop: 1097,
+                                                    last: lastPanel, lastControls: lastControls) == nil)
+        var tracked = TimelineRegionCache()
+        tracked.recordLookup(lastPanel, controls: lastControls, at: start)
+        precondition(tracked.lastControls == lastControls)
+        tracked.recordLookup(nil, controls: CGRect(x: 1, y: 1, width: 1, height: 1), at: start.addingTimeInterval(3))
+        precondition(tracked.lastControls == lastControls, "A failed lookup keeps the matched controls")
+
         print("Shortcut detection cache and geometry checks passed")
     }
 }

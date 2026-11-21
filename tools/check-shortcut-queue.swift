@@ -25,6 +25,15 @@ enum ShortcutQueueChecks {
         queue.append("old", at: start.addingTimeInterval(6))
         queue.expire(at: start.addingTimeInterval(12))
         precondition(queue.count == 0 && queue.first == nil && queue.dropped == 3)
+
+        var routed = PendingCommands<String>(capacity: 4, maxAge: 5)
+        routed.append("cep-first", at: start)
+        routed.append("uxp", at: start.addingTimeInterval(0.1))
+        routed.append("cep-last", at: start.addingTimeInterval(0.2))
+        precondition(routed.take(at: start.addingTimeInterval(1), where: { $0 == "uxp" }) == "uxp")
+        precondition(routed.take(at: start.addingTimeInterval(1.1)) == "cep-first")
+        precondition(routed.take(at: start.addingTimeInterval(1.2)) == "cep-last",
+                     "Selective UXP routing must preserve CEP command order")
         print("Shortcut queue burst, ordering, overflow and stale-command checks passed")
     }
 }

@@ -9,7 +9,7 @@ Thumbs.db
 # macOS builds and Xcode state
 /native/build/*
 /native/control-surface/build/
-/native/windows/build/
+/native/windows/build/*
 *.app/
 !/native/build/listener-build.txt
 !/native/build/PR FX Shortcut Listener.app/
@@ -53,3 +53,14 @@ settings.local.json
 
 # Local reference tool; PR FX never imports or ships it.
 /untitled folder/
+
+# The Windows listener ships prebuilt, like the macOS app above, so creatives
+# never need the .NET SDK. Listed last so it overrides *.exe.
+!/native/windows/build/PRFXShortcutListener.exe
+!/native/windows/build/listener-build.txt
+/tools/check-windows-bridge/bin/
+/tools/check-windows-bridge/obj/
+
+# Leftovers of the retired standalone PR FX app.
+/app/node_modules/
+/app/dist/

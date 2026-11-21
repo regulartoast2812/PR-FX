@@ -4,6 +4,7 @@ import Foundation
 import Carbon.HIToolbox
 import Darwin
 import Network
+import Security
 
 #if !PRFX_GENERATED_BUILD
 private let prfxListenerBuild = "source-dev"
@@ -23,6 +24,20 @@ private struct Settings: Codable {
     let staggerFrames: Int?
     let staggerGroup: Int?
     let bindings: [Binding]?
+    // "problems" (default): failures and skipped shortcuts; "all": also
+    // successes; "off": no banners. Written by the CEP General tab.
+    let shortcutFeedback: String?
+    // "on" (default): banner when the Timeline arms and when Premiere enters
+    // Export/Import mode; "off": silent. Written by the PR FX app.
+    let announceScope: String?
+    // "on": draw the region keystrokes are judged against over Premiere
+    // (PRFXTimelineHighlight.swift). "off" (default). Written by the PR FX page.
+    let timelineHighlight: String?
+    // "on" (default): Edie says one short line beside the highlight after
+    // edieNudgeMinutes (default 2) with no input, and when input resumes after
+    // a longer gap (PRFXEdieNudges.swift). "off": he stays quiet.
+    var edieNudges: String? = nil
+    var edieNudgeMinutes: Double? = nil
 }
 
 private struct Command: Codable {
@@ -36,8 +51,15 @@ private struct Command: Codable {
     let moveMode: String?
     let staggerFrames: Int?
     let staggerGroup: Int?
+    // Set only on commands fired by a shortcut. CEP echoes `seq` back through
+    // POST /result so each keypress can be followed to its outcome.
+    let seq: Int?
+    let key: String?
+    // Saved Effect Presets are identified by UID; the name is only a fallback
+    // (two presets in different bins may share it).
+    let presetUid: String?
 
-    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil) {
+    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil, seq: Int? = nil, key: String? = nil, presetUid: String? = nil) {
         self.type = type
         self.name = name
         self.transitionFrames = transitionFrames
@@ -46,15 +68,32 @@ private struct Command: Codable {
         self.moveMode = moveMode
         self.staggerFrames = staggerFrames
         self.staggerGroup = staggerGroup
+        self.seq = seq
+        self.key = key
+        self.presetUid = presetUid
     }
+}
+
+private struct CommandResult: Codable {
+    let seq: Int
+    let ok: Bool
+    let message: String?
+    let ms: Int?
+}
+
+private struct RuntimeRegistration: Codable {
+    let runtime: String
+    let supportedIds: [String]
 }
 
 private let prfxFallbackCommands = [
     Command(type: "custom", name: "[System] Dump QE + DOM API", transitionFrames: 30, id: "dump-qe-api"),
     Command(type: "custom", name: "[System] Inspect Selected Clip", transitionFrames: 30, id: "inspect-selected-clip"),
     Command(type: "custom", name: "[System] Failure Report", transitionFrames: 30, id: "failure-report"),
+    Command(type: "custom", name: "[System] Preset Report", transitionFrames: 30, id: "preset-report"),
+    Command(type: "custom", name: "[System] Probe Lumetri Preset Apply", transitionFrames: 30, id: "probe-preset-routes"),
     Command(type: "custom", name: "[System] Clear Failure Ledger", transitionFrames: 30, id: "clear-failure-ledger"),
-    Command(type: "custom", name: "Undo Last PR FX Effect Apply", transitionFrames: 30, id: "undo-last-palette-action"),
+    Command(type: "custom", name: "Undo Last Edie Effect Apply", transitionFrames: 30, id: "undo-last-palette-action"),
     Command(type: "custom", name: "Remove Transitions on Selected Clips", transitionFrames: 30, id: "remove-transitions"),
     Command(type: "custom", name: "Move Selected Clips Up as Group", transitionFrames: 30, id: "move-selected-clips-up", moveMode: "group"),
     Command(type: "custom", name: "Move Selected Clips Up Individually", transitionFrames: 30, id: "move-selected-clips-up", moveMode: "individual"),
@@ -64,9 +103,9 @@ private let prfxFallbackCommands = [
     Command(type: "custom", name: "Pull Group Out to Playhead", transitionFrames: 30, id: "pull-group-out"),
     Command(type: "custom", name: "Retract Speed In to Playhead", transitionFrames: 30, id: "retract-speed-in-to-playhead"),
     Command(type: "custom", name: "Retract Speed Out to Playhead", transitionFrames: 30, id: "retract-speed-out-to-playhead"),
-    Command(type: "custom", name: "Undo Last PR FX Action (Any)", transitionFrames: 30, id: "undo-last-prfx-action"),
-    Command(type: "custom", name: "Undo Last PR FX Arrange Action", transitionFrames: 30, id: "undo-last-arrange"),
-    Command(type: "custom", name: "Redo Last PR FX Arrange Action", transitionFrames: 30, id: "redo-last-arrange"),
+    Command(type: "custom", name: "Undo Last Edie Action (Any)", transitionFrames: 30, id: "undo-last-prfx-action"),
+    Command(type: "custom", name: "Undo Last Edie Arrange Action", transitionFrames: 30, id: "undo-last-arrange"),
+    Command(type: "custom", name: "Redo Last Edie Arrange Action", transitionFrames: 30, id: "redo-last-arrange"),
     Command(type: "custom", name: "Select Everything Starting Before Playhead", transitionFrames: 30, id: "select-before-playhead"),
     Command(type: "custom", name: "Adjustment Layer Over Selection", transitionFrames: 30, id: "adjustment-layer-over-selection"),
     Command(type: "custom", name: "Perfect Pitch (Correct Speed Transposition)", transitionFrames: 30, id: "perfect-pitch"),
@@ -74,6 +113,7 @@ private let prfxFallbackCommands = [
     Command(type: "custom", name: "Place Bin Clips at Playhead in Row", transitionFrames: 30, id: "place-bin-clips"),
     Command(type: "custom", name: "Place Bin Clips at Playhead in Column", transitionFrames: 30, id: "place-bin-clips-column"),
     Command(type: "custom", name: "Replace Selected Clips from Bin", transitionFrames: 30, id: "replace-from-bin"),
+    Command(type: "custom", name: "Replace & Fit to Slot from Bin", transitionFrames: 30, id: "replace-fit-from-bin"),
     Command(type: "custom", name: "Bulk Replace — Dry Run (no changes)", transitionFrames: 30, id: "bulk-replace-preview"),
     Command(type: "custom", name: "Bulk Replace from Bin by Name", transitionFrames: 30, id: "bulk-replace-by-name"),
     Command(type: "custom", name: "Queue Cuts to Media Encoder", transitionFrames: 30, id: "queue-cuts-to-ame"),
@@ -117,11 +157,21 @@ private struct Binding: Codable {
 private enum ShortcutScope {
     case none(String)
     case modifierOnly(String)
+    // The last click was in another Premiere panel (Project, Source, Program).
+    // Like .modifierOnly, plus the commands that work on the Project panel's
+    // selection: those are run right after selecting clips there, and refusing
+    // them as "outside the Timeline" blocked Shift+X 10 times in a row
+    // (2026-11-20).
+    case otherPanel(String)
     case full(String)
+
+    static let projectSelectionCommands: Set<String> = [
+        "place-bin-clips", "place-bin-clips-column", "replace-from-bin", "replace-fit-from-bin",
+    ]
 
     var reason: String {
         switch self {
-        case .none(let reason), .modifierOnly(let reason), .full(let reason): return reason
+        case .none(let reason), .modifierOnly(let reason), .otherPanel(let reason), .full(let reason): return reason
         }
     }
 
@@ -137,14 +187,18 @@ private enum ShortcutScope {
         case .none: return 0
         case .modifierOnly: return 1
         case .full: return 2
+        case .otherPanel: return 3
         }
     }
 
-    func arms(_ shortcut: Shortcut) -> Bool {
+    func arms(_ shortcut: Shortcut, command: Command? = nil) -> Bool {
         switch self {
         case .none: return false
         case .full: return true
         case .modifierOnly: return shortcut.ctrl || shortcut.alt || shortcut.meta
+        case .otherPanel:
+            if shortcut.ctrl || shortcut.alt || shortcut.meta { return true }
+            return command?.id.map(ShortcutScope.projectSelectionCommands.contains) ?? false
         }
     }
 }
@@ -178,6 +232,23 @@ private let paletteFallbackScopeRank = -2
 
 // This accessory app has no main Edit menu. Route its standard equivalents to
 // the active field editor instead of letting NSApplication discard them.
+// The palette's colours: the settings panel's warm dark neutrals and its orange
+// accent (client/styles.css :root). Change both together.
+private enum PaletteStyle {
+    static func hex(_ v: Int, _ alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((v >> 16) & 255) / 255, green: CGFloat((v >> 8) & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: alpha)
+    }
+    static let canvas = hex(0x262624)
+    static let card = hex(0x2f2f2d)
+    static let line = hex(0x3e3e38)
+    static let text = hex(0xeceae3)
+    static let muted = hex(0xa3a096)
+    static let faint = hex(0x6f6c64)
+    static let accent = hex(0xff9a3d)
+    static let accentSoft = hex(0xff9a3d, 0.22)
+    static let orange = hex(0xd4a26a), blue = hex(0x86a6d0), cyan = hex(0x7db5ae), purple = hex(0xa99cd4)
+}
+
 private final class PalettePanel: NSPanel {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let editor = firstResponder as? NSTextView,
@@ -251,6 +322,25 @@ final class ShortcutListener: NSObject {
     private var lastClickPoint: CGPoint?
     private var timelineRegionCache = TimelineRegionCache()
     private var timelineDetectionDetails = "No live lookup yet"
+    private var lastScanTabStrips = 0
+    // Controls of the last matched window scan, stored with the region.
+    private var lastScanControls: CGRect?
+    private var lastScanMarkers: [CGRect] = []
+    // The Timeline's own toolbar (Snap, Display Settings…): one set per
+    // Timeline, and kept current by Premiere when the track headers aren't.
+    private var lastScanToolbar: [CGRect] = []
+    private static let timelineToolbarMarkers: Set<String> = [
+        "Snap in Timeline", "Timeline Display Settings", "Caption track options",
+        "Insert and overwrite sequences as nests or individual clips"
+    ]
+    private let panelSnapshotter = PanelSnapshotter()
+    // What the last Accessibility walk said (or the saved region), for
+    // picking the Timeline out of a capture that lands after that walk.
+    private var lastPixelReference: CGRect?
+    private var dockedTimelineRegion: CGRect?
+    private var lastInferredLog = Date.distantPast
+    private var lastHighlightWindow: CGRect?
+    private var lastScanElements = 0
     private var attemptedTimelineRegionLogRestore = false
     private var registeredScopeRank = -1
     private var settingsFileModifiedAt: Date?
@@ -260,6 +350,35 @@ final class ShortcutListener: NSObject {
     var lastDiagnosticFingerprint = ""
     var lastProbeAt = Date.distantPast
     var lastProbeFingerprint = ""
+    // Event-tap delivery. See PRFXKeyTap.swift for why Carbon was replaced.
+    private var keyTap: KeyTap?
+    private var chordTable = ChordTable()
+    private var chordShortcuts: [UInt32: Shortcut] = [:]
+    private var chordCommands: [UInt32: Command] = [:]
+    // Key codes whose keyDown was consumed; their keyUp and auto-repeats are
+    // consumed too so Premiere never sees half a keystroke.
+    private var swallowedKeyCodes: Set<UInt16> = []
+    // Refreshed by every scope evaluation, read by the tap without any
+    // Accessibility call: the tap must never block on a busy Premiere.
+    private var cachedTextInputRole: String?
+    private var cachedTextInputFrame: CGRect?
+    private var currentScope: ShortcutScope = .none("Starting")
+    private var loggedScopeRank = -99
+    // Last state announced with a banner ("armed", "full-window", "other"), so
+    // activation banners fire on transitions only.
+    private var announcedScopeKind = ""
+    private var secureInputActive = false
+    private var lastTapAttemptAt = Date.distantPast
+    private var loggedTapUnavailable = false
+    private var keyStats = KeyStats()
+    private var commandSeq = 0
+    private var inFlight: [Int: (key: String, name: String, firedAt: Date)] = [:]
+    private let journal = KeyJournal()
+    private let toast = FeedbackToast()
+    private let highlight = TimelineHighlight()
+    private var workingAISeq: Int?
+    private var highlightTimer: Timer?
+    private var nudges = EdieNudges()
     private var commands = prfxFallbackCommands + [
         Command(type: "effect", name: "Gaussian Blur", transitionFrames: 30, id: nil),
         Command(type: "effect", name: "Lumetri Color", transitionFrames: 30, id: nil),
@@ -273,7 +392,7 @@ final class ShortcutListener: NSObject {
         catalogURL = support.appendingPathComponent("catalog.json")
         paletteFrameURL = support.appendingPathComponent("palette-frame.txt")
         timelineRegionURL = support.appendingPathComponent("timeline-region.txt")
-        settings = Settings(shortcut: Shortcut(code: "Space", ctrl: true, alt: false, shift: false, meta: false), transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, bindings: [])
+        settings = Settings(shortcut: Shortcut(code: "Space", ctrl: true, alt: false, shift: false, meta: false), transitionFrames: 30, staggerFrames: 5, staggerGroup: 1, bindings: [], shortcutFeedback: "problems", announceScope: "on", timelineHighlight: "off")
         super.init()
         listenerLog("Listener build: \(prfxListenerBuild)")
         guard acquireSingleInstanceLock() else {
@@ -313,6 +432,24 @@ final class ShortcutListener: NSObject {
             }},
             stateHandler: { [weak self] state in
                 DispatchQueue.main.async { self?.commandBridgeStateChanged(state) }
+            },
+            outcomeHandler: { [weak self] outcome in
+                DispatchQueue.main.async { self?.recordOutcome(outcome) }
+            },
+            controlToken: ShortcutListener.writeBridgeToken(in: support),
+            controlHandler: { [weak self] route, body in
+                DispatchQueue.main.async { self?.handleControl(route, body: body) }
+            },
+            catalogPayloadHandler: { [weak self] in
+                guard let self, let data = try? JSONEncoder().encode(self.commands) else { return "[]" }
+                return String(data: data, encoding: .utf8) ?? "[]"
+            },
+            settingsPayloadHandler: { [weak self] in
+                guard let self, let data = try? Data(contentsOf: self.settingsURL) else { return "{}" }
+                return String(data: data, encoding: .utf8) ?? "{}"
+            },
+            settingsWriteHandler: { [weak self] patch in
+                self?.writeSettingsPatch(patch) ?? "{\"error\":\"listener unavailable\"}"
             }
         )
         guard commandBridge != nil else {
@@ -323,9 +460,12 @@ final class ShortcutListener: NSObject {
         loadSettings()
         promptForAccessibilityIfNeeded()
         observeClicks()
+        startHighlightRefresh()
         observeFrontmostApplication()
         makePalette()
         NotificationCenter.default.addObserver(self, selector: #selector(listenerWillResignActive(_:)), name: NSApplication.willResignActiveNotification, object: nil)
+        let sweep = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in self?.commandBridge?.sweep() }
+        RunLoop.main.add(sweep, forMode: .common)
     }
 
     private func acquireSingleInstanceLock() -> Bool {
@@ -401,6 +541,7 @@ final class ShortcutListener: NSObject {
         hotKeyRefreshTimer?.invalidate()
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         removeFocusObserver()
+        keyTap?.invalidate()
         unregisterHotKeys()
         if let eventHandler { RemoveEventHandler(eventHandler) }
         if let handle = singleInstanceLockHandle {
@@ -420,6 +561,41 @@ final class ShortcutListener: NSObject {
         return attributes?[.modificationDate] as? Date
     }
 
+    private func writeSettingsPatch(_ patchData: Data) -> String {
+        guard let patch = (try? JSONSerialization.jsonObject(with: patchData)) as? [String: Any] else {
+            return "{\"error\":\"invalid settings patch\"}"
+        }
+        var current: [String: Any] = [:]
+        if let data = try? Data(contentsOf: settingsURL),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            current = value
+        }
+        for (key, value) in patch { current[key] = value }
+        guard JSONSerialization.isValidJSONObject(current),
+              let data = try? JSONSerialization.data(withJSONObject: current, options: []) else {
+            return "{\"error\":\"settings could not be encoded\"}"
+        }
+        let temp = settingsURL.deletingLastPathComponent().appendingPathComponent("settings.uxp.\(ProcessInfo.processInfo.processIdentifier).tmp")
+        do {
+            try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: temp, options: .atomic)
+            if FileManager.default.fileExists(atPath: settingsURL.path) {
+                _ = try FileManager.default.replaceItemAt(settingsURL, withItemAt: temp)
+            } else {
+                try FileManager.default.moveItem(at: temp, to: settingsURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            return "{\"error\":\"settings were not saved\"}"
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.loadSettings()
+            self?.filterCommands()
+            self?.refreshHotKeys()
+        }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
     @discardableResult
     private func loadSettings() -> Bool {
         let previousSignature = settingsSignature(settings)
@@ -433,18 +609,21 @@ final class ShortcutListener: NSObject {
                 guard let id = binding.command.id else { return true }
                 return !retiredCommandIDs.contains(id)
             }.map { binding -> Binding in
-                if binding.command.id == "undo-last-palette-action" {
-                    return Binding(shortcut: binding.shortcut, command: Command(type: "custom", name: "Undo Last PR FX Effect Apply", transitionFrames: binding.command.transitionFrames, id: binding.command.id))
+                let renamed = ["undo-last-palette-action": "Undo Last Edie Effect Apply", "undo-last-prfx-action": "Undo Last Edie Action (Any)",
+                               "undo-last-arrange": "Undo Last Edie Arrange Action", "redo-last-arrange": "Redo Last Edie Arrange Action"]
+                if let id = binding.command.id, let name = renamed[id] {
+                    return Binding(shortcut: binding.shortcut, command: Command(type: "custom", name: name, transitionFrames: binding.command.transitionFrames, id: id))
                 }
                 if binding.command.id == "remove-transitions" {
                     return Binding(shortcut: binding.shortcut, command: Command(type: "custom", name: "Remove Transitions on Selected Clips", transitionFrames: binding.command.transitionFrames, id: binding.command.id))
                 }
                 return binding
             }
-            settings = Settings(shortcut: loaded.shortcut, transitionFrames: loaded.transitionFrames, staggerFrames: loaded.staggerFrames ?? 5, staggerGroup: loaded.staggerGroup ?? 1, bindings: bindings)
+            settings = Settings(shortcut: loaded.shortcut, transitionFrames: loaded.transitionFrames, staggerFrames: loaded.staggerFrames ?? 5, staggerGroup: loaded.staggerGroup ?? 1, bindings: bindings, shortcutFeedback: loaded.shortcutFeedback ?? "problems", announceScope: loaded.announceScope ?? "on", timelineHighlight: loaded.timelineHighlight ?? "off", edieNudges: loaded.edieNudges, edieNudgeMinutes: loaded.edieNudgeMinutes)
             settingsFileModifiedAt = settingsModificationDate()
             let changed = settingsSignature(settings) != previousSignature
             if changed { settingsRevision += 1 }
+            rebuildChordTable()
             listenerLog("Loaded \((settings.bindings ?? []).count) command shortcut(s)" + (changed ? " [settings revision \(settingsRevision)]" : ""))
             return changed
         } catch {
@@ -457,7 +636,7 @@ final class ShortcutListener: NSObject {
         var armed = 0
         var withheld = 0
         for binding in settings.bindings ?? [] {
-            if focus.arms(binding.shortcut) { armed += 1 }
+            if focus.arms(binding.shortcut, command: binding.command) { armed += 1 }
             else { withheld += 1 }
         }
         return (armed, withheld)
@@ -481,10 +660,16 @@ final class ShortcutListener: NSObject {
         }
         let accessibilityTrusted = prfxBypassAccessibilityFocus ? false : AXIsProcessTrusted()
         let mode: String
-        if isPremiere(NSWorkspace.shared.frontmostApplication) && !hotKeyRefs.isEmpty {
+        if usesKeyTap && isPremiere(NSWorkspace.shared.frontmostApplication) && bridgeReady {
+            switch currentScope {
+            case .full: mode = "active"
+            case .modifierOnly, .otherPanel: mode = "modifier-only"
+            case .none: mode = "paused"
+            }
+        } else if isPremiere(NSWorkspace.shared.frontmostApplication) && !hotKeyRefs.isEmpty {
             if registeredScopeRank == paletteFallbackScopeRank {
                 mode = "palette-only"
-            } else if registeredScopeRank == 1 {
+            } else if registeredScopeRank == 1 || registeredScopeRank == 3 {
                 mode = "modifier-only"
             } else {
                 mode = "active"
@@ -495,10 +680,13 @@ final class ShortcutListener: NSObject {
         let pending = commandBridge?.pendingName() ?? ""
         let paletteFrameSaved = FileManager.default.fileExists(atPath: paletteFrameURL.path) ? "true" : "false"
         let savedBindings = (settings.bindings ?? []).count
-        let armedBindings = hotKeyCommands.count
+        let armedBindings = usesKeyTap ? expectedArmCounts(for: currentScope).armed : hotKeyCommands.count
         let withheldBindings = max(0, savedBindings - armedBindings)
-        let transport = (commandBridge?.queueHealth() ?? "") + ",\"failedRegistrations\":\(failedHotKeyIDs.count)"
+        let deliveryMode = usesKeyTap ? "event-tap" : (secureInputActive ? "carbon-secure-input" : "carbon")
+        let transport = (commandBridge?.queueHealth() ?? "") + ",\"failedRegistrations\":\(usesKeyTap ? 0 : failedHotKeyIDs.count),\"deliveryMode\":\"\(deliveryMode)\",\"tapReenables\":\(keyTap?.reenableCount ?? 0),\"keyStats\":\(keyStats.json())"
         let detection = ",\"timelineRegion\":\"\(jsonEscape(timelineRegionCache.liveRegion.map(NSStringFromRect) ?? ""))\",\"savedTimelineRegion\":\"\(jsonEscape(timelineRegionCache.lastKnownRegion.map(NSStringFromRect) ?? ""))\",\"lastClick\":\"\(jsonEscape(lastClickPoint.map(NSStringFromPoint) ?? ""))\",\"timelineDetection\":\"\(jsonEscape(timelineDetectionDetails))\",\"focusPollingActive\":\(focusPollTimer?.isValid == true),\"lookupAgeSeconds\":\(Date().timeIntervalSince(timelineRegionCache.lastLookupAt))"
+            + ",\"geometry\":{\"live\":\(rectJSON(timelineRegionCache.liveRegion)),\"saved\":\(rectJSON(timelineRegionCache.lastKnownRegion)),\"window\":\(rectJSON(premiereWindowFrame())),\"click\":\(lastClickPoint.map { "[\(Int($0.x)),\(Int($0.y))]" } ?? "null"),\"panelsHidden\":\(timelineRegionCache.panelsHidden),\"premiereFrontmost\":\(isPremiere(NSWorkspace.shared.frontmostApplication))}"
+            + ",\"scopeKind\":\"\(scopeKindName(keystrokeScope()))\",\"keyScope\":\"\(jsonEscape(keystrokeScope().reason))\",\"feedback\":\"\(jsonEscape(feedbackMode))\",\"announceScope\":\"\(jsonEscape(settings.announceScope ?? "on"))\""
         return "{\"mode\":\"\(mode)\",\"listenerBuild\":\"\(jsonEscape(prfxListenerBuild))\",\"bindings\":\(savedBindings),\"armedBindings\":\(armedBindings),\"withheldBindings\":\(withheldBindings),\"accessibilityTrusted\":\(accessibilityTrusted ? "true" : "false"),\"accessibilityBypassed\":\(prfxBypassAccessibilityFocus ? "true" : "false"),\"catalogCount\":\(commands.count),\"catalogRevision\":\(catalogRevision),\"catalogFingerprint\":\"\(jsonEscape(catalogFingerprint))\",\"pendingCommand\":\"\(jsonEscape(pending))\",\"focus\":\"\(jsonEscape(shortcutScopeReason))\",\"paletteFrameSaved\":\(paletteFrameSaved)\(detection)\(transport)}"
     }
 
@@ -526,6 +714,7 @@ final class ShortcutListener: NSObject {
 
     @objc private func frontmostApplicationChanged(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
+            self?.panelSnapshotter.expire()
             self?.timelineRegionCache.invalidate()
             self?.updateFocusPolling()
             self?.updateHotKeyRegistration(force: false)
@@ -640,17 +829,32 @@ final class ShortcutListener: NSObject {
     private func updateHotKeyRegistration(force: Bool) {
         let settingsChanged = reloadSettingsIfNeeded()
         let shouldForce = force || settingsChanged
+        updateDeliveryMode()
         guard bridgeReady else {
             shortcutScopeReason = "Command bridge is not ready"
+            currentScope = .none("Command bridge is not ready")
             if !hotKeyRefs.isEmpty { unregisterHotKeys() }
             if shouldForce { listenerLog("Timeline shortcuts paused: command bridge is not ready") }
             return
         }
         let focus = timelineShortcutFocus()
         shortcutScopeReason = focus.reason
+        currentScope = focus
+        announceScopeIfChanged(focus)
         if !prfxBypassAccessibilityFocus {
             logAXDiagnostic(verdict: (focus.armsAnything, focus.reason))
             logAXPanelProbe()
+        }
+        if usesKeyTap {
+            // Nothing to register: the tap reads `currentScope` and friends on
+            // each keystroke. Only log when the armed set actually changes.
+            if !hotKeyRefs.isEmpty { unregisterHotKeys() }
+            if shouldForce || focus.rank != loggedScopeRank {
+                loggedScopeRank = focus.rank
+                let counts = expectedArmCounts(for: focus)
+                listenerLog("Shortcut scope (event tap): \(focus.reason) — \(counts.armed) live, \(counts.withheld) withheld")
+            }
+            return
         }
         guard focus.armsAnything else {
             if canArmPaletteWithoutAccessibility() {
@@ -687,7 +891,7 @@ final class ShortcutListener: NSObject {
             armed += 1
         } else { withheld += 1 }
         for (offset, binding) in (settings.bindings ?? []).enumerated() {
-            if focus.arms(binding.shortcut) {
+            if focus.arms(binding.shortcut, command: binding.command) {
                 registerHotKey(binding.shortcut, id: UInt32(offset + 2), command: binding.command)
                 armed += 1
             } else { withheld += 1 }
@@ -695,6 +899,483 @@ final class ShortcutListener: NSObject {
         registeredScopeRank = focus.rank
         listenerLog("Timeline shortcuts active (\(focus.reason)): \(armed) armed"
             + (withheld > 0 ? ", \(withheld) withheld — modifier-less keys need the Timeline located" : ""))
+    }
+
+    // MARK: Event-tap delivery
+
+    // Secure keyboard entry (password fields, Terminal's option, some password
+    // managers) blinds every event tap system-wide while Carbon hotkeys keep
+    // working, so Carbon stays as the fallback for exactly that window and for
+    // a listener without Accessibility.
+    private var usesKeyTap: Bool { keyTap != nil && !secureInputActive }
+
+    private func updateDeliveryMode() {
+        let secure = IsSecureEventInputEnabled()
+        if secure != secureInputActive {
+            secureInputActive = secure
+            registeredScopeRank = -1
+            loggedScopeRank = -99
+            if secure {
+                listenerLog("Secure keyboard entry is on in some app; the event tap cannot see keys, so Carbon hotkeys take over until it turns off")
+            } else {
+                unregisterHotKeys()
+                listenerLog("Secure keyboard entry is off; event tap delivery resumed")
+            }
+        }
+        if let keyTap {
+            if keyTap.ensureEnabled() { listenerLog("Event tap was disabled by macOS; re-enabled") }
+            return
+        }
+        guard !prfxBypassAccessibilityFocus, AXIsProcessTrusted(),
+              Date().timeIntervalSince(lastTapAttemptAt) >= 10 else { return }
+        lastTapAttemptAt = Date()
+        keyTap = KeyTap(handler: { [unowned self] type, event in
+            self.handleTapEvent(type, event)
+        }, onReenable: { reason in
+            listenerLog("Event tap re-enabled after macOS disabled it (\(reason))")
+        })
+        if keyTap != nil {
+            unregisterHotKeys()
+            loggedScopeRank = -99
+            listenerLog("Event tap active: shortcuts are decided per keystroke and never unregistered (\(chordTable.count) chord(s))")
+        } else if !loggedTapUnavailable {
+            loggedTapUnavailable = true
+            listenerLog("Event tap unavailable even with Accessibility; requesting Input Monitoring and staying on Carbon hotkeys")
+            if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
+        }
+    }
+
+    private func rebuildChordTable() {
+        var table = ChordTable()
+        var shortcuts: [UInt32: Shortcut] = [:]
+        var mapped: [UInt32: Command] = [:]
+        let palette = settings.shortcut
+        table.add(code: palette.code, ctrl: palette.ctrl, alt: palette.alt, shift: palette.shift, cmd: palette.meta, id: 1, label: "palette \(display(palette))")
+        shortcuts[1] = palette
+        for (offset, binding) in (settings.bindings ?? []).enumerated() {
+            let id = UInt32(offset + 2)
+            let key = binding.shortcut
+            table.add(code: key.code, ctrl: key.ctrl, alt: key.alt, shift: key.shift, cmd: key.meta, id: id, label: "\(display(key)) → \(binding.command.name)")
+            shortcuts[id] = key
+            mapped[id] = binding.command
+        }
+        for label in table.duplicates { listenerLog("Shortcut conflict: \(label) reuses a chord already bound; the first binding wins") }
+        for label in table.unmappable { listenerLog("Shortcut skipped: \(label) uses a key the listener cannot map") }
+        chordTable = table
+        chordShortcuts = shortcuts
+        chordCommands = mapped
+    }
+
+    // Runs inside the tap callback: decide, nothing else. No Accessibility
+    // calls (a busy Premiere would stall every keystroke on the machine) and
+    // no logging or file I/O -- that is dispatched after the decision.
+    private func handleTapEvent(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        switch type {
+        case .leftMouseDown, .rightMouseDown:
+            // Recorded here, synchronously, so a click on the Timeline followed
+            // at once by a keypress is judged against the new click.
+            if isPremiere(NSWorkspace.shared.frontmostApplication) {
+                lastClickPoint = event.location
+                DispatchQueue.main.async { [weak self] in
+                    self?.updateHotKeyRegistration(force: false)
+                    self?.scheduleHotKeyRefresh()
+                }
+            }
+            return false
+        case .leftMouseUp:
+            // The end of a drag: a panel divider, a resized or moved window,
+            // a workspace tab. The panel may have moved, so look again.
+            if isPremiere(NSWorkspace.shared.frontmostApplication) {
+                DispatchQueue.main.async { [weak self] in self?.relookTimelineAfterDrag() }
+            }
+            return false
+        case .keyUp:
+            let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+            return swallowedKeyCodes.remove(code) != nil
+        case .keyDown:
+            break
+        default:
+            return false
+        }
+        let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+        if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+            // Holding a consumed shortcut must not leak repeats into Premiere,
+            // and must not fire the command again either.
+            return swallowedKeyCodes.contains(code)
+        }
+        // A fresh press means any earlier press of this key has ended. If its
+        // keyUp was lost (tap briefly disabled), the stale entry must not eat
+        // this press's keyUp and leave Premiere with a key that never lifted.
+        swallowedKeyCodes.remove(code)
+        guard let id = chordTable.id(for: KeyChord(keyCode: code, flags: event.flags)),
+              let shortcut = chordShortcuts[id],
+              isPremiere(NSWorkspace.shared.frontmostApplication) else { return false }
+        let scope: ShortcutScope = bridgeReady ? keystrokeScope() : .none("Command bridge is not ready")
+        let label = display(shortcut)
+        guard scope.arms(shortcut, command: chordCommands[id]) || (id == 1 && scope.armsAnything) else {
+            let name = id == 1 ? "Open palette" : (chordCommands[id]?.name ?? "?")
+            DispatchQueue.main.async { [weak self] in self?.recordPassedKey(label, name: name, reason: scope.reason) }
+            return false
+        }
+        swallowedKeyCodes.insert(code)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.shortcutScopeReason = scope.reason
+            if id == 1 {
+                self.showPaletteIfPremiereIsActive(alreadyScoped: true)
+            } else if let command = self.chordCommands[id] {
+                self.applyMappedCommand(command, key: label, alreadyScoped: true)
+            }
+        }
+        return true
+    }
+
+    // The same verdict timelineShortcutFocus() would give, built only from
+    // state it last cached. The click point is current (set in the tap); the
+    // region and text-field state are refreshed on every click and focus change.
+    //
+    // A focused text field only withholds keys that type (plain and Shift
+    // keys); Ctrl/Alt/Cmd chords and the palette key are never text. And the
+    // Timeline never takes Accessibility focus, so a field clicked earlier
+    // stays "focused" after the editor clicks back into the Timeline -- that
+    // stale focus blocked 21 presses in a day. A field counts only when the
+    // last click was on it or anywhere outside the Timeline.
+    private func keystrokeScope() -> ShortcutScope {
+        let live = timelineRegionCache.liveRegion
+        let region = live ?? timelineRegionCache.lastKnownRegion
+        if let role = cachedTextInputRole {
+            let staleFocus = lastClickPoint.map { click in
+                region?.contains(click) == true && cachedTextInputFrame?.contains(click) != true
+            } ?? false
+            if !staleFocus { return .modifierOnly("Text input is focused (\(role))") }
+        }
+        if timelineRegionCache.panelsHidden {
+            return .modifierOnly(ShortcutListener.panelsHiddenReason)
+        }
+        guard let region else {
+            return .modifierOnly("Timeline panel could not be located")
+        }
+        let source = live == nil ? " (saved region)" : ""
+        guard let click = lastClickPoint else {
+            if region.contains(currentMousePointInAXCoordinates()) {
+                return .full("Timeline panel active (mouse over Timeline)\(source)")
+            }
+            return .modifierOnly("No click recorded yet; click the Timeline once")
+        }
+        return region.contains(click)
+            ? .full("Timeline panel active\(source)")
+            : .otherPanel("Last click was outside the Timeline panel\(source)")
+    }
+
+    // Five times a second: cheap when off (a string compare). When on, it
+    // draws exactly what keystrokeScope() would decide right now.
+    private func startHighlightRefresh() {
+        guard highlightTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.updatePanelFeed()
+            self?.refreshHighlight()
+            self?.refreshNudge()
+        }
+        highlightTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    // Edie's nudges (PRFXEdieNudges.swift), on the same tick: one idle-time
+    // read, the rest comparisons. He speaks only beside a live region with
+    // Premiere in front and the palette closed, never taking focus or clicks.
+    private var nudgeKind: EdieNudges.Kind?
+    private func refreshNudge() {
+        if !highlight.isSpeaking { nudgeKind = nil }
+        guard (settings.edieNudges ?? "on") != "off" else {
+            highlight.hush()
+            return
+        }
+        let anyInput = CGEventType(rawValue: ~0)!
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        let eligible = !paletteInFront && highlight.isShowing
+            && isPremiere(NSWorkspace.shared.frontmostApplication)
+        nudges.nudgeAfter = max(0.1, min(60, settings.edieNudgeMinutes ?? 2)) * 60
+        let last = journal.lastCommand.map { (name: $0.name, at: $0.at.timeIntervalSince1970) }
+        let result = nudges.tick(idle: idle, eligible: eligible, now: Date().timeIntervalSince1970, last: last)
+        // Gone at the next input; at once if the palette opens or Premiere goes behind.
+        if !eligible || (result.resumed && nudgeKind == .stillThere) {
+            highlight.hush()
+        }
+        if let line = result.line {
+            highlight.say(line.title, line.detail, for: line.kind == .welcomeBack ? 6 : 9)
+            nudgeKind = line.kind
+        }
+    }
+
+    // Re-reads the Timeline after a mouse-up: once as soon as Premiere has
+    // laid the panels out, and once more in case it republished frames late.
+    private func relookTimelineAfterDrag() {
+        // Pictures from before the mouse-up show the old layout.
+        panelSnapshotter.expire()
+        // A first picture as soon as Premiere has redrawn; its result is used
+        // the moment it lands (snapToPixels), ahead of the walks below.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, let premiere = NSWorkspace.shared.frontmostApplication, self.isPremiere(premiere) else { return }
+            self.requestPanelSnapshot(premiere)
+        }
+        for delay in [0.25, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
+                self.timelineRegionCache.invalidate()
+                self.updateHotKeyRegistration(force: false)
+            }
+        }
+    }
+
+    // Keeps the live panel feed on Premiere's main window while Premiere is
+    // in front, and off otherwise. Each new cut moves the Timeline rectangle
+    // on that frame (snapToPixels), not at the next lookup.
+    private func updatePanelFeed() {
+        guard let premiere = NSWorkspace.shared.frontmostApplication, isPremiere(premiere),
+              let window = premiereWindowFrame() else {
+            if panelSnapshotter.isLive { panelSnapshotter.stopLive() }
+            return
+        }
+        panelSnapshotter.keepLive(pid: premiere.processIdentifier, window: window) { [weak self] _, changed in
+            guard let self, changed, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
+            self.snapToPixels()
+        }
+    }
+
+    // The palette is open and being used: the listener active, its panel key.
+    private var paletteInFront: Bool {
+        NSApp.isActive && panel?.isVisible == true && panel?.isKeyWindow == true
+    }
+
+    private func refreshHighlight() {
+        // The palette makes the listener the active app, so Premiere isn't
+        // frontmost while it's open. Keep the rectangle exactly as it was
+        // (2026-11-20, the user: "I still need the rectangle"); it's judged
+        // again once the palette closes and Premiere is back in front.
+        // Only while the palette really is in front: the listener active and its
+        // panel its key window. Clicking away to another app can leave the panel
+        // "visible" with nobody looking at it, and the freeze then left the
+        // rectangle over Chrome and VS Code (2026-11-20, "it's lingering outside").
+        if paletteInFront, (settings.timelineHighlight ?? "off") == "on" { return }
+        guard (settings.timelineHighlight ?? "off") == "on",
+              isPremiere(NSWorkspace.shared.frontmostApplication),
+              let windows = premiereWindows() else {
+            highlight.hide()
+            return
+        }
+        let window = windows.main
+        // A resized or moved window moves every panel in it.
+        if let previous = lastHighlightWindow, !previous.equalTo(window) {
+            timelineRegionCache.invalidate()
+            updateHotKeyRegistration(force: false)
+        }
+        lastHighlightWindow = window
+        // Draw only what was just seen. A saved rectangle is a guess, and in
+        // Export/Import or under a dialog it lands on top of the wrong thing.
+        guard timelineRegionCache.liveRegion != nil, !timelineRegionCache.panelsHidden, !windows.dialogInFront else {
+            highlight.hide()
+            return
+        }
+        let scope = keystrokeScope()
+        var armed = false
+        if case .full = scope { armed = true }
+        highlight.update(TimelineHighlightState(window: window, live: timelineRegionCache.liveRegion,
+                                                saved: timelineRegionCache.lastKnownRegion, click: lastClickPoint,
+                                                armed: armed, reason: scope.reason, covers: windows.covers))
+    }
+
+    private func scopeKindName(_ scope: ShortcutScope) -> String {
+        switch scope { case .full: return "full"; case .modifierOnly, .otherPanel: return "modifier-only"; case .none: return "none" }
+    }
+
+    private var feedbackMode: String { settings.shortcutFeedback ?? "problems" }
+
+    private func recordPassedKey(_ key: String, name: String, reason: String) {
+        keyStats.recordPassed(reason: reason)
+        journal.record("passed", seq: nil, key: key, command: name, detail: reason)
+        highlight.flash(fired: false)
+        listenerLog("Shortcut passed to Premiere: \(key) → \(name) — \(reason)")
+        // Typing a capital letter into a field is the scoping working, not a
+        // failure; a banner there would be noise.
+        guard feedbackMode != "off", !["text-field", "full-window-mode"].contains(KeyStats.reasonBucket(reason)) else { return }
+        let hint: String
+        switch KeyStats.reasonBucket(reason) {
+        case "outside-timeline", "no-click-yet": hint = "click the Timeline first"
+        case "timeline-not-found": hint = "Edie can’t find the Timeline panel"
+        case "bridge-down": hint = "the Edie bridge is offline"
+        default: hint = reason
+        }
+        toast.show("\(key) · \(name) not run — \(hint)", kind: .skipped, duration: 2.2)
+    }
+
+    // Activation banners: the editor sees the moment shortcuts go live, and the
+    // moment Export/Import mode pauses them, instead of discovering it by a
+    // key doing nothing.
+    private func announceScopeIfChanged(_ focus: ShortcutScope) {
+        let kind: String
+        if case .full = focus { kind = "armed" }
+        else if focus.reason == ShortcutListener.panelsHiddenReason { kind = "full-window" }
+        else if case .none = focus { kind = "" }
+        else { kind = "other" }
+        guard kind != announcedScopeKind else { return }
+        let previous = announcedScopeKind
+        announcedScopeKind = kind
+        guard (settings.announceScope ?? "on") != "off", panel?.isVisible != true else { return }
+        switch kind {
+        case "armed":
+            let live = expectedArmCounts(for: focus).armed
+            toast.show("Timeline armed · \(live) shortcut\(live == 1 ? "" : "s") live", kind: .ok, duration: 1.1)
+        case "full-window":
+            toast.show("Shortcuts paused · Export/Import mode — chords with ⌃⌥⌘ still work", kind: .skipped, duration: 1.8)
+        case "other" where previous == "full-window":
+            toast.show("Panels back · click the Timeline to arm shortcuts", kind: .skipped, duration: 1.4)
+        default:
+            break
+        }
+    }
+
+    // The PR FX app runs commands and opens the palette through these routes.
+    // Token-checked in the bridge: the port is reachable from any web page.
+    private func handleControl(_ route: String, body: Data) {
+        switch route {
+        case "/open-palette":
+            listenerLog("PR FX app asked for the palette")
+            showPaletteIfPremiereIsActive(alreadyScoped: true)
+        case "/run":
+            guard let command = try? JSONDecoder().decode(Command.self, from: body) else {
+                listenerLog("PR FX app sent an unreadable command")
+                return
+            }
+            guard let commandBridge else { return }
+            let seq = nextTrackedSeq(key: "app", name: command.name)
+            if command.type == "ai-function" { workingAISeq = seq; highlight.startWorking(command.name) }
+            keyStats.fired += 1
+            journal.record("fired", seq: seq, key: "app", command: command.name, detail: "PR FX app")
+            commandBridge.enqueue(Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "app", presetUid: command.presetUid))
+        default:
+            break
+        }
+    }
+
+    static func writeBridgeToken(in support: URL) -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+        let url = support.appendingPathComponent("bridge-token")
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: url.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600])
+        return token
+    }
+
+    // Premiere's main window, plus whether another sizeable Premiere window (a
+    // dialog, a sheet, the Export save panel, a floating panel) sits in front of
+    // it over the Timeline. The window list is ordered front to back.
+    // `covers`: other apps' windows in front of Premiere's main window (a
+    // picture-in-picture video, a floating note), so the highlight leaves them
+    // alone and is drawn only on the Premiere you can see.
+    private func premiereWindows() -> (main: CGRect, dialogInFront: Bool, covers: [CGRect])? {
+        guard let pid = NSWorkspace.shared.runningApplications.first(where: { isPremiere($0) })?.processIdentifier,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        var frames: [(bounds: CGRect, index: Int)] = []
+        for (index, info) in list.enumerated() {
+            guard (info[kCGWindowOwnerPID as String] as? Int32) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width >= 150, bounds.height >= 100 else { continue }
+            frames.append((bounds, index))
+        }
+        guard let main = frames.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }),
+              let front = frames.first else { return nil }
+        let over = timelineRegionCache.liveRegion ?? main.bounds
+        // The highlight's area: the window and the room above it for Edie.
+        let area = main.bounds.insetBy(dx: 0, dy: -TimelineHighlight.headroom / 2).offsetBy(dx: 0, dy: -TimelineHighlight.headroom / 2)
+        let own = ProcessInfo.processInfo.processIdentifier
+        var covers: [CGRect] = []
+        // Premiere's own windows in front of its main one count too (2026-11-20: the
+        // stroke was drawn over the Color Picker, a modal above layer 0): its dialogs,
+        // menus and floating panels hide the rectangle as they hide the Timeline.
+        // Only ones of a real size: a 66x20 strip sits on the window's top-left corner.
+        for info in list.prefix(main.index) {
+            guard let owner = info[kCGWindowOwnerPID as String] as? Int32, owner != own,
+                  (info[kCGWindowLayer as String] as? Int ?? 0) >= 0,
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width >= 20, bounds.height >= 20, bounds.intersects(area),
+                  owner != pid || (bounds.width >= 80 && bounds.height >= 40),
+                  // A clear overlay over the whole screen (another tool's) hides nothing.
+                  !bounds.contains(main.bounds) else { continue }
+            covers.append(bounds)
+        }
+        return (main.bounds, !front.bounds.equalTo(main.bounds) && front.bounds.intersects(over), covers)
+    }
+
+    // Premiere's main window in the same coordinates as Accessibility (top-left
+    // of the primary display, points). Bounds need no Screen Recording grant.
+    private func premiereWindowFrame() -> CGRect? {
+        guard let pid = NSWorkspace.shared.runningApplications.first(where: { isPremiere($0) })?.processIdentifier,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        var best: CGRect?
+        for info in list {
+            guard (info[kCGWindowOwnerPID as String] as? Int32) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict) else { continue }
+            if bounds.width * bounds.height > (best.map { $0.width * $0.height } ?? 0) { best = bounds }
+        }
+        return best
+    }
+
+    private func rectJSON(_ rect: CGRect?) -> String {
+        guard let rect else { return "null" }
+        return "[\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.width)),\(Int(rect.height))]"
+    }
+
+    private func recordOutcome(_ outcome: BridgeOutcome) {
+        switch outcome {
+        case .delivered(let command, let client):
+            guard let seq = command.seq else { return }
+            keyStats.delivered += 1
+            journal.record("delivered", seq: seq, key: command.key ?? "", command: command.name, detail: client)
+        case .discarded(let command):
+            guard let seq = command.seq else { return }
+            keyStats.expired += 1
+            inFlight[seq] = nil
+            if workingAISeq == seq { workingAISeq = nil; highlight.stopWorking() }
+            let key = command.key ?? ""
+            journal.record("expired", seq: seq, key: key, command: command.name, detail: "not collected within 5s")
+            listenerLog("Command expired before CEP collected it: \(command.name) [\(key)]")
+            if feedbackMode != "off" {
+                toast.show("\(command.name) didn't run — Premiere was busy or the Edie engine isn't running", kind: .failed, duration: 4)
+            }
+        case .result(let result):
+            let info = inFlight.removeValue(forKey: result.seq)
+            if workingAISeq == result.seq { workingAISeq = nil; highlight.stopWorking() }
+            let key = info?.key ?? ""
+            let name = info?.name ?? "command #\(result.seq)"
+            let elapsed = info.map { Int(Date().timeIntervalSince($0.firedAt) * 1000) }
+            var message = (result.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if message.hasPrefix("ERROR:") { message = String(message.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+            let detail = "\(elapsed.map { "\($0)ms" } ?? "") \(message)".trimmingCharacters(in: .whitespaces)
+            if result.ok {
+                keyStats.ok += 1
+                journal.record("ok", seq: result.seq, key: key, command: name, detail: detail)
+                if feedbackMode == "all" {
+                    let quiet = message.isEmpty || message.hasPrefix("Applied ")
+                    let shown = message.count > 140 ? String(message.prefix(137)) + "…" : message
+                    toast.show(name + (quiet ? "" : " — \(shown)"), kind: .ok, duration: quiet ? 1.3 : 2.4)
+                }
+            } else {
+                keyStats.failed += 1
+                journal.record("failed", seq: result.seq, key: key, command: name, detail: detail)
+                listenerLog("Command failed: \(name) [\(key)] — \(message)")
+                if feedbackMode != "off" {
+                    let shown = message.count > 180 ? String(message.prefix(177)) + "…" : message
+                    toast.show(name + (shown.isEmpty ? "" : " — \(shown)"), kind: .failed, duration: 4.5)
+                }
+            }
+        }
     }
 
     private func installHotKeyHandler() {
@@ -784,7 +1465,7 @@ final class ShortcutListener: NSObject {
             return false
         }
         guard let shortcut = hotKeyShortcuts[id] else { return focus.armsAnything }
-        if focus.arms(shortcut) { return true }
+        if focus.arms(shortcut, command: hotKeyCommands[id]) { return true }
         // This key is no longer allowed where the editor is working. Drop the
         // whole set; the next focus evaluation re-arms whatever is legitimate.
         listenerLog("Hotkey ignored: \(shortcut.code) needs the Timeline (\(focus.reason))")
@@ -798,7 +1479,7 @@ final class ShortcutListener: NSObject {
         if id == 1 {
             showPaletteIfPremiereIsActive()
         } else if let command = hotKeyCommands[id] {
-            applyMappedCommand(command)
+            applyMappedCommand(command, key: hotKeyShortcuts[id].map(display) ?? "?")
         }
     }
 
@@ -811,19 +1492,21 @@ final class ShortcutListener: NSObject {
         return modifiers
     }
 
-    private func showPaletteIfPremiereIsActive() {
-        guard isPremiere(NSWorkspace.shared.frontmostApplication) else {
-            listenerLog("Hotkey ignored: Premiere is not frontmost")
-            return
-        }
-        let focus = timelineShortcutFocus()
-        guard focus.armsAnything || canArmPaletteWithoutAccessibility() else {
-            unregisterHotKeys()
-            listenerLog("Hotkey ignored: Timeline/Sequence panel is not focused")
-            return
-        }
-        if !focus.armsAnything {
-            listenerLog("Opening palette without Accessibility; command shortcuts remain paused")
+    private func showPaletteIfPremiereIsActive(alreadyScoped: Bool = false) {
+        if !alreadyScoped {
+            guard isPremiere(NSWorkspace.shared.frontmostApplication) else {
+                listenerLog("Hotkey ignored: Premiere is not frontmost")
+                return
+            }
+            let focus = timelineShortcutFocus()
+            guard focus.armsAnything || canArmPaletteWithoutAccessibility() else {
+                unregisterHotKeys()
+                listenerLog("Hotkey ignored: Timeline/Sequence panel is not focused")
+                return
+            }
+            if !focus.armsAnything {
+                listenerLog("Opening palette without Accessibility; command shortcuts remain paused")
+            }
         }
         listenerLog("Opening palette")
         loadSettings()
@@ -846,13 +1529,32 @@ final class ShortcutListener: NSObject {
         scheduleHotKeyRefresh(after: 0.20)
     }
 
-    private func applyMappedCommand(_ command: Command) {
-        guard isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
-        guard timelineShortcutFocus().armsAnything else {
-            unregisterHotKeys()
-            return
+    // `alreadyScoped`: the event tap decided at keystroke time and has already
+    // consumed the key. Re-checking here would only add an Accessibility round
+    // trip that can disagree with the decision and drop a consumed keypress.
+    private func applyMappedCommand(_ command: Command, key: String, alreadyScoped: Bool = false) {
+        if !alreadyScoped {
+            guard isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
+            guard timelineShortcutFocus().armsAnything else {
+                unregisterHotKeys()
+                return
+            }
         }
-        commandBridge?.enqueue(Command(type: command.type, name: command.name, transitionFrames: settings.transitionFrames, id: command.id, moveMode: command.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1))
+        let seq = nextTrackedSeq(key: key, name: command.name)
+        if command.type == "ai-function" { workingAISeq = seq; highlight.startWorking(command.name) }
+        highlight.flash(fired: true)
+        keyStats.fired += 1
+        journal.record("fired", seq: seq, key: key, command: command.name, detail: shortcutScopeReason)
+        commandBridge?.enqueue(Command(type: command.type, name: command.name, transitionFrames: settings.transitionFrames, id: command.id, moveMode: command.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1, seq: seq, key: key, presetUid: command.presetUid))
+    }
+
+    private func nextTrackedSeq(key: String, name: String) -> Int {
+        commandSeq += 1
+        inFlight[commandSeq] = (key, name, Date())
+        // A result that never arrives (Premiere quit mid-command) must not
+        // grow this forever.
+        if inFlight.count > 256, let oldest = inFlight.keys.min() { inFlight[oldest] = nil }
+        return commandSeq
     }
 
     private func makePalette() {
@@ -860,7 +1562,9 @@ final class ShortcutListener: NSObject {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
-        panel.level = .floating
+        // Above the Timeline highlight (screen-saver level), which stays drawn
+        // while the palette is open: its stroke and Edie never cross the palette.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
         panel.hidesOnDeactivate = true
         panel.isMovableByWindowBackground = true
         panel.acceptsMouseMovedEvents = true
@@ -870,20 +1574,25 @@ final class ShortcutListener: NSObject {
         let content = NSView(frame: panel.contentView!.bounds)
         content.autoresizingMask = [.width, .height]
         content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor(calibratedRed: 0.105, green: 0.105, blue: 0.105, alpha: 1).cgColor
+        content.layer?.backgroundColor = PaletteStyle.canvas.cgColor
         panel.contentView = content
 
-        let title = NSTextField(labelWithString: "FX PALETTE")
+        let character = EdiePaletteIconView(frame: NSRect(x: 14, y: 224, width: 32, height: 32))
+        character.wantsLayer = true
+        character.layer?.magnificationFilter = .nearest
+        content.addSubview(character)
+
+        let title = NSTextField(labelWithString: "EDIE")
         title.font = .systemFont(ofSize: 10, weight: .bold)
-        title.textColor = NSColor(calibratedRed: 0.88, green: 0.91, blue: 0.98, alpha: 1)
+        title.textColor = PaletteStyle.muted
         title.lineBreakMode = .byTruncatingTail
-        title.frame = NSRect(x: 14, y: 234, width: 190, height: 16)
+        title.frame = NSRect(x: 54, y: 234, width: 150, height: 16)
         content.addSubview(title)
         paletteTitle = title
         let hotkey = NSTextField(labelWithString: display(settings.shortcut).uppercased())
         hotkey.alignment = .right
         hotkey.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
-        hotkey.textColor = NSColor(calibratedRed: 0.84, green: 0.45, blue: 0.18, alpha: 1)
+        hotkey.textColor = PaletteStyle.accent
         hotkey.frame = NSRect(x: 196, y: 234, width: 140, height: 16)
         hotkey.autoresizingMask = [.minXMargin]
         content.addSubview(hotkey)
@@ -893,21 +1602,21 @@ final class ShortcutListener: NSObject {
         search.placeholderString = "Search effects, transitions, presets…"
         search.font = .systemFont(ofSize: 12, weight: .regular)
         search.focusRingType = .none
-        search.backgroundColor = NSColor(calibratedRed: 0.09, green: 0.09, blue: 0.09, alpha: 1)
-        search.textColor = NSColor(calibratedWhite: 0.88, alpha: 1)
+        search.backgroundColor = PaletteStyle.card
+        search.textColor = PaletteStyle.text
         search.delegate = self
         search.sendsSearchStringImmediately = true
         search.wantsLayer = true
         search.layer?.cornerRadius = 8
         search.layer?.borderWidth = 1
-        search.layer?.borderColor = NSColor(calibratedRed: 0.68, green: 0.31, blue: 0.09, alpha: 1).cgColor
+        search.layer?.borderColor = PaletteStyle.accent.withAlphaComponent(0.6).cgColor
         content.addSubview(search)
         searchField = search
 
         let listContainer = NSView(frame: NSRect(x: 14, y: 42, width: 322, height: 138))
         listContainer.wantsLayer = true
-        listContainer.layer?.backgroundColor = NSColor(calibratedRed: 0.075, green: 0.075, blue: 0.075, alpha: 1).cgColor
-        listContainer.layer?.cornerRadius = 5
+        listContainer.layer?.backgroundColor = PaletteStyle.card.cgColor
+        listContainer.layer?.cornerRadius = 10
         content.addSubview(listContainer)
         let scroll = NSScrollView(frame: listContainer.bounds.insetBy(dx: 1, dy: 1))
         scroll.autoresizingMask = [.width, .height]
@@ -942,7 +1651,7 @@ final class ShortcutListener: NSObject {
         filterCommands(resetSelection: true)
 
         let footer = NSTextField(labelWithString: "↑ ↓  navigate     ↵  apply + close     ⇧↵  apply + keep open     esc  close")
-        footer.textColor = NSColor(calibratedWhite: 0.58, alpha: 1)
+        footer.textColor = PaletteStyle.faint
         footer.font = .systemFont(ofSize: 9, weight: .medium)
         footer.alignment = .center
         footer.frame = NSRect(x: 14, y: 12, width: 322, height: 14)
@@ -1083,7 +1792,7 @@ final class ShortcutListener: NSObject {
             visibleCommands = staggerFrameCommands()
         } else {
             let query = searchField?.stringValue.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            visibleCommands = commands.filter { query.isEmpty || ($0.name + " " + $0.type).lowercased().contains(query) }.map { Command(type: $0.type, name: $0.name, transitionFrames: settings.transitionFrames, id: $0.id, moveMode: $0.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1) }
+            visibleCommands = commands.filter { query.isEmpty || ($0.name + " " + $0.type).lowercased().contains(query) }.map { Command(type: $0.type, name: $0.name, transitionFrames: settings.transitionFrames, id: $0.id, moveMode: $0.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1, presetUid: $0.presetUid) }
         }
         listView?.reloadData()
         if !visibleCommands.isEmpty {
@@ -1151,7 +1860,11 @@ final class ShortcutListener: NSObject {
             return
         }
         isSubmittingPaletteCommand = true
-        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1)
+        let seq = nextTrackedSeq(key: "palette", name: command.name)
+        if command.type == "ai-function" { workingAISeq = seq; highlight.startWorking(command.name) }
+        keyStats.fired += 1
+        journal.record("fired", seq: seq, key: "palette", command: command.name, detail: "native palette")
+        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "palette", presetUid: command.presetUid)
         commandBridge.enqueue(effectiveCommand)
         if keepPaletteOpen {
             listenerLog("Keeping palette open after queued command: \(command.name)")
@@ -1217,7 +1930,7 @@ final class ShortcutListener: NSObject {
         pendingTransitionCommand = nil
         pendingMoveCommand = nil
         pendingStaggerCommand = nil
-        paletteTitle?.stringValue = "FX PALETTE"
+        paletteTitle?.stringValue = "EDIE"
         paletteHotkey?.stringValue = display(settings.shortcut).uppercased()
         searchField?.stringValue = catalogQuery
         searchField?.placeholderString = "Search effects, transitions, presets…"
@@ -1258,7 +1971,7 @@ final class ShortcutListener: NSObject {
     }
 
     private func keyCode(for code: String) -> UInt32 {
-        switch code { case "Space": return UInt32(kVK_Space); case "KeyA": return UInt32(kVK_ANSI_A); case "KeyB": return UInt32(kVK_ANSI_B); case "KeyC": return UInt32(kVK_ANSI_C); case "KeyD": return UInt32(kVK_ANSI_D); case "KeyE": return UInt32(kVK_ANSI_E); case "KeyF": return UInt32(kVK_ANSI_F); case "KeyG": return UInt32(kVK_ANSI_G); case "KeyH": return UInt32(kVK_ANSI_H); case "KeyI": return UInt32(kVK_ANSI_I); case "KeyJ": return UInt32(kVK_ANSI_J); case "KeyK": return UInt32(kVK_ANSI_K); case "KeyL": return UInt32(kVK_ANSI_L); case "KeyM": return UInt32(kVK_ANSI_M); case "KeyN": return UInt32(kVK_ANSI_N); case "KeyO": return UInt32(kVK_ANSI_O); case "KeyP": return UInt32(kVK_ANSI_P); case "KeyQ": return UInt32(kVK_ANSI_Q); case "KeyR": return UInt32(kVK_ANSI_R); case "KeyS": return UInt32(kVK_ANSI_S); case "KeyT": return UInt32(kVK_ANSI_T); case "KeyU": return UInt32(kVK_ANSI_U); case "KeyV": return UInt32(kVK_ANSI_V); case "KeyW": return UInt32(kVK_ANSI_W); case "KeyX": return UInt32(kVK_ANSI_X); case "KeyY": return UInt32(kVK_ANSI_Y); case "KeyZ": return UInt32(kVK_ANSI_Z); case "Digit0": return UInt32(kVK_ANSI_0); case "Digit1": return UInt32(kVK_ANSI_1); case "Digit2": return UInt32(kVK_ANSI_2); case "Digit3": return UInt32(kVK_ANSI_3); case "Digit4": return UInt32(kVK_ANSI_4); case "Digit5": return UInt32(kVK_ANSI_5); case "Digit6": return UInt32(kVK_ANSI_6); case "Digit7": return UInt32(kVK_ANSI_7); case "Digit8": return UInt32(kVK_ANSI_8); case "Digit9": return UInt32(kVK_ANSI_9); default: return UInt32(kVK_Space) }
+        UInt32(KeyCodeMap.keyCode(for: code) ?? UInt16(kVK_Space))
     }
     private func display(_ key: Shortcut) -> String {
         var parts: [String] = []
@@ -1290,8 +2003,13 @@ final class ShortcutListener: NSObject {
         // are the case that actually matters: a hotkey must never swallow a
         // keystroke meant for a rename box or a search field. So deny on text
         // input and allow otherwise.
-        if accessibilityTrusted, let role = focusedTextInputRole(application) {
-            return .none("Text input is focused (\(role))")
+        if accessibilityTrusted {
+            let textInput = focusedTextInput(application)
+            cachedTextInputRole = textInput?.role
+            cachedTextInputFrame = textInput?.frame
+            if let role = cachedTextInputRole {
+                return .none("Text input is focused (\(role))")
+            }
         }
         guard accessibilityTrusted else {
             if let cachedScope = shortcutScopeFromSavedTimelineRegion(
@@ -1316,6 +2034,9 @@ final class ShortcutListener: NSObject {
         // produces them, so they stay armed. Only modifier-less keys, which rely
         // entirely on panel targeting, are withheld.
         guard let region = timelineRegion(application) else {
+            if timelineRegionCache.panelsHidden {
+                return .modifierOnly(ShortcutListener.panelsHiddenReason)
+            }
             if let cachedScope = shortcutScopeFromSavedTimelineRegion(
                 activeReason: "Timeline panel active (saved region)",
                 outsideReason: "Last click was outside the saved Timeline region",
@@ -1341,7 +2062,7 @@ final class ShortcutListener: NSObject {
             // they are safe anywhere in Premiere. Returning .none here also
             // disarmed the palette hotkey, which is the one shortcut that most
             // needs to work from the Source and Project panels.
-            return .modifierOnly("Last click was outside the Timeline panel")
+            return .otherPanel("Last click was outside the Timeline panel")
         }
         return .full("Timeline panel active")
     }
@@ -1358,12 +2079,14 @@ final class ShortcutListener: NSObject {
             return allowModifierFallback ? .modifierOnly(missingClickReason) : .none(missingClickReason)
         }
         if region.contains(click) { return .full(activeReason) }
-        return allowModifierFallback ? .modifierOnly(outsideReason) : .none(outsideReason)
+        return allowModifierFallback ? .otherPanel(outsideReason) : .none(outsideReason)
     }
 
     // Descriptions that appear only inside Premiere's Timeline panel. Premiere
     // publishes no panel containers, but it does publish these controls with
     // real frames, so the panel's rectangle can be derived from them.
+    static let panelsHiddenReason = "Premiere is in Export/Import mode (no Timeline on screen)"
+
     private static let timelineMarkers: Set<String> = [
         "Toggle Track Lock", "Toggle Track Output", "Mute Track", "Solo Track",
         "Snap in Timeline", "Timeline Display Settings", "Caption track options",
@@ -1386,8 +2109,12 @@ final class ShortcutListener: NSObject {
 
     private func observeClicks() {
         guard clickMonitor == nil else { return }
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown]) { [weak self] event in
             guard let self, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
+            // The event tap records clicks itself, synchronously and in order
+            // with keystrokes. This monitor is the Carbon-mode path only.
+            guard self.keyTap == nil else { return }
+            if event.type == .leftMouseUp { self.relookTimelineAfterDrag(); return }
             self.lastClickPoint = self.axPointFromScreen(NSEvent.mouseLocation)
             // Use the known geometry immediately, then re-check after Premiere
             // has processed the click (including focus entering a text field).
@@ -1418,11 +2145,30 @@ final class ShortcutListener: NSObject {
             windows.insert(focused, at: 0)
         }
         var region: CGRect?
+        lastScanTabStrips = 0
+        lastScanControls = nil
+        lastScanMarkers = []
+        lastScanToolbar = []
+        lastScanElements = 0
         for window in windows {
             if let found = timelineRegion(inWindow: window) { region = found; break }
         }
+        // A scan that reached the window but found no panel tab strip at
+        // all is Export/Import/Home mode, not a redraw: a docked
+        // workspace always has several (4 on the reference layout).
+        let panelsHidden = region == nil && !windows.isEmpty && lastScanElements >= 10 && lastScanTabStrips == 0
+        if !panelsHidden {
+            // Accessibility frames lag a panel resize; the pixels do not. Snap
+            // to the real panel when a fresh capture has it.
+            lastPixelReference = region ?? timelineRegionCache.lastKnownRegion
+            requestPanelSnapshot(application)
+            if let snapped = pixelTimelineRegion(reference: lastPixelReference) { region = snapped }
+        }
         guard let region else {
-            timelineRegionCache.recordLookup(nil)
+            if panelsHidden != timelineRegionCache.panelsHidden {
+                listenerLog(panelsHidden ? "Premiere switched to a full-window mode (Export/Import/Home); plain-key shortcuts stand down" : "Premiere panels visible again")
+            }
+            timelineRegionCache.recordLookup(nil, panelsHidden: panelsHidden)
             return nil
         }
         if timelineRegionCache.lastKnownRegion.map({ !$0.equalTo(region) }) ?? true {
@@ -1432,9 +2178,50 @@ final class ShortcutListener: NSObject {
         return region
     }
 
+    private func requestPanelSnapshot(_ application: NSRunningApplication) {
+        panelSnapshotter.refresh(pid: application.processIdentifier) { [weak self] snapshot, changed in
+            guard let self, self.isPremiere(NSWorkspace.shared.frontmostApplication) else { return }
+            if changed {
+                listenerLog("Premiere panels from pixels: \(snapshot.panels.count) in \(NSStringFromRect(snapshot.window)); looks like Timeline: \(snapshot.looks)")
+                self.timelineRegionCache.invalidate()
+                self.updateHotKeyRegistration(force: false)
+            } else {
+                self.snapToPixels()
+            }
+        }
+    }
+
+    // A capture landed showing the same panels as the one before it. The
+    // lookup that asked for it may still have drawn Accessibility's stale
+    // rectangle (no fresh capture yet then): use this one now rather than at
+    // the next lookup, 2 s away. Was the 2-5 s lag after a resize or a tab
+    // switch (2026-11-19).
+    private func snapToPixels() {
+        guard !timelineRegionCache.panelsHidden,
+              let snapped = pixelTimelineRegion(reference: lastPixelReference),
+              timelineRegionCache.liveRegion.map({ !$0.equalTo(snapped) }) ?? true else { return }
+        listenerLog("Timeline region: (\(Int(snapped.minX)),\(Int(snapped.minY)) \(Int(snapped.width))x\(Int(snapped.height))) [pixels]")
+        // The next cut is matched against this one, so a panel being dragged
+        // is followed frame by frame.
+        lastPixelReference = snapped
+        cacheTimelineRegion(snapped)
+        updateHotKeyRegistration(force: false)
+        refreshHighlight()
+    }
+
+    private func pixelTimelineRegion(reference: CGRect?) -> CGRect? {
+        guard let snapshot = panelSnapshotter.fresh(window: premiereWindowFrame()) else { return nil }
+        guard let panel = PanelPixels.timelinePanel(snapshot.panels, markers: lastScanMarkers, toolbar: lastScanToolbar, reference: reference,
+                                                    window: snapshot.window, docked: dockedTimelineRegion, looks: snapshot.looks) else { return nil }
+        // Where it sits docked, for coming back from maximized (` key).
+        if !PanelPixels.fills(panel, snapshot.window) { dockedTimelineRegion = panel }
+        timelineDetectionDetails += "; pixels=\(NSStringFromRect(panel)); looks=\(snapshot.looks)"
+        return panel
+    }
+
     private func cacheTimelineRegion(_ region: CGRect) {
         guard isUsableTimelineRegion(region) else { return }
-        timelineRegionCache.recordLookup(region)
+        timelineRegionCache.recordLookup(region, controls: lastScanControls)
         let string = NSStringFromRect(region)
         let existing = (try? String(contentsOf: timelineRegionURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1499,7 +2286,9 @@ final class ShortcutListener: NSObject {
               let windowSize = axSize(window, kAXSizeAttribute as CFString) else { return nil }
         let windowRect = CGRect(origin: windowOrigin, size: windowSize)
         var markers: [CGRect] = []
+        var toolbar: [CGRect] = []
         var tabStrips: [CGRect] = []
+        var statusBarTop: CGFloat?
         var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
         var scanned = 0
         while !queue.isEmpty && scanned < 800 {
@@ -1507,6 +2296,16 @@ final class ShortcutListener: NSObject {
             scanned += 1
             if depth < 14, let children = axChildren(element) {
                 for child in children { queue.append((child, depth + 1)) }
+            }
+            // The status bar: a nameless, window-wide static text along the
+            // bottom, directly under the window. It ends the Timeline when no
+            // panel sits below it.
+            if depth == 1, statusBarTop == nil,
+               axString(element, kAXRoleAttribute as CFString) == "AXStaticText",
+               let origin = axPoint(element, kAXPositionAttribute as CFString),
+               let size = axSize(element, kAXSizeAttribute as CFString),
+               size.width >= windowRect.width * 0.5, origin.y + size.height >= windowRect.maxY - 8 {
+                statusBarTop = origin.y
             }
             guard let description = axString(element, kAXDescriptionAttribute as CFString),
                   !description.isEmpty,
@@ -1516,9 +2315,24 @@ final class ShortcutListener: NSObject {
             let rect = CGRect(origin: origin, size: size)
             if description == "UI_TabsContainer" { tabStrips.append(rect); continue }
             markers.append(rect)
+            if ShortcutListener.timelineToolbarMarkers.contains(description) { toolbar.append(rect) }
         }
-        let region = TimelinePanelGeometry.region(window: windowRect, markers: markers, tabs: tabStrips)
-        timelineDetectionDetails = "scanned=\(scanned); window=\(NSStringFromRect(windowRect)); markers=\(markers.map(NSStringFromRect).joined(separator: ";")); tabs=\(tabStrips.map(NSStringFromRect).joined(separator: ";")); matched=\(region != nil)"
+        lastScanTabStrips += tabStrips.count
+        if lastScanMarkers.isEmpty { lastScanMarkers = markers; lastScanToolbar = toolbar }
+        lastScanElements += scanned
+        var region = TimelinePanelGeometry.region(window: windowRect, markers: markers, tabs: tabStrips, statusBarTop: statusBarTop)
+        var inferred = false
+        if region == nil, let last = timelineRegionCache.lastKnownRegion, windowRect.intersects(last) {
+            region = TimelinePanelGeometry.inferred(window: windowRect, markers: markers, tabs: tabStrips, statusBarTop: statusBarTop,
+                                                    last: last, lastControls: timelineRegionCache.lastControls)
+            inferred = region != nil
+        }
+        if region != nil { lastScanControls = TimelinePanelGeometry.controls(window: windowRect, markers: markers) }
+        if inferred, Date().timeIntervalSince(lastInferredLog) > 10 {
+            lastInferredLog = Date()
+            listenerLog("Timeline region inferred from moved controls (tab strip not republished yet)")
+        }
+        timelineDetectionDetails = "scanned=\(scanned); window=\(NSStringFromRect(windowRect)); statusBarTop=\(statusBarTop.map { "\(Int($0))" } ?? "none"); markers=\(markers.map(NSStringFromRect).joined(separator: ";")); tabs=\(tabStrips.map(NSStringFromRect).joined(separator: ";")); matched=\(region != nil); inferred=\(inferred)"
         return region
     }
 
@@ -1528,7 +2342,7 @@ final class ShortcutListener: NSObject {
 
     // Checks the focused element and its immediate parent: Premiere sometimes
     // puts focus on an inner element of a compound text control.
-    private func focusedTextInputRole(_ application: NSRunningApplication) -> String? {
+    private func focusedTextInput(_ application: NSRunningApplication) -> (role: String, frame: CGRect?)? {
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         guard let focused = axElement(appElement, kAXFocusedUIElementAttribute as CFString) else { return nil }
         var current: AXUIElement? = focused
@@ -1537,7 +2351,12 @@ final class ShortcutListener: NSObject {
             for attribute in [kAXRoleAttribute, kAXSubroleAttribute] {
                 if let value = axString(element, attribute as CFString),
                    ShortcutListener.textInputRoles.contains(value) {
-                    return value
+                    var frame: CGRect?
+                    if let origin = axPoint(element, kAXPositionAttribute as CFString),
+                       let size = axSize(element, kAXSizeAttribute as CFString) {
+                        frame = CGRect(origin: origin, size: size)
+                    }
+                    return (value, frame)
                 }
             }
             current = axElement(element, kAXParentAttribute as CFString)
@@ -1696,12 +2515,12 @@ private final class CommandRowView: NSTableCellView {
         wantsLayer = true
         layer?.cornerRadius = 6
         layer?.backgroundColor = NSColor.clear.cgColor
-        selectionBackground.cornerRadius = 5
+        selectionBackground.cornerRadius = 6
         selectionBackground.backgroundColor = NSColor.clear.cgColor
         layer?.insertSublayer(selectionBackground, at: 0)
         layer?.borderWidth = 0
         nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        nameLabel.textColor = NSColor(calibratedWhite: 0.93, alpha: 1)
+        nameLabel.textColor = PaletteStyle.text
         typeLabel.font = .systemFont(ofSize: 8, weight: .bold)
         typeLabel.alignment = .right
         addSubview(nameLabel)
@@ -1717,14 +2536,14 @@ private final class CommandRowView: NSTableCellView {
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
             selectionBackground.backgroundColor = backgroundStyle == .emphasized
-                ? NSColor(calibratedRed: 0.095, green: 0.095, blue: 0.095, alpha: 1).cgColor
+                ? PaletteStyle.accentSoft.cgColor
                 : NSColor.clear.cgColor
             needsDisplay = true
         }
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.12, alpha: 1).setStroke()
+        PaletteStyle.line.withAlphaComponent(0.5).setStroke()
         let path = NSBezierPath()
         path.move(to: NSPoint(x: 12, y: 0.5))
         path.line(to: NSPoint(x: bounds.width - 12, y: 0.5))
@@ -1734,18 +2553,20 @@ private final class CommandRowView: NSTableCellView {
     func configure(_ command: Command) {
         nameLabel.stringValue = command.name
         typeLabel.stringValue = command.type == "custom" || command.type == "move-mode" || command.type == "stagger-frames" ? "FUNCTION" : command.type == "transition-placement" ? "TRANSITION" : command.type.replacingOccurrences(of: "-", with: " ").uppercased()
-        if command.type == "transition" {
-            typeLabel.textColor = NSColor(calibratedRed: 0.39, green: 0.69, blue: 0.86, alpha: 1)
-        } else if command.type == "transition-placement" {
-            typeLabel.textColor = NSColor(calibratedRed: 0.39, green: 0.69, blue: 0.86, alpha: 1)
-        } else if command.type == "audio-transition" {
-            typeLabel.textColor = NSColor(calibratedRed: 0.42, green: 0.76, blue: 0.61, alpha: 1)
-        } else if command.type == "custom" || command.type == "move-mode" || command.type == "stagger-frames" {
-            typeLabel.textColor = NSColor(calibratedRed: 0.33, green: 0.72, blue: 0.68, alpha: 1)
-        } else {
-            typeLabel.textColor = NSColor(calibratedRed: 0.84, green: 0.45, blue: 0.18, alpha: 1)
+        switch command.type {
+        case "transition", "transition-placement": typeLabel.textColor = PaletteStyle.blue
+        case "audio-transition": typeLabel.textColor = PaletteStyle.cyan
+        case "custom", "move-mode", "stagger-frames": typeLabel.textColor = PaletteStyle.accent
+        case "preset", "ai-function": typeLabel.textColor = PaletteStyle.purple
+        default: typeLabel.textColor = PaletteStyle.orange
         }
     }
+}
+
+private enum BridgeOutcome {
+    case delivered(Command, client: String)
+    case discarded(Command)
+    case result(CommandResult)
 }
 
 private final class CommandBridge {
@@ -1757,12 +2578,29 @@ private final class CommandBridge {
     private let healthHandler: () -> String
     private let settingsReloadHandler: () -> Void
     private let stateHandler: (NWListener.State) -> Void
+    private let outcomeHandler: (BridgeOutcome) -> Void
+    private let controlToken: String
+    private let controlHandler: (String, Data) -> Void
+    private let catalogPayloadHandler: () -> String
+    private let settingsPayloadHandler: () -> String
+    private let settingsWriteHandler: (Data) -> String
+    // Which CEP context last asked for work. The hidden engine extension polls
+    // as "engine"; the settings panel defers to it while it is alive.
+    private var lastPollAt: [String: Date] = [:]
+    private var uxpSupportedIDs: Set<String> = []
+    private let uxpFreshFor: TimeInterval = 2.5
 
-    init(catalogHandler: @escaping ([Command], String) -> Void, healthHandler: @escaping () -> String, settingsReloadHandler: @escaping () -> Void, stateHandler: @escaping (NWListener.State) -> Void) throws {
+    init(catalogHandler: @escaping ([Command], String) -> Void, healthHandler: @escaping () -> String, settingsReloadHandler: @escaping () -> Void, stateHandler: @escaping (NWListener.State) -> Void, outcomeHandler: @escaping (BridgeOutcome) -> Void, controlToken: String, controlHandler: @escaping (String, Data) -> Void, catalogPayloadHandler: @escaping () -> String, settingsPayloadHandler: @escaping () -> String, settingsWriteHandler: @escaping (Data) -> String) throws {
+        self.controlToken = controlToken
+        self.controlHandler = controlHandler
+        self.catalogPayloadHandler = catalogPayloadHandler
+        self.settingsPayloadHandler = settingsPayloadHandler
+        self.settingsWriteHandler = settingsWriteHandler
         self.catalogHandler = catalogHandler
         self.healthHandler = healthHandler
         self.settingsReloadHandler = settingsReloadHandler
         self.stateHandler = stateHandler
+        self.outcomeHandler = outcomeHandler
         listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: 27389)!)
         listener.stateUpdateHandler = { state in
             stateHandler(state)
@@ -1774,7 +2612,9 @@ private final class CommandBridge {
     func enqueue(_ command: Command) {
         lock.lock()
         let accepted = pendingCommands.append(command)
+        let discarded = pendingCommands.drainDiscarded()
         lock.unlock()
+        report(discarded)
         guard accepted else {
             listenerLog("Shortcut queue full; rejected: \(command.name)")
             return
@@ -1786,15 +2626,46 @@ private final class CommandBridge {
         lock.lock()
         pendingCommands.expire()
         let name = pendingCommands.first?.name ?? ""
+        let discarded = pendingCommands.drainDiscarded()
         lock.unlock()
+        report(discarded)
         return name
     }
 
     func queueHealth() -> String {
         lock.lock()
-        defer { lock.unlock() }
         pendingCommands.expire()
-        return ",\"queuedCommands\":\(pendingCommands.count),\"droppedCommands\":\(pendingCommands.dropped)"
+        let discarded = pendingCommands.drainDiscarded()
+        let now = Date()
+        let engineAge = lastPollAt["engine"].map { Int(now.timeIntervalSince($0) * 1000) } ?? -1
+        let panelAge = lastPollAt["panel"].map { Int(now.timeIntervalSince($0) * 1000) } ?? -1
+        let uxpAge = lastPollAt["uxp"].map { Int(now.timeIntervalSince($0) * 1000) } ?? -1
+        let body = ",\"queuedCommands\":\(pendingCommands.count),\"droppedCommands\":\(pendingCommands.dropped),\"enginePollAgeMs\":\(engineAge),\"panelPollAgeMs\":\(panelAge),\"uxpPollAgeMs\":\(uxpAge),\"uxpSupportedCommands\":\(uxpSupportedIDs.count)"
+        lock.unlock()
+        report(discarded)
+        return body
+    }
+
+    // Periodic sweep so an expired command is reported even when nothing else
+    // touches the queue (CEP not polling at all is exactly that case).
+    func sweep() {
+        lock.lock()
+        pendingCommands.expire()
+        let discarded = pendingCommands.drainDiscarded()
+        lock.unlock()
+        report(discarded)
+    }
+
+    private func report(_ discarded: [Command]) {
+        for command in discarded { outcomeHandler(.discarded(command)) }
+    }
+
+    private static func pollClient(in request: String) -> String {
+        let firstLine = request.prefix { $0 != "\r" && $0 != "\n" }
+        if firstLine.contains("client=engine") { return "engine" }
+        if firstLine.contains("client=panel") { return "panel" }
+        if firstLine.contains("client=uxp") { return "uxp" }
+        return "legacy"
     }
 
     private func receive(_ connection: NWConnection) {
@@ -1828,15 +2699,39 @@ private final class CommandBridge {
                 return
             }
             let request = String(data: requestData.subdata(in: 0..<min(requestData.count, totalLength)), encoding: .utf8) ?? ""
-            if request.hasPrefix("GET /next ") {
+            if request.hasPrefix("GET /next ") || request.hasPrefix("GET /next?") {
+                let client = CommandBridge.pollClient(in: request)
                 self.lock.lock()
-                let command = self.pendingCommands.take()
+                let now = Date()
+                self.lastPollAt[client] = now
+                let uxpIsFresh = self.lastPollAt["uxp"].map { now.timeIntervalSince($0) < self.uxpFreshFor } == true
+                let command: Command?
+                if client == "uxp" {
+                    command = self.pendingCommands.take(at: now, where: { command in
+                        self.uxpSupportedIDs.contains(CommandBridge.uxpRouteKey(command))
+                    })
+                } else if uxpIsFresh {
+                    command = self.pendingCommands.take(at: now, where: { command in
+                        !self.uxpSupportedIDs.contains(CommandBridge.uxpRouteKey(command))
+                    })
+                } else {
+                    command = self.pendingCommands.take(at: now)
+                }
+                let discarded = self.pendingCommands.drainDiscarded()
                 self.lock.unlock()
-                if let command { listenerLog("CEP collected palette command: \(command.name) [placement: \(command.transitionPlacement ?? "default"), move: \(command.moveMode ?? "default")]") }
+                self.report(discarded)
+                if let command {
+                    listenerLog("Runtime (\(client)) collected palette command: \(command.name) [placement: \(command.transitionPlacement ?? "default"), move: \(command.moveMode ?? "default")]")
+                    self.outcomeHandler(.delivered(command, client: client))
+                }
                 let body = String(data: (try? JSONEncoder().encode(command)) ?? Data("null".utf8), encoding: .utf8) ?? "null"
                 self.respond(connection, status: "200 OK", body: body)
             } else if request.hasPrefix("GET /health ") {
                 self.respond(connection, status: "200 OK", body: self.healthHandler())
+            } else if request.hasPrefix("GET /catalog-current ") {
+                self.respond(connection, status: "200 OK", body: self.catalogPayloadHandler())
+            } else if request.hasPrefix("GET /settings-current ") {
+                self.respond(connection, status: "200 OK", body: self.settingsPayloadHandler())
             } else if request.hasPrefix("POST /catalog ") {
                 let bodyStart = headerEnd + 4
                 let body = requestData.subdata(in: bodyStart..<totalLength)
@@ -1847,6 +2742,88 @@ private final class CommandBridge {
                 } else {
                     self.respond(connection, status: "400 Bad Request", body: "{\"error\":\"invalid catalog\"}")
                 }
+            } else if request.hasPrefix("POST /runtime ") {
+                let bodyStart = headerEnd + 4
+                let body = requestData.subdata(in: bodyStart..<totalLength)
+                if let registration = try? JSONDecoder().decode(RuntimeRegistration.self, from: body), registration.runtime == "uxp" {
+                    self.lock.lock()
+                    self.uxpSupportedIDs = Set(registration.supportedIds.filter { !$0.isEmpty })
+                    self.lastPollAt["uxp"] = Date()
+                    let count = self.uxpSupportedIDs.count
+                    self.lock.unlock()
+                    self.respond(connection, status: "200 OK", body: "{\"ok\":true,\"supportedCommands\":\(count)}")
+                } else {
+                    self.respond(connection, status: "400 Bad Request", body: "{\"error\":\"invalid runtime registration\"}")
+                }
+            } else if request.hasPrefix("POST /result ") {
+                let bodyStart = headerEnd + 4
+                let body = requestData.subdata(in: bodyStart..<totalLength)
+                if let result = try? JSONDecoder().decode(CommandResult.self, from: body) {
+                    self.outcomeHandler(.result(result))
+                    self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
+                } else {
+                    self.respond(connection, status: "400 Bad Request", body: "{\"error\":\"invalid result\"}")
+                }
+            } else if request.hasPrefix("POST /uxp-run ") {
+                let origin = self.httpHeaderValue("origin", in: header) ?? ""
+                guard origin.isEmpty || origin == "null" || origin.hasPrefix("uxp://") || origin.hasPrefix("file://") else {
+                    self.respond(connection, status: "403 Forbidden", body: "{\"error\":\"UXP origin required\"}")
+                    return
+                }
+                self.lock.lock()
+                let uxpIsFresh = self.lastPollAt["uxp"].map { Date().timeIntervalSince($0) < self.uxpFreshFor } == true
+                self.lock.unlock()
+                guard uxpIsFresh else {
+                    self.respond(connection, status: "409 Conflict", body: "{\"error\":\"UXP runtime is not registered\"}")
+                    return
+                }
+                let bodyStart = headerEnd + 4
+                self.controlHandler("/run", requestData.subdata(in: bodyStart..<totalLength))
+                self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
+            } else if request.hasPrefix("POST /settings-write ") {
+                let origin = self.httpHeaderValue("origin", in: header) ?? ""
+                guard origin.isEmpty || origin == "null" || origin.hasPrefix("uxp://") || origin.hasPrefix("file://") else {
+                    self.respond(connection, status: "403 Forbidden", body: "{\"error\":\"UXP origin required\"}")
+                    return
+                }
+                let bodyStart = headerEnd + 4
+                let response = self.settingsWriteHandler(requestData.subdata(in: bodyStart..<totalLength))
+                self.respond(connection, status: response.hasPrefix("{\"error\"") ? "400 Bad Request" : "200 OK", body: response)
+            } else if request.hasPrefix("POST /uxp-open-palette ") || request.hasPrefix("POST /uxp-reveal ") || request.hasPrefix("POST /uxp-scan-folder ") || request.hasPrefix("POST /uxp-export-folder ") || request.hasPrefix("POST /uxp-undo ") {
+                // The Edie UXP panel has no Node or shell: the listener opens the
+                // palette, reveals log files and lists synced folders for it.
+                let origin = self.httpHeaderValue("origin", in: header) ?? ""
+                guard origin.isEmpty || origin == "null" || origin.hasPrefix("uxp://") || origin.hasPrefix("file://") else {
+                    self.respond(connection, status: "403 Forbidden", body: "{\"error\":\"UXP origin required\"}")
+                    return
+                }
+                let body = requestData.subdata(in: (headerEnd + 4)..<totalLength)
+                if request.hasPrefix("POST /uxp-export-folder ") {
+                    let response = CommandBridge.exportFolder(body)
+                    self.respond(connection, status: response.hasPrefix("{\"error\"") ? "400 Bad Request" : "200 OK", body: response)
+                } else if request.hasPrefix("POST /uxp-undo ") {
+                    let response = CommandBridge.sendUndo(body)
+                    self.respond(connection, status: response.hasPrefix("{\"error\"") ? "409 Conflict" : "200 OK", body: response)
+                } else if request.hasPrefix("POST /uxp-scan-folder ") {
+                    let response = CommandBridge.scanSyncFolder(body)
+                    self.respond(connection, status: response.hasPrefix("{\"error\"") ? "400 Bad Request" : "200 OK", body: response)
+                } else if request.hasPrefix("POST /uxp-reveal ") {
+                    self.respond(connection, status: "200 OK", body: CommandBridge.revealLogFile(body))
+                } else {
+                    self.controlHandler("/open-palette", body)
+                    self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
+                }
+            } else if request.hasPrefix("POST /run ") || request.hasPrefix("POST /open-palette ") {
+                // A custom header also forces a CORS preflight, which this server
+                // never answers, so a web page cannot reach these routes at all.
+                guard !self.controlToken.isEmpty, self.httpHeaderValue("x-prfx-token", in: header) == self.controlToken else {
+                    self.respond(connection, status: "403 Forbidden", body: "{\"error\":\"bad token\"}")
+                    return
+                }
+                let route = request.hasPrefix("POST /run ") ? "/run" : "/open-palette"
+                let bodyStart = headerEnd + 4
+                self.controlHandler(route, requestData.subdata(in: bodyStart..<totalLength))
+                self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
             } else if request.hasPrefix("POST /reload-settings ") {
                 self.settingsReloadHandler()
                 self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
@@ -1854,6 +2831,111 @@ private final class CommandBridge {
                 self.respond(connection, status: "404 Not Found", body: "{\"error\":\"not found\"}")
             }
         }
+    }
+
+    /// What the UXP runtime registers to take a command: its function id, or
+    /// for effects and transitions (which have none) its type and name.
+    fileprivate static func uxpRouteKey(_ command: Command) -> String {
+        if let id = command.id, !id.isEmpty { return id }
+        return command.type + ":" + command.name
+    }
+
+    /// `<project folder>/PR FX Exports`, created if missing, for the UXP
+    /// Queue cuts to Media Encoder (UXP may not create folders itself).
+    static func exportFolder(_ body: Data) -> String {
+        struct ExportRequest: Decodable { let projectPath: String }
+        guard let path = (try? JSONDecoder().decode(ExportRequest.self, from: body))?.projectPath,
+              path.hasPrefix("/"), path.lowercased().hasSuffix(".prproj") else {
+            return "{\"error\":\"Save the Premiere project first.\"}"
+        }
+        let folder = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("PR FX Exports", isDirectory: true)
+        do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        catch { return "{\"error\":\"Could not create the PR FX Exports folder next to the project.\"}" }
+        let escaped = folder.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        return "{\"path\":\"\(escaped)\"}"
+    }
+
+    /// Premiere's own Undo or Redo, pressed for the UXP panel: UXP has no undo
+    /// call. Only when Premiere is frontmost, so the keys never land elsewhere.
+    static func sendUndo(_ body: Data) -> String {
+        struct UndoRequest: Decodable { let redo: Bool?; let count: Int? }
+        let request = try? JSONDecoder().decode(UndoRequest.self, from: body)
+        let redo = request?.redo == true
+        let count = max(1, min(request?.count ?? 1, 25))
+        guard let premiere = NSWorkspace.shared.frontmostApplication,
+              premiere.bundleIdentifier?.hasPrefix("com.adobe.PremierePro") == true else {
+            return "{\"error\":\"Premiere is not in front.\"}"
+        }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let flags: CGEventFlags = redo ? [.maskCommand, .maskShift] : [.maskCommand]
+        for _ in 0..<count {
+            let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_Z), keyDown: true)
+            let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_Z), keyDown: false)
+            down?.flags = flags; up?.flags = flags
+            down?.postToPid(premiere.processIdentifier)
+            up?.postToPid(premiere.processIdentifier)
+            usleep(60_000)
+        }
+        return "{\"ok\":true,\"count\":\(count)}"
+    }
+
+    /// Opens one of Edie's own log files for the UXP panel. Only these known
+    /// files, never a path from the request.
+    static func revealLogFile(_ body: Data) -> String {
+        struct Reveal: Decodable { let which: String }
+        let which = (try? JSONDecoder().decode(Reveal.self, from: body))?.which ?? ""
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let logs = home.appendingPathComponent("Library/Logs", isDirectory: true)
+        let targets: [String: URL] = [
+            "failures": home.appendingPathComponent("Library/Application Support/PR FX Palette/failure-log.jsonl"),
+            "journal": logs.appendingPathComponent("PR FX Key Journal.tsv"),
+            "listenerLog": logs.appendingPathComponent("PR FX Shortcut Listener.log"),
+        ]
+        guard let target = targets[which] else { return "{\"ok\":false,\"message\":\"Unknown log.\"}" }
+        guard FileManager.default.fileExists(atPath: target.path) else { return "{\"ok\":false,\"message\":\"Nothing logged yet.\"}" }
+        DispatchQueue.main.async { NSWorkspace.shared.open(target) }
+        return "{\"ok\":true}"
+    }
+
+    /// Media files under a synced folder, for the UXP panel's Sync now. Same
+    /// rules as the CEP panel's scan: hidden files and links skipped, media
+    /// extensions only; `stamp` (size:mtime ms) tells the panel what changed.
+    static func scanSyncFolder(_ body: Data) -> String {
+        struct ScanRequest: Decodable { let path: String }
+        struct ScanFile: Encodable { let path: String; let relativePath: String; let stamp: String }
+        struct ScanResult: Encodable { let files: [ScanFile]; let truncated: Bool }
+        guard let request = try? JSONDecoder().decode(ScanRequest.self, from: body), !request.path.isEmpty else {
+            return "{\"error\":\"A folder path is required.\"}"
+        }
+        let root = URL(fileURLWithPath: request.path, isDirectory: true).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return "{\"error\":\"This folder is no longer there.\"}"
+        }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+            return "{\"error\":\"This folder cannot be read.\"}"
+        }
+        let media: Set<String> = ["3g2", "3gp", "aac", "aif", "aiff", "avi", "bwf", "cr2", "dng", "gif", "heic", "jpeg", "jpg", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "mxf", "png", "psd", "r3d", "tga", "tif", "tiff", "wav", "webm"]
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        let pickedPrefix = request.path.hasSuffix("/") ? request.path : request.path + "/"
+        let limit = 20_000
+        var files: [ScanFile] = []
+        var truncated = false
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isSymbolicLink != true, values.isRegularFile == true,
+                  media.contains(url.pathExtension.lowercased()) else { continue }
+            if files.count >= limit { truncated = true; break }
+            let standard = url.standardizedFileURL.path
+            let relative = standard.hasPrefix(prefix) ? String(standard.dropFirst(prefix.count)) : url.lastPathComponent
+            // Keep the folder spelled as the user picked it (e.g. /private/...),
+            // so paths match the ones Premiere stored on import.
+            let path = pickedPrefix + relative
+            let modified = Int64(((values.contentModificationDate ?? .distantPast).timeIntervalSince1970 * 1000).rounded(.down))
+            files.append(ScanFile(path: path, relativePath: relative, stamp: "\(values.fileSize ?? 0):\(modified)"))
+        }
+        guard let data = try? JSONEncoder().encode(ScanResult(files: files, truncated: truncated)) else { return "{\"error\":\"Could not list this folder.\"}" }
+        return String(data: data, encoding: .utf8) ?? "{\"error\":\"Could not list this folder.\"}"
     }
 
     private func httpHeaderEnd(in data: Data) -> Int? {
