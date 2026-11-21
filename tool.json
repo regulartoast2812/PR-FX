@@ -18,6 +18,6 @@
     "darwin": "~/Library/Application Support/Adobe/CEP/extensions/PR FX",
     "win32": "%APPDATA%\\Adobe\\CEP\\extensions\\PR FX",
     "cepDebug": true,
-    "after": "On the next Premiere launch, open Window ▸ UXP Plugins ▸ Edie. CEP remains installed as the automatic migration fallback."
+    "after": "Quit and reopen Premiere Pro (2025 or later), then open Window ▸ Extensions ▸ Edie once. The Edie UXP demo appears under Window ▸ UXP Plugins on Premiere 26.3 and later only."
   }
 }

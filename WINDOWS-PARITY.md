@@ -1,17 +1,31 @@
 # Windows parity checklist
 
-Windows is intentionally not a supported release target yet. The CEP settings UI writes the same `settings.json` format, and the Windows listener has initial multi-shortcut support, but it must be verified in a real Windows Premiere install.
+Updated 2026-11-21. The Windows listener builds on this Mac and passes `./tools/check-windows-bridge.sh`, but nobody
+has run it on a Windows machine yet. Premiere 2025 (25.x) and later are the target on both platforms: the CEP panel
+runs on CEP 12 in both 2025 and 2026, and host.jsx checks every newer call before using it.
 
-Before enabling Windows support:
+## In place (built, not yet seen on Windows)
 
-- Build and run `native/windows/PRFXShortcutListener.csproj` with the .NET 8 SDK on Windows.
-- Verify the listener registers the palette trigger and every mapped effect, transition, audio transition, and Function shortcut while Premiere’s Timeline has focus.
-- Verify `POST /reload-settings` updates shortcut mappings without restarting the listener, including duplicate/OS-reserved shortcut conflict feedback.
-- Add the same Premiere Effects-panel catalog sync used on macOS; the current Windows palette still has a small fallback catalog.
-- Extend the Windows listener command model to carry `moveMode`, `staggerFrames`, and `staggerGroup`; expose the up/down group and individual moves plus Pull Group In/Out and Stagger Ascending/Descending. The current C# command/settings records do not decode those fields yet.
-- Add automatic listener startup/shutdown with Premiere (Task Scheduler or a user-level startup service), matching macOS `LaunchAgent` behavior.
-- Decide and implement the Windows-safe equivalent of the explicit **Undo Last PR FX Apply** Function. Do not intercept Ctrl/Cmd+Z.
-- Test effect, video-transition, audio-transition, custom Function, selection errors, and repeated bulk applies across supported Premiere versions.
-- Add a Windows CI build and code-sign the distributed executable.
+- Palette (Ctrl+Space) with Edie facing right, the live Premiere catalog pushed by CEP (`/catalog`), the transition,
+  move (group and individual) and stagger sub-menus.
+- Every bridge route the Mac listener has (`/next`, `/result`, `/health`, `/run`, `/open-palette`, `/reload-settings`,
+  `/settings-write`, `/runtime`, the `/uxp-*` routes).
+- Shortcut chords through a low-level keyboard hook, scoped to Premiere being in front; success and problem toasts.
+- Undo Last Edie Effect Apply / Action (Any) / Arrange Functions, never Ctrl+Z itself.
+- Start with Windows: the panel's Install button copies the exe and adds the HKCU Run value.
+- Creative Assist installs the panel into `%APPDATA%\Adobe\CEP\extensions\PR FX` and turns on CEP debug mode (CSXS 9–13).
 
-Until this checklist is complete, develop and validate features on macOS first.
+## Missing on Windows (Mac only today)
+
+- **Timeline detection.** Windows has no Timeline rectangle: plain-key shortcuts arm once the listener has seen a text
+  caret inside Premiere (`caret-calibrated.txt`), so they work anywhere in Premiere, not only over the Timeline.
+- **Timeline highlight with Edie sitting on it** (`PRFXTimelineHighlight.swift`), and its moods.
+- **Edie's nudges** after a quiet stretch (`PRFXEdieNudges.swift`).
+
+## To verify on a real Windows Premiere (2025 and 2026)
+
+- The listener registers the palette and every mapped shortcut; `POST /reload-settings` updates them without a restart.
+- Plain-key scoping: Premiere's text fields create a Win32 caret (else create `%APPDATA%\PR FX Palette\allow-plain-keys`).
+- Effect, video and audio transition, custom Function, selection errors and repeated bulk applies.
+- Bundled-preset roots (`prfx.bundledPresetFiles`) are guessed.
+- A Windows CI build and a code-signed exe before distributing.
