@@ -87,8 +87,8 @@ using it.
 - **WhisperX crashed on non-English speech** (2026-11-22): Python on Windows writes to a pipe in cp1252, and WhisperX
   prints each transcribed line, so the first Chinese line ended the run ("UnicodeEncodeError: 'charmap' codec") after
   minutes of work, and the failure message showed only a torchcodec warning. The shell layer now sets PYTHONUTF8=1 and
-  PYTHONIOENCODING=utf-8 on Windows, and a failed command leads with its last real error line. Seen: the user's own
-  sequence audio transcribed to SRT with the configured large-v3-turbo.
+  PYTHONIOENCODING=utf-8 on Windows, and a failed command leads with its last real error line. Seen: the first minute of the user's own
+  sequence audio transcribed to SRT with the configured large-v3-turbo; the whole 31 minutes not yet.
 
 ## Checks
 
