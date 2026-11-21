@@ -14,7 +14,8 @@ internal static class Check
         if (!condition) failures++;
     }
 
-    // EdieSprite.face(.rest, right: true) from PRFXTimelineHighlight.swift, as the palette drew it before it used the port.
+    // EdieSprite.face(.rest, right: true): facing right with his clapperboard ahead of him (2026-11-22), as Creative
+    // Assist's sprite.ts draws his rest frame.
     private static readonly string[] FacingRight =
     {
         "................................",
@@ -23,32 +24,32 @@ internal static class Check
         "................................",
         "................................",
         "................................",
-        ".......................y........",
-        "....................yyyy........",
-        "..............y..yYyyyy.........",
-        "...............yyyyyyyyyyyyyyyy.",
-        "..............yYyYyyYYyyyyyyy...",
-        "..............YYyYYYyyyyyy......",
-        "WW...........yYYYyYYYYyyYO......",
-        "WW..........OYYYYyYYYYYYyyYO....",
-        "..BBWW......YYYYYyYYYYYYYYyY....",
-        "..BBWW....OOYYOOYYYYOOYYYYYYYY..",
-        "....BBWW..OOOOOOYYYYOOOOOOOYYYY.",
-        "....BBWW..OOOOOOOOOOOOOOOOOOOO..",
-        "......BBWWOOOOOOOOOOOOOOOOOOOO..",
-        "......BBWWOOOOOOOgKKOOOOgKKOOO..",
-        "BBBBBBBBBBOOOOOOOKKKOOOOKKKOOO..",
-        "BBBBBBBBBBOOPOPOPKKKOOOOKKKPOP..",
-        "BBWWWWWWBBOOPOPOPOOOOOOOOPOPOP..",
-        "BBWWWWWWBBOOPOPOPOOmOOOOmPOPOP..",
-        "BBBBBBBBBBOOOOOOOOOmmmmmmOOOOO..",
-        "BBBBBBBBBBOOOOOOOOOOmmmmOOOOOO..",
-        "BBBBWWWWOOOOOOOOOOOOOOOOOOOOOO..",
-        "BBBBWWWWOO..OOOOOOOOOOOOOOOO....",
-        "BBBBBBBBBB..OOOOOOOOOOOOOOOO....",
-        "BBBBBBBBBB....OOOOOOOOOOOO......",
-        "..............DDD......DDD......",
-        "..............DDD......DDD......",
+        "...............y................",
+        "............yyyy................",
+        "......y..yYyyyy.................",
+        ".......yyyyyyyyyyyyyyyy.........",
+        "......yYyYyyYYyyyyyyy...........",
+        "......YYyYYYyyyyyy..............",
+        ".....yYYYyYYYYyyYO............WW",
+        "....OYYYYyYYYYYYyyYO..........WW",
+        "....YYYYYyYYYYYYYYyY......WWBB..",
+        "..OOYYOOYYYYOOYYYYYYYY....WWBB..",
+        "..OOOOOOYYYYOOOOOOOYYYY.WWBB....",
+        "..OOOOOOOOOOOOOOOOOOOO..WWBB....",
+        "..OOOOOOOOOOOOOOOOOOOOWWBB......",
+        "..OOOOOOOgKKOOOOgKKOOOWWBB......",
+        "..OOOOOOOKKKOOOOKKKOOOBBBBBBBBBB",
+        "..OOPOPOPKKKOOOOKKKPOPBBBBBBBBBB",
+        "..OOPOPOPOOOOOOOOPOPOPBBWWWWWWBB",
+        "..OOPOPOPOOmOOOOmPOPOPBBWWWWWWBB",
+        "..OOOOOOOOOmmmmmmOOOOOBBBBBBBBBB",
+        "..OOOOOOOOOOmmmmOOOOOOBBBBBBBBBB",
+        "..OOOOOOOOOOOOOOOOOOOOOOWWWWBBBB",
+        "....OOOOOOOOOOOOOOOO..OOWWWWBBBB",
+        "....OOOOOOOOOOOOOOOO..BBBBBBBBBB",
+        "......OOOOOOOOOOOO....BBBBBBBBBB",
+        "......DDD......DDD..............",
+        "......DDD......DDD..............",
     };
 
     private static int Main()
@@ -56,7 +57,10 @@ internal static class Check
         // ---- Edie
         var right = EdieSprite.Face(EdieSprite.Mood.Rest, right: true);
         var mismatch = Enumerable.Range(0, Math.Max(right.Length, FacingRight.Length)).FirstOrDefault(i => i >= right.Length || i >= FacingRight.Length || right[i] != FacingRight[i]);
-        Expect(right.SequenceEqual(FacingRight), "edie: the port draws him facing right exactly as the macOS sprite" + (right.SequenceEqual(FacingRight) ? "" : " (first difference at row " + mismatch + ")"));
+        Expect(right.SequenceEqual(FacingRight), "edie: facing right, his clapperboard ahead of him, as the macOS sprite and Creative Assist draw him" + (right.SequenceEqual(FacingRight) ? "" : " (first difference at row " + mismatch + ")"));
+        var left = EdieSprite.Face(EdieSprite.Mood.Rest);
+        Expect(left.SequenceEqual(FacingRight.Select(r => new string(r.Reverse().ToArray()))), "edie: facing left, the same mirrored: his clapperboard ahead of him on the left");
+        Expect(EdieSprite.Sitting(EdieSprite.Mood.Rest).Skip(EdieSprite.Crown + 12).Take(8).All(r => r.Substring(22).IndexOfAny(new[] { 'B', 'W' }) >= 0), "edie: sitting on the Timeline he keeps it behind him (on the right, facing left)");
         var sitting = EdieSprite.Sitting(EdieSprite.Mood.Rest);
         Expect(sitting.Length == EdieSprite.Crown + 26 && sitting.All(r => r.Length == 32), "edie: sitting is 34 fine rows of 32 (leaf, body, legs over the line)");
         Expect(sitting[EdieSprite.Crown + 22].Contains('D') && sitting[EdieSprite.Crown + 25].Contains('D'), "edie: his legs hang over the line");

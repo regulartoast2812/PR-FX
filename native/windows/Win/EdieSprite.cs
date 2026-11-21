@@ -170,11 +170,29 @@ namespace PrFxShortcutListener
 
         private static readonly int[] LeftLeg = { 6, 7, 8 }, RightLeg = { 15, 16, 17 };
 
-        // Standing: his legs are stubs under him. `right`: all of him mirrored, facing screen right.
+        // Standing: his legs are stubs under him. `right`: all of him mirrored, facing screen right. Either way his
+        // clapperboard is ahead of him, on the side he faces (2026-11-22, the user: "have the clapper in front of him in
+        // all instances aside from timeline rectangle"); sitting on the Timeline he keeps it behind him.
         public static string[] Face(Mood mood, bool right = false)
         {
             var rows = Crowned(Put(Fine(Art(mood), mood), At('D', new[] { 22, 23 }, LeftLeg.Concat(RightLeg))));
-            return right ? rows.Select(r => new string(r.Reverse().ToArray())).ToArray() : rows;
+            var toRight = Ahead(rows.Select(r => new string(r.Reverse().ToArray())).ToArray());
+            return right ? toRight : toRight.Select(r => new string(r.Reverse().ToArray())).ToArray();
+        }
+
+        // Facing right his body is fine columns 10-31 and the clapperboard (his hand on it) 0-9: the body moves 8 left
+        // and the clapperboard, mirrored back so its stick rises outward, goes to the right edge, his hand over its near
+        // side. The port of the Swift EdieSprite.ahead; Creative Assist draws him the same (sprite.ts edieAhead).
+        public static string[] Ahead(string[] right)
+        {
+            return right.Select(r =>
+            {
+                var row = Enumerable.Repeat('.', r.Length).ToArray();
+                for (var x = 10; x < r.Length; x++) if (r[x] != '.') row[x - 8] = r[x];
+                for (var x = 0; x < 10; x++) if (r[x] == 'B' || r[x] == 'W') row[r.Length - 1 - x] = r[x];
+                for (var x = 0; x < 10; x++) if (r[x] == 'O') row[r.Length - 1 - x] = 'O';
+                return new string(row);
+            }).ToArray();
         }
 
         // Sitting on a line drawn under whole row 10; his legs hang over it, feet to the left.

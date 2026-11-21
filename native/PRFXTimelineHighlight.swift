@@ -489,10 +489,29 @@ enum EdieSprite {
 
     // Standing: his legs are stubs under him.
     // `right`: facing screen right, as in the palette (2026-11-21, the user: "flip his
-    // entire body"): all of him mirrored, leaf and clapperboard too.
+    // entire body"): all of him mirrored, leaf and clapperboard too. Either way his
+    // clapperboard is ahead of him, on the side he faces (2026-11-22, the user: "have the
+    // clapper in front of him in all instances aside from timeline rectangle"); sitting on
+    // the Timeline he keeps it behind him.
     static func face(_ mood: Mood, right: Bool = false) -> [String] {
         let rows = crowned(put(fine(art(mood), mood), at("D", [22, 23], leftLeg + rightLeg)))
-        return right ? rows.map { String($0.reversed()) } : rows
+        let toRight = ahead(rows.map { String($0.reversed()) })
+        return right ? toRight : toRight.map { String($0.reversed()) }
+    }
+
+    // Facing right his body is fine columns 10-31 and the clapperboard (his hand on it)
+    // 0-9: the body moves 8 left and the clapperboard, mirrored back so its stick rises
+    // outward, goes to the right edge, his hand over its near side. Creative Assist draws
+    // him the same (app/ui/sprite.ts edieAhead).
+    static func ahead(_ right: [String]) -> [String] {
+        right.map { r -> String in
+            let c = Array(r)
+            var row = [Character](repeating: ".", count: c.count)
+            for x in 10..<c.count where c[x] != "." { row[x - 8] = c[x] }
+            for x in 0..<10 where c[x] == "B" || c[x] == "W" { row[c.count - 1 - x] = c[x] }
+            for x in 0..<10 where c[x] == "O" { row[c.count - 1 - x] = "O" }
+            return String(row)
+        }
     }
 
     // Sitting on a line drawn under row 10; his legs hang over it, feet to the left,
