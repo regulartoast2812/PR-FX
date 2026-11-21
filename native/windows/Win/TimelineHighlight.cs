@@ -184,6 +184,9 @@ namespace PrFxShortcutListener
             var px = 2 * scale;
             var headroom = (float)Math.Ceiling(Headroom * scale);
             // Premiere's own border is a 1 px line on the panel's edge; this covers it.
+            // On Premiere's own panel border (2026-11-21, the user: "exactly where the panel is"). The region is
+            // the panel's frame; Premiere draws a 1 px line 2 px inside it, blue on the focused panel, with black
+            // gutter outside that. The stroke covers that line and the gutter pixel next to it.
             var rect = new RectangleF(1, headroom + 1, placed.Width - 2, placed.Height - headroom - 2);
             var color = Color.FromArgb(s.Armed ? 255 : 115, Orange);
             if (pulse > 0)
@@ -191,9 +194,15 @@ namespace PrFxShortcutListener
                 var target = flashFired ? Color.FromArgb(255, 209, 115) : Color.FromArgb(255, 69, 58);
                 color = Blend(color, target, pulse);
             }
-            var width = (float)((2 + 2 * pulse) * scale);
-            using (var pen = new Pen(color, width) { Alignment = PenAlignment.Inset })
-                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+            // Filled edges, not a pen: whole pixels, exactly where Premiere's line is.
+            var thick = (float)Math.Max(2, Math.Round((2 + 2 * pulse) * scale));
+            using (var brush = new SolidBrush(color))
+            {
+                g.FillRectangle(brush, rect.Left, rect.Top, rect.Width, thick);
+                g.FillRectangle(brush, rect.Left, rect.Bottom - thick, rect.Width, thick);
+                g.FillRectangle(brush, rect.Left, rect.Top + thick, thick, rect.Height - 2 * thick);
+                g.FillRectangle(brush, rect.Right - thick, rect.Top + thick, thick, rect.Height - 2 * thick);
+            }
 
             // Edie sits on the top edge near the right corner, legs over the line, clapperboard in hand.
             var spoken = speech != null ? (now - speech.Started).TotalSeconds : (double?)null;

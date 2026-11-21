@@ -97,7 +97,8 @@ namespace PrFxShortcutListener
                 }
                 visible = VisibleTimeline();
             }
-            if (visible != IntPtr.Zero && Native.GetWindowRect(visible, out var rect))
+            // The whole panel, tab row included: its frame window, which Premiere's own border runs inside.
+            if (visible != IntPtr.Zero && Native.GetWindowRect(FrameOf(visible), out var rect))
             {
                 LiveRect = rect; LastTimelineRect = rect;
                 LiveRoot = Native.GetAncestor(visible, Native.GA_ROOT);
@@ -125,6 +126,20 @@ namespace PrFxShortcutListener
                 return true;
             }, IntPtr.Zero);
             return found;
+        }
+
+        // The panel's frame ("DroverLord - Frame Window"): the panel with its tab row. Premiere draws its border,
+        // blue when the panel has focus, 2 px inside it (measured on 26.0.1). The tab panel itself if none.
+        private const string FrameTitle = "DroverLord - Frame Window";
+        private static IntPtr FrameOf(IntPtr panel)
+        {
+            var window = panel;
+            for (var depth = 0; depth < 4 && window != IntPtr.Zero; depth++)
+            {
+                if (Title(window) == FrameTitle) return window;
+                window = Native.GetParent(window);
+            }
+            return panel;
         }
 
         private static IntPtr TabPanelOf(IntPtr window)

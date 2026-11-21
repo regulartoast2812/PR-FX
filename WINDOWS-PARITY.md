@@ -23,7 +23,7 @@ using it.
     3 s while focused). A Timeline verdict stays for as long as the panel's window exists.
 - **Timeline highlight with Edie sitting on it** (`Win/TimelineHighlight.cs`, setting `timelineHighlight`, off by
   default), with his moods: awake and armed, dozing with "Click the Timeline to arm", grinning when a key fires,
-  startled when one is passed on, and "Working on …" for AI functions. He stays on the Timeline whenever Premiere's
+  startled when one is passed on, and "Working on …" for AI functions. The stroke lies on Premiere's own panel border: the panel's frame window (tab row included), where Premiere draws a 1 px line 2 px in, blue on the focused panel, with black gutter around it; the stroke covers that line and the gutter pixel beside it. He stays on the Timeline whenever Premiere's
   window is open, in front or not (hidden only when Premiere is minimised, the Timeline isn't showing, or a Premiere
   dialog is in front). A click-through layered window kept directly above Premiere's in the z-order, so other apps
   in front cover it. **Never make Premiere its owner:** an owner in another process joins the two programs' input
