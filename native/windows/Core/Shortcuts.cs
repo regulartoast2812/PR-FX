@@ -101,6 +101,10 @@ namespace PrFxShortcutListener
         public int StaggerGroup = 1;
         public string ShortcutFeedback = "problems";
         public string AnnounceScope = "on";
+        // The Timeline highlight with Edie on it, and his nudges: same keys and defaults as the macOS listener.
+        public string TimelineHighlight = "off";
+        public string EdieNudges = "on";
+        public double EdieNudgeMinutes = 2;
         public List<Binding> Bindings = new List<Binding>();
 
         public static ListenerSettings Load(out string error)
@@ -121,6 +125,12 @@ namespace PrFxShortcutListener
             settings.StaggerGroup = Json.Int(root, "staggerGroup") ?? 1;
             settings.ShortcutFeedback = Json.Str(root, "shortcutFeedback") ?? "problems";
             settings.AnnounceScope = Json.Str(root, "announceScope") ?? "on";
+            settings.TimelineHighlight = Json.Str(root, "timelineHighlight") ?? "off";
+            settings.EdieNudges = Json.Str(root, "edieNudges") ?? "on";
+            if (root.TryGetValue("edieNudgeMinutes", out var minutes) && minutes != null &&
+                double.TryParse(Convert.ToString(minutes, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsedMinutes) &&
+                !double.IsNaN(parsedMinutes) && !double.IsInfinity(parsedMinutes))
+                settings.EdieNudgeMinutes = parsedMinutes;
             foreach (var item in Json.List(root, "bindings") ?? new List<object?>())
             {
                 var entry = item as IDictionary<string, object?>;

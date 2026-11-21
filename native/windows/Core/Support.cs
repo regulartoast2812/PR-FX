@@ -124,7 +124,8 @@ namespace PrFxShortcutListener
         {
             if (reason.StartsWith("Text input", StringComparison.Ordinal)) return "text-field";
             if (reason.StartsWith("Premiere menu", StringComparison.Ordinal)) return "menu-open";
-            if (reason.StartsWith("Plain-key shortcuts wait", StringComparison.Ordinal)) return "not-calibrated";
+            if (reason.StartsWith("Last click was outside", StringComparison.Ordinal)) return "outside-timeline";
+            if (reason.StartsWith("Timeline panel could not", StringComparison.Ordinal)) return "timeline-not-found";
             if (reason.StartsWith("Command bridge", StringComparison.Ordinal)) return "bridge-down";
             return "other";
         }

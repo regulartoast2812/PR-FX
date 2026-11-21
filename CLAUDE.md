@@ -205,29 +205,30 @@ writes it. Creative Assist's Electron overlay is now used only on Windows.
 
 ---
 
-## Windows listener (2026-11-19, UNTESTED on real Windows)
-
-Compile- and bridge-verified only. Nobody has run it on a Windows machine yet.
+## Windows listener (run on real Windows 2026-11-21; see WINDOWS-PARITY.md)
 
 - `native/windows/Core/` is platform-neutral (JSON, queue, HTTP bridge, settings,
-  chords, journal). `native/windows/Win/` holds the Win32 parts: `KeyboardHook`
+  chords, journal, `EdieNudges`). `native/windows/Win/` holds the Win32 parts: `KeyboardHook`
   (WH_KEYBOARD_LL on its own thread, plus a foreground WinEvent hook),
-  `PaletteForm`, `Toast`, `ShortcutListener`.
+  `PaletteForm`, `Toast`, `TimelinePanel`, `TimelineHighlight`, `EdieSprite`, `ShortcutListener`.
 - Build on this Mac: `./native/windows/build-windows.sh` (needs `~/.dotnet/dotnet`).
   On Windows: `native\windows\build-windows.cmd`. The output
   `native/windows/build/PRFXShortcutListener.exe` is committed so editors need no SDK.
-- Check: `./tools/check-windows-bridge.sh` (29 checks against `Core/` on net8).
+- Checks: `./tools/check-windows-bridge.sh` (or `.cmd`) against `Core/` on net8, and on Windows
+  `tools\check-windows-listener.cmd` (Edie's sprite against the macOS one, the playhead detector).
 - Paths: support `%APPDATA%\PR FX Palette\`, logs `%APPDATA%\PR FX Palette\Logs\`
-  (host.jsx `prfx.logPath` follows), installed exe `%LOCALAPPDATA%\PR FX Palette\bin\`,
-  autostart HKCU Run value "PR FX Shortcut Listener". The panel's Install button
-  copies, registers and starts it; the engine restarts it at most once a minute
-  when `/next` fails.
-- **Text-field scoping is a guess.** Plain-key shortcuts arm only after the listener
-  has once seen a Win32 caret inside Premiere (`caret-calibrated.txt`). If Premiere's
-  text fields never create one, plain keys stay disarmed; create
-  `%APPDATA%\PR FX Palette\allow-plain-keys` to override. Verify this first.
+  (host.jsx `prfx.logPath` follows), installed exe `%LOCALAPPDATA%\PR FX Palette\bin\` with its
+  `listener-build.txt`, autostart HKCU Run value "PR FX Shortcut Listener". The engine installs, registers
+  and starts it whenever the bridge is down (at most once a minute) and the copy is missing or from another
+  build; the panel's Install button does the same by hand. The extension's own exe is never run.
+- **Timeline scoping** (`TimelinePanel`): Premiere gives keyboard focus to the panel you click and each panel
+  is its own "DroverLord - TabPanel Window", so the focused window says which panel is in use. The Timeline is
+  the panel with the blue playhead running down it, found by capturing the panel (PrintWindow) on the UI
+  thread only. The hook reads cached verdicts and walks `GetParent` only. The caret check still keeps plain
+  keys out of text fields; `%APPDATA%\PR FX Palette\allow-plain-keys` arms plain keys in every panel.
 - The hook callback must stay instant, same rule as the macOS tap: Windows silently
   removes a slow low-level hook. It is reinstalled on every Premiere activation.
+  It ignores injected keys, so Ctrl+Space can't be tested by sending keys.
 - Bundled-preset roots on Windows (`prfx.bundledPresetFiles`) are guessed.
 
 ---

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Checks the Windows listener's drawing and panel logic that needs Windows (System.Drawing on
+       .NET Framework 4.8): Edie's sprite and the Timeline playhead detector. Run on Windows:
+       tools\check-windows-listener.cmd -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Check.cs" />
+    <Compile Include="../../native/windows/Core/*.cs" />
+    <Compile Include="../../native/windows/Win/Native.cs" />
+    <Compile Include="../../native/windows/Win/EdieSprite.cs" />
+    <Compile Include="../../native/windows/Win/TimelinePanel.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

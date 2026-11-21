@@ -294,8 +294,20 @@ export function startListener() {
       if (!script || !fs.existsSync(script)) return resolve({ ok: false, message: 'Could not find the PR FX extension folder.' });
       execFile('/bin/zsh', [script], { timeout: 20000 }, error => resolve(error ? { ok: false, message: 'The listener did not start. Open the listener log for details.' } : { ok: true }));
     } else if (IS_WIN) {
-      const installed = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'PR FX Palette', 'bin', 'PRFXShortcutListener.exe');
+      const bin = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'PR FX Palette', 'bin');
+      const installed = path.join(bin, 'PRFXShortcutListener.exe');
       const shipped = ext && path.join(ext, 'native', 'windows', 'build', 'PRFXShortcutListener.exe');
+      // Put the shipped exe in place when the copy is missing or from another build, as the panel's Install and the
+      // engine do, so the extension's own exe is never the one running (and never locked during an update).
+      const stamp = dir => { try { return fs.readFileSync(path.join(dir, 'listener-build.txt'), 'utf8').replace(/^﻿/, '').trim(); } catch { return ''; } };
+      const shippedBuild = shipped ? stamp(path.dirname(shipped)) : '';
+      if (shipped && fs.existsSync(shipped) && (!fs.existsSync(installed) || (shippedBuild && shippedBuild !== stamp(bin)))) {
+        try {
+          fs.mkdirSync(bin, { recursive: true });
+          fs.copyFileSync(shipped, installed);
+          if (shippedBuild) fs.writeFileSync(path.join(bin, 'listener-build.txt'), shippedBuild);
+        } catch { /* a running copy holds the file: start what's there */ }
+      }
       const exe = fs.existsSync(installed) ? installed : shipped;
       if (!exe || !fs.existsSync(exe)) return resolve({ ok: false, message: 'The listener is not installed. Use Install in the Premiere panel once.' });
       spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();

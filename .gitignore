@@ -64,3 +64,5 @@ settings.local.json
 # Leftovers of the retired standalone PR FX app.
 /app/node_modules/
 /app/dist/
+/tools/check-windows-listener/bin/
+/tools/check-windows-listener/obj/

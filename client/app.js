@@ -743,6 +743,11 @@
     (function attempt() {
       try {
         node.fs.copyFileSync(source, target);
+        // The engine compares this with the shipped stamp to know the copy is current.
+        try {
+          var stamp = node.path.join(node.path.dirname(source), 'listener-build.txt');
+          if (node.fs.existsSync(stamp)) node.fs.copyFileSync(stamp, node.path.join(node.path.dirname(target), 'listener-build.txt'));
+        } catch (_) {}
         done('');
       } catch (error) {
         if (++attempts >= 10) { done('Could not replace ' + target + ': ' + (error.message || error)); return; }

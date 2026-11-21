@@ -137,6 +137,44 @@ internal static class Check
         bridge.Sweep();
         Expect(discarded.SequenceEqual(new[] { "Expires" }), "bridge: uncollected command expires after 5s and is reported");
 
+        // ---- Timeline scoping reasons (2026-11-21): the same buckets as the macOS KeyStats
+        Expect(KeyStats.ReasonBucket("Last click was outside the Timeline panel") == "outside-timeline", "scope: another panel is outside-timeline");
+        Expect(KeyStats.ReasonBucket("Timeline panel could not be located") == "timeline-not-found", "scope: unknown panel is timeline-not-found");
+        Expect(KeyStats.ReasonBucket("Text input is focused") == "text-field", "scope: typing is text-field");
+
+        // ---- highlight and nudge settings, same keys and defaults as macOS
+        File.WriteAllText(Paths.Settings, "{\"bindings\":[]}");
+        var defaults = ListenerSettings.Load(out _);
+        Expect(defaults.TimelineHighlight == "off" && defaults.EdieNudges == "on" && defaults.EdieNudgeMinutes == 2, "settings: highlight off, nudges on, 2 min by default");
+        File.WriteAllText(Paths.Settings, "{\"timelineHighlight\":\"on\",\"edieNudges\":\"off\",\"edieNudgeMinutes\":0.5,\"bindings\":[]}");
+        var chosen = ListenerSettings.Load(out _);
+        Expect(chosen.TimelineHighlight == "on" && chosen.EdieNudges == "off" && chosen.EdieNudgeMinutes == 0.5, "settings: highlight, nudges and fractional minutes are read");
+
+        // ---- Edie's nudges (EdieNudges, the macOS logic)
+        var n = new EdieNudges { NudgeAfter = 120 };
+        Expect(n.Tick(10, true, 1000, null, 0, out _) == null, "nudges: nothing while you're working");
+        var still = n.Tick(121, true, 1111, "Pull Group In to Playhead", 1000, out _);
+        Expect(still != null && still.Kind == EdieNudges.Kind.StillThere && still.Title == "Still with me?" && still.Detail == "We left off at Pull Group In to Playhead.", "nudges: 'still there' after two quiet minutes, naming the last command");
+        Expect(n.Tick(150, true, 1140, null, 0, out _) == null, "nudges: once per quiet stretch");
+        n.Tick(0.2, true, 1141, null, 0, out var resumedNow);
+        Expect(resumedNow, "nudges: input resuming is noticed");
+        Expect(n.Tick(400, false, 1500, null, 0, out _) == null, "nudges: never into an empty room (past the away time)");
+        var welcome = n.Tick(0.1, false, 1501, null, 0, out _);
+        Expect(welcome == null, "nudges: the welcome waits until Premiere is in front");
+        var back = n.Tick(0.3, true, 1503, null, 0, out _);
+        // His lines rotate: the second one he's said, so the second welcome.
+        Expect(back != null && back.Kind == EdieNudges.Kind.WelcomeBack && back.Title == "Hey, you’re back." && back.Detail == "Ready when you are.", "nudges: 'welcome back' within 4 s of returning, lines rotating");
+        var away = new EdieNudges();
+        away.Tick(420, false, 0, null, 0, out _);
+        var greeting = away.Tick(0.1, true, 1, null, 0, out _);
+        Expect(greeting != null && greeting.Title == "Welcome back!" && greeting.Detail == "You were away 7 min.", "nudges: the welcome says how long you were away");
+        var late = new EdieNudges();
+        late.Tick(400, true, 0, null, 0, out _);
+        late.Tick(0.1, false, 1, null, 0, out _);
+        Expect(late.Tick(0.1, true, 6, null, 0, out _) == null, "nudges: a welcome not shown within 4 s is dropped");
+        Expect(EdieNudges.Span(59) == "1 min" && EdieNudges.Span(3600) == "1 hr" && EdieNudges.Span(5400) == "1 hr 30 min", "nudges: spans read as minutes and hours");
+        Expect(EdieNudges.Short(new string('a', 40)).Length == 30 && EdieNudges.Short("Short") == "Short", "nudges: long command names are shortened");
+
         try { Directory.Delete(support, true); } catch (Exception) { }
         Console.WriteLine(failures == 0 ? "\nAll Windows bridge checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;

@@ -239,17 +239,47 @@
   }
 
   // macOS keeps the listener alive with a LaunchAgent. Windows only has the
-  // Run key, which fires at sign-in, so a listener that crashed or was never
-  // started since install stays down. Start the copy Install / Repair put in
-  // place -- never install from here -- at most once a minute.
+  // Run key, which fires at sign-in, so a listener that crashed, or was never
+  // installed because nobody pressed Install in the panel, stays down and
+  // Ctrl+Space does nothing. At most once a minute, while it is down: put the
+  // shipped exe in place as Install / Repair does (when the copy is missing or
+  // from another build), register it to start with Windows if it isn't, and
+  // start it. The extension's own exe is never run, so updating the extension
+  // never meets a locked file.
   var lastListenerStart = 0;
+  function readText(file) { try { return String(fs.readFileSync(file, 'utf8') || '').replace(/^﻿/, '').replace(/^\s+|\s+$/g, ''); } catch (_) { return ''; } }
+  function ensureWindowsListener() {
+    var base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    var bin = path.join(base, 'PR FX Palette', 'bin');
+    var exe = path.join(bin, 'PRFXShortcutListener.exe');
+    var shippedDir = path.join(extensionRoot(), 'native', 'windows', 'build');
+    var shipped = path.join(shippedDir, 'PRFXShortcutListener.exe');
+    var shippedBuild = readText(path.join(shippedDir, 'listener-build.txt'));
+    var installedBuild = readText(path.join(bin, 'listener-build.txt'));
+    if (fs.existsSync(shipped) && (!fs.existsSync(exe) || (shippedBuild && shippedBuild !== installedBuild))) {
+      try {
+        fs.mkdirSync(bin, { recursive: true });
+        fs.copyFileSync(shipped, exe);
+        if (shippedBuild) fs.writeFileSync(path.join(bin, 'listener-build.txt'), shippedBuild);
+        logLine('installed listener ' + (shippedBuild || '(no build stamp)') + ' to ' + exe);
+      } catch (error) { logLine('could not install listener: ' + (error && error.message)); }
+    }
+    if (!fs.existsSync(exe)) return '';
+    var child = require('child_process');
+    child.execFile('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'PR FX Shortcut Listener'], { windowsHide: true }, function (missing) {
+      if (!missing) return;
+      child.execFile('reg.exe', ['add', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'PR FX Shortcut Listener', '/t', 'REG_SZ', '/d', '"' + exe + '"', '/f'], { windowsHide: true }, function (error) {
+        logLine(error ? 'could not register the listener to start with Windows' : 'listener registered to start with Windows');
+      });
+    });
+    return exe;
+  }
   function bridgeOffline() {
     if (!IS_WINDOWS || !fs || Date.now() - lastListenerStart < 60000) return;
     lastListenerStart = Date.now();
     try {
-      var base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-      var exe = path.join(base, 'PR FX Palette', 'bin', 'PRFXShortcutListener.exe');
-      if (!fs.existsSync(exe)) return;
+      var exe = ensureWindowsListener();
+      if (!exe) { logLine('bridge offline; no listener to start'); return; }
       var started = require('child_process').spawn(exe, [], { detached: true, stdio: 'ignore' });
       started.on('error', function () {});
       started.unref();

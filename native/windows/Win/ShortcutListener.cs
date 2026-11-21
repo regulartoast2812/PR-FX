@@ -41,6 +41,12 @@ namespace PrFxShortcutListener
         private readonly PaletteForm palette = new PaletteForm();
         private readonly Toast toast = new Toast();
         private readonly KeyboardHook hook;
+        private readonly TimelinePanel timeline = new TimelinePanel();
+        private readonly TimelineHighlight highlight = new TimelineHighlight();
+        private readonly EdieNudges nudges = new EdieNudges();
+        private EdieNudges.Kind? nudgeKind;
+        private string? lastCommandName;
+        private DateTime lastCommandAt;
         private readonly CommandBridge? bridge;
         private readonly System.Windows.Forms.Timer housekeeping = new System.Windows.Forms.Timer { Interval = 250 };
         private readonly object statsGate = new object();
@@ -76,6 +82,7 @@ namespace PrFxShortcutListener
             palette.CreateControl();
             _ = palette.Handle;
             _ = toast.Handle;
+            _ = highlight.Handle;
             palette.Catalog = CatalogSnapshot;
             palette.CurrentSettings = () => armed.Settings;
             palette.Submit = SubmitFromPalette;
@@ -84,6 +91,7 @@ namespace PrFxShortcutListener
             LoadCatalog();
             LoadSettings();
 
+            timeline.Log = Log.Write;
             hook = new KeyboardHook(Decide) { Log = Log.Write };
             hook.ForegroundChanged = isPremiere => OnUi(() => { if (isPremiere) ReloadSettingsIfNeeded(); });
 
@@ -156,37 +164,92 @@ namespace PrFxShortcutListener
         {
             housekeepingTicks++;
             bridge?.Sweep();
-            // Watch for a text caret even when no shortcut is pressed, so the
-            // calibration needed for plain-key shortcuts happens on its own.
-            if (hook.PremiereFrontmost) AnnounceScopeIfChanged(CurrentScope());
+            // Which panel is in use is worked out here, off the hook thread: the
+            // hook only reads the verdict this leaves behind.
+            if (hook.PremiereFrontmost)
+            {
+                timeline.Refresh(hook.PremiereThread, hook.PremiereWindow);
+                AnnounceScopeIfChanged(CurrentScope());
+            }
             else announcedScope = "";
+            RefreshHighlight();
+            RefreshNudge();
             if (housekeepingTicks % 4 == 0) ReloadSettingsIfNeeded();
+        }
+
+        // ---- Timeline highlight and Edie's nudges ---------------------------
+
+        // Drawn only with the setting on, Premiere in front and the Timeline
+        // seen on screen just now. While the palette is open (it takes focus,
+        // so Premiere isn't in front) it stays exactly as it was. A Premiere
+        // dialog in front (Export settings, say) hides it: the Timeline's
+        // window isn't the one in front then.
+        private void RefreshHighlight()
+        {
+            if (palette.Visible && highlight.IsShowing) return;
+            var settings = armed.Settings;
+            var live = timeline.LiveRect;
+            if (settings.TimelineHighlight != "on" || !hook.PremiereFrontmost || live == null ||
+                timeline.LiveRoot == IntPtr.Zero || Native.GetAncestor(hook.PremiereWindow, Native.GA_ROOT) != timeline.LiveRoot)
+            {
+                highlight.HideHighlight();
+                return;
+            }
+            var scope = CurrentScope();
+            highlight.Update(new TimelineHighlight.State { Owner = timeline.LiveRoot, Region = live.Value, Armed = scope.Level == ScopeLevel.Full, Reason = scope.Reason });
+        }
+
+        // Same tick: one idle-time read, the rest comparisons. He speaks only
+        // beside the highlight, Premiere in front and the palette closed.
+        private void RefreshNudge()
+        {
+            if (!highlight.IsSpeaking) nudgeKind = null;
+            var settings = armed.Settings;
+            if (settings.EdieNudges == "off") { highlight.Hush(); return; }
+            var eligible = !palette.Visible && highlight.IsShowing && hook.PremiereFrontmost;
+            nudges.NudgeAfter = Math.Max(0.1, Math.Min(60, settings.EdieNudgeMinutes)) * 60;
+            var now = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            var lastAt = (lastCommandAt - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            var line = nudges.Tick(Native.IdleSeconds(), eligible, now, lastCommandName, lastAt, out var resumed);
+            // Gone at the next input; at once if the palette opens or Premiere goes behind.
+            if (!eligible || (resumed && nudgeKind == EdieNudges.Kind.StillThere)) highlight.Hush();
+            if (line != null)
+            {
+                highlight.Say(line.Title, line.Detail, line.Kind == EdieNudges.Kind.WelcomeBack ? 6 : 9);
+                nudgeKind = line.Kind;
+            }
         }
 
         // ---- scope --------------------------------------------------------
 
-        // Premiere on Windows exposes no panel identity either, so scoping is
-        // decided from what the window manager does know: an open menu, and a
-        // text caret in Premiere's GUI thread. Plain keys arm only once a caret
-        // has been seen in Premiere, which proves this install's text fields are
-        // detectable; until then, typing S into a bin name must not move clips.
+        // Same rules as the macOS listener: plain keys only in the Timeline,
+        // keys with Ctrl or Alt (and the palette) in any panel, nothing while a
+        // menu is open, and no plain keys while typing in a text field.
+        //
+        // Premiere gives keyboard focus to the panel you click, and each panel
+        // is its own window, so the focused window says which panel is in use
+        // (TimelinePanel). A panel not yet looked at is Unknown for the moment
+        // it takes housekeeping to look; plain keys wait for it.
         private Scope CurrentScope()
         {
             if (!hook.PremiereFrontmost) return new Scope(ScopeLevel.None, "Premiere is not frontmost");
             var info = new Native.GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.GUITHREADINFO)) };
-            if (Native.GetGUIThreadInfo(hook.PremiereThread, ref info))
+            if (!Native.GetGUIThreadInfo(hook.PremiereThread, ref info))
+                return new Scope(ScopeLevel.ModifierOnly, "Timeline panel could not be located");
+            if ((info.flags & (Native.GUI_INMENUMODE | Native.GUI_POPUPMENUMODE | Native.GUI_SYSTEMMENUMODE)) != 0)
+                return new Scope(ScopeLevel.None, "Premiere menu is open");
+            if (info.hwndCaret != IntPtr.Zero || (info.flags & Native.GUI_CARETBLINKING) != 0)
             {
-                if ((info.flags & (Native.GUI_INMENUMODE | Native.GUI_POPUPMENUMODE | Native.GUI_SYSTEMMENUMODE)) != 0)
-                    return new Scope(ScopeLevel.None, "Premiere menu is open");
-                if (info.hwndCaret != IntPtr.Zero || (info.flags & Native.GUI_CARETBLINKING) != 0)
-                {
-                    MarkCaretCalibrated();
-                    return new Scope(ScopeLevel.ModifierOnly, "Text input is focused");
-                }
+                MarkCaretCalibrated();
+                return new Scope(ScopeLevel.ModifierOnly, "Text input is focused");
             }
-            if (!caretCalibrated && !plainKeysOverride)
-                return new Scope(ScopeLevel.ModifierOnly, "Plain-key shortcuts wait until Edie has seen a Premiere text field");
-            return new Scope(ScopeLevel.Full, "Premiere is frontmost");
+            if (plainKeysOverride) return new Scope(ScopeLevel.Full, "Premiere is frontmost (allow-plain-keys)");
+            switch (timeline.Classify(info.hwndFocus))
+            {
+                case TimelinePanel.Verdict.Timeline: return new Scope(ScopeLevel.Full, "Timeline panel active");
+                case TimelinePanel.Verdict.OtherPanel: return new Scope(ScopeLevel.ModifierOnly, "Last click was outside the Timeline panel");
+                default: return new Scope(ScopeLevel.ModifierOnly, "Timeline panel could not be located");
+            }
         }
 
         private void MarkCaretCalibrated()
@@ -242,6 +305,7 @@ namespace PrFxShortcutListener
             StartAIWorking(command, commandSeq, name);
             lock (statsGate) stats.Fired++;
             KeyJournal.Record("fired", commandSeq, key, name, reason);
+            highlight.Flash(true);
             command["transitionFrames"] = settings.TransitionFrames;
             command["staggerFrames"] = settings.StaggerFrames;
             command["staggerGroup"] = settings.StaggerGroup;
@@ -263,6 +327,7 @@ namespace PrFxShortcutListener
             StartAIWorking(command, commandSeq, name);
             lock (statsGate) stats.Fired++;
             KeyJournal.Record("fired", commandSeq, "palette", name, "native palette");
+            highlight.Flash(true);
             if (Json.Int(command, "transitionFrames") == null) command["transitionFrames"] = settings.TransitionFrames;
             if (Json.Int(command, "staggerFrames") == null) command["staggerFrames"] = settings.StaggerFrames;
             if (Json.Int(command, "staggerGroup") == null) command["staggerGroup"] = settings.StaggerGroup;
@@ -272,8 +337,8 @@ namespace PrFxShortcutListener
             if (keepOpen) Log.Write("Keeping palette open after queued command: " + name);
         }
 
-        // Banner when shortcuts go live, mirroring the macOS listener. Windows
-        // has no Timeline rectangle, so "armed" means plain keys are live.
+        // Banner when shortcuts go live, mirroring the macOS listener: "armed"
+        // means the Timeline is the panel in use and plain keys are live.
         private void AnnounceScopeIfChanged(Scope scope)
         {
             var kind = scope.Level == ScopeLevel.Full ? "armed" : scope.Level == ScopeLevel.ModifierOnly ? "other" : "";
@@ -283,7 +348,7 @@ namespace PrFxShortcutListener
             if (kind == "armed")
             {
                 var live = armed.Settings.Bindings.Count(b => scope.Arms(b.Shortcut));
-                toast.ShowMessage("Shortcuts armed · " + live + " live", ToastKind.Ok, 1.1, hook.PremiereWindow);
+                toast.ShowMessage("Timeline armed · " + live + " shortcut" + (live == 1 ? "" : "s") + " live", ToastKind.Ok, 1.1, hook.PremiereWindow);
             }
         }
 
@@ -352,6 +417,8 @@ namespace PrFxShortcutListener
         {
             seq++;
             inFlight[seq] = Tuple.Create(key, name, DateTime.UtcNow);
+            lastCommandName = name;
+            lastCommandAt = DateTime.UtcNow;
             // A result that never arrives (Premiere quit mid-command) must not
             // grow this forever.
             if (inFlight.Count > 256) inFlight.Remove(inFlight.Keys.Min());
@@ -363,6 +430,7 @@ namespace PrFxShortcutListener
             if ((Json.Str(command, "type") ?? "") != "ai-function") return;
             workingAISeq = commandSeq;
             toast.StartWorking(name, hook.PremiereWindow);
+            highlight.StartWorking(name);
         }
 
         // ---- outcomes -----------------------------------------------------
@@ -375,6 +443,7 @@ namespace PrFxShortcutListener
             lock (statsGate) { stats.RecordPassed(reason); }
             bucket = KeyStats.ReasonBucket(reason);
             KeyJournal.Record("passed", null, key, name, reason);
+            highlight.Flash(false);
             Log.Write("Shortcut passed to Premiere: " + key + " → " + name + " — " + reason);
             // Typing into a field and keys pressed in an open menu are the
             // scoping working, not failures; a banner there would be noise.
@@ -382,7 +451,8 @@ namespace PrFxShortcutListener
             string hint;
             switch (bucket)
             {
-                case "not-calibrated": hint = "click into any Premiere text field once (e.g. the Project search box) so PR FX can tell typing from editing"; break;
+                case "outside-timeline": hint = "click the Timeline first"; break;
+                case "timeline-not-found": hint = "Edie can't find the Timeline panel — click it once"; break;
                 case "bridge-down": hint = "the Edie bridge is offline"; break;
                 default: hint = reason; break;
             }
@@ -401,7 +471,7 @@ namespace PrFxShortcutListener
             if (!(Json.Int(command, "seq") is int commandSeq)) return;
             lock (statsGate) stats.Expired++;
             inFlight.Remove(commandSeq);
-            if (workingAISeq == commandSeq) { workingAISeq = null; toast.StopWorking(); }
+            if (workingAISeq == commandSeq) { workingAISeq = null; toast.StopWorking(); highlight.StopWorking(); }
             var key = Json.Str(command, "key") ?? "";
             var name = Json.Str(command, "name") ?? "";
             KeyJournal.Record("expired", commandSeq, key, name, "not collected within 5s");
@@ -414,7 +484,7 @@ namespace PrFxShortcutListener
         {
             inFlight.TryGetValue(resultSeq, out var info);
             inFlight.Remove(resultSeq);
-            if (workingAISeq == resultSeq) { workingAISeq = null; toast.StopWorking(); }
+            if (workingAISeq == resultSeq) { workingAISeq = null; toast.StopWorking(); highlight.StopWorking(); }
             var key = info?.Item1 ?? "";
             var name = info?.Item2 ?? "command #" + resultSeq;
             var elapsed = info == null ? "" : (int)(DateTime.UtcNow - info.Item3).TotalMilliseconds + "ms";
@@ -614,12 +684,16 @@ namespace PrFxShortcutListener
                    ",\"pendingCommand\":" + Json.Quote(pending) + ",\"focus\":" + Json.Quote(scope.Reason) +
                    ",\"paletteFrameSaved\":" + (File.Exists(Paths.PaletteFrame) ? "true" : "false") +
                    ",\"caretCalibrated\":" + (caretCalibrated || plainKeysOverride ? "true" : "false") +
-                   ",\"geometry\":{\"live\":null,\"saved\":null,\"click\":null,\"panelsHidden\":false,\"premiereFrontmost\":" + (premiere ? "true" : "false") +
+                   ",\"timelineDetection\":" + Json.Quote(timeline.Details) +
+                   ",\"geometry\":{\"live\":" + RectJson(timeline.LiveRect) + ",\"saved\":" + RectJson(timeline.LastTimelineRect) + ",\"click\":null,\"panelsHidden\":false,\"premiereFrontmost\":" + (premiere ? "true" : "false") +
                    ",\"window\":" + WindowJson(hook.PremiereWindow) + ",\"units\":\"physical-pixels\"}" +
                    ",\"scopeKind\":\"" + (scope.Level == ScopeLevel.Full ? "full" : scope.Level == ScopeLevel.ModifierOnly ? "modifier-only" : "none") + "\"" +
                    ",\"keyScope\":" + Json.Quote(scope.Reason) + ",\"feedback\":" + Json.Quote(snapshot.Settings.ShortcutFeedback) + ",\"announceScope\":" + Json.Quote(snapshot.Settings.AnnounceScope) +
                    transport + "}";
         }
+
+        private static string RectJson(Native.RECT? rect) => rect is Native.RECT r
+            ? "[" + r.Left + "," + r.Top + "," + (r.Right - r.Left) + "," + (r.Bottom - r.Top) + "]" : "null";
 
         private static string WindowJson(IntPtr window)
         {

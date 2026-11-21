@@ -121,60 +121,13 @@ namespace PrFxShortcutListener
 
         private static Bitmap CreateEdieBitmap()
         {
-            // His fine-grid rows, standing and flipped to face right, as EdieSprite.face(.rest, right: true) gives them.
-            string[] rows = {
-                "................................",
-                "................................",
-                "................................",
-                "................................",
-                "................................",
-                "................................",
-                ".......................y........",
-                "....................yyyy........",
-                "..............y..yYyyyy.........",
-                "...............yyyyyyyyyyyyyyyy.",
-                "..............yYyYyyYYyyyyyyy...",
-                "..............YYyYYYyyyyyy......",
-                "WW...........yYYYyYYYYyyYO......",
-                "WW..........OYYYYyYYYYYYyyYO....",
-                "..BBWW......YYYYYyYYYYYYYYyY....",
-                "..BBWW....OOYYOOYYYYOOYYYYYYYY..",
-                "....BBWW..OOOOOOYYYYOOOOOOOYYYY.",
-                "....BBWW..OOOOOOOOOOOOOOOOOOOO..",
-                "......BBWWOOOOOOOOOOOOOOOOOOOO..",
-                "......BBWWOOOOOOOgKKOOOOgKKOOO..",
-                "BBBBBBBBBBOOOOOOOKKKOOOOKKKOOO..",
-                "BBBBBBBBBBOOPOPOPKKKOOOOKKKPOP..",
-                "BBWWWWWWBBOOPOPOPOOOOOOOOPOPOP..",
-                "BBWWWWWWBBOOPOPOPOOmOOOOmPOPOP..",
-                "BBBBBBBBBBOOOOOOOOOmmmmmmOOOOO..",
-                "BBBBBBBBBBOOOOOOOOOOmmmmOOOOOO..",
-                "BBBBWWWWOOOOOOOOOOOOOOOOOOOOOO..",
-                "BBBBWWWWOO..OOOOOOOOOOOOOOOO....",
-                "BBBBBBBBBB..OOOOOOOOOOOOOOOO....",
-                "BBBBBBBBBB....OOOOOOOOOOOO......",
-                "..............DDD......DDD......",
-                "..............DDD......DDD......"
-            };
-            var colors = new Dictionary<char, Color> {
-                ['O'] = Color.FromArgb(250, 160, 70), ['D'] = Color.FromArgb(205, 131, 57),
-                ['R'] = Color.FromArgb(215, 55, 60), ['r'] = Color.FromArgb(160, 35, 45),
-                ['K'] = Color.FromArgb(25, 25, 28), ['B'] = Color.FromArgb(95, 95, 108),
-                ['W'] = Color.FromArgb(240, 240, 240), ['P'] = Color.FromArgb(232, 96, 122),
-                ['m'] = Color.FromArgb(25, 25, 28),
-                ['g'] = Color.FromArgb(184, 105, 44),
-                ['S'] = Color.FromArgb(122, 74, 36), ['y'] = Color.FromArgb(239, 90, 48), ['Y'] = Color.FromArgb(176, 42, 28)
-            };
-            // His art on the grid twice as fine (2026-11-20: smaller, sparkling eyes, thick smile, thicker legs),
-            // one bitmap pixel each. Same as EdieSprite's.
+            // Facing right, toward the commands: EdieSprite (the port of the macOS sprite), one bitmap pixel
+            // per fine-grid cell, so the palette can never drift from his look on the Timeline highlight.
             var image = new Bitmap(32, 32);
             using (var graphics = Graphics.FromImage(image))
             {
                 graphics.Clear(Color.Transparent);
-                for (int y = 0; y < rows.Length; y++)
-                    for (int x = 0; x < rows[y].Length; x++)
-                        if (colors.TryGetValue(rows[y][x], out var color))
-                            using (var brush = new SolidBrush(color)) graphics.FillRectangle(brush, x, y, 1, 1);
+                EdieSprite.Draw(graphics, EdieSprite.Face(EdieSprite.Mood.Rest, right: true), 0, 0, 2);
             }
             return image;
         }
