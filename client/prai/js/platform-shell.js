@@ -67,6 +67,14 @@
     // A detached child gets its own console window on Windows; there the whole tree is ended with taskkill instead.
     if (isWindows(nodeRequire)) {
       delete o.detached;
+      // Python on Windows writes to a pipe in the old ANSI code page (cp1252), so WhisperX crashed on the first
+      // transcribed line it printed in Chinese ("UnicodeEncodeError: 'charmap' codec", 2026-11-22). UTF-8 throughout,
+      // as on the Mac.
+      var env = {};
+      Object.keys(o.env || {}).forEach(function (key) { env[key] = o.env[key]; });
+      env.PYTHONUTF8 = "1";
+      env.PYTHONIOENCODING = "utf-8";
+      o.env = env;
     }
     return o;
   }

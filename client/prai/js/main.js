@@ -16877,9 +16877,24 @@
     return "...(showing last " + limit + " chars)\n" + text.slice(text.length - limit);
   }
 
+  // The cause first (2026-11-22): the engine log and the banner keep only the start of this message, and WhisperX
+  // prints long harmless warnings (torchcodec, pyannote) before its real error, so "Command exited with code 1" was
+  // followed by a warning and the error was cut off. The last error-looking line leads; the tails follow as before.
+  function commandFailureCause(stderr, stdout) {
+    var lines = String(stderr || "").concat("\n", String(stdout || "")).split(/\r?\n/).map(function (l) { return l.replace(/^\s+|\s+$/g, ""); }).filter(Boolean);
+    var noise = /UserWarning|warnings\.warn|torchcodec|^\*|^Lightning automatically upgraded|^Model was trained with|^Bad things might happen/i;
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (!noise.test(lines[i]) && /(Error|Exception|error:|failed|No such file|not found|Killed|MemoryError)/.test(lines[i])) {
+        return lines[i].slice(0, 400);
+      }
+    }
+    return "";
+  }
+
   function formatCommandFailure(code, stderr, stdout) {
+    var cause = commandFailureCause(stderr, stdout);
     return [
-      "Command exited with code " + code,
+      "Command exited with code " + code + (cause ? ": " + cause : ""),
       "",
       "STDERR tail:",
       tailText(stderr, 5000),
