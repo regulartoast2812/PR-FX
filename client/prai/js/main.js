@@ -1202,6 +1202,9 @@
       command: getWhisperCommand(),
       model: String(shared.whisperModel || (els.whisperModel && els.whisperModel.value) || "large-v3-turbo"),
       device: String(shared.whisperDevice || (els.whisperDevice && els.whisperDevice.value) || "auto"),
+      // The spoken language (2026-11-22): left to itself WhisperX guesses from the first 30 s, and took the user's
+      // Vietnamese and English for Chinese. "auto" keeps the guess. Set on WhisperX's card in Creative Assist.
+      language: String(shared.whisperLanguage || "auto"),
       audioTrack: String(shared.defaultAudioTrack || (els.defaultAudioTrack && els.defaultAudioTrack.value) || "A1").replace(/^\s+|\s+$/g, "") || "A1",
       audioHeadPadSeconds: Math.max(0, finiteNumber(shared.audioHeadPad != null ? shared.audioHeadPad : els.audioHeadPad && els.audioHeadPad.value !== "" ? els.audioHeadPad.value : 0.25, 0.25)),
       audioTailPadSeconds: Math.max(0, finiteNumber(shared.audioTailPad != null ? shared.audioTailPad : els.audioTailPad && els.audioTailPad.value !== "" ? els.audioTailPad.value : 0.25, 0.25))
@@ -1848,6 +1851,12 @@
 
   function isWhisperxCommand(command) {
     return /\bwhisperx\b/i.test(String(command || ""));
+  }
+
+  // " --language xx" for WhisperX when a language is set, else nothing (it guesses).
+  function whisperLanguageArg(settings) {
+    var lang = String(settings && settings.language || "auto").replace(/[^a-z-]/gi, "");
+    return lang && lang !== "auto" ? " --language " + shellQuote(lang) : "";
   }
 
   function whisperDeviceForCli(device) {
@@ -3909,7 +3918,7 @@
     setSettingsStatus("Downloading/warming Whisper model " + settings.model + "...");
     var warmupCommand = isWhisperxCommand(settings.command) ? [
       settings.command,
-      "--model " + shellQuote(settings.model),
+      "--model " + shellQuote(settings.model) + whisperLanguageArg(settings),
       "--device " + shellQuote(whisperDeviceForCli(settings.device)),
       "--compute_type " + shellQuote(whisperComputeTypeForCli(settings.device)),
       "--vad_method silero",
@@ -4022,7 +4031,7 @@
       "\"$FFMPEG\" -y -f lavfi -i anullsrc=r=16000:cl=mono -t 0.25 \"$AUDIO\" >/dev/null 2>&1",
       "echo 'Checking model load...'",
       isWhisperxCommand(settings.command)
-        ? settings.command + " --model " + shellQuote(settings.model) + " --device " + shellQuote(whisperDeviceForCli(settings.device)) + " --compute_type " + shellQuote(whisperComputeTypeForCli(settings.device)) + " --vad_method silero --output_dir \"$TMPDIR\" --output_format srt \"$AUDIO\" >/dev/null"
+        ? settings.command + " --model " + shellQuote(settings.model) + whisperLanguageArg(settings) + " --device " + shellQuote(whisperDeviceForCli(settings.device)) + " --compute_type " + shellQuote(whisperComputeTypeForCli(settings.device)) + " --vad_method silero --output_dir \"$TMPDIR\" --output_format srt \"$AUDIO\" >/dev/null"
         : settings.command + " --model " + shellQuote(settings.model) + " --device " + shellQuote(settings.device) + " \"$AUDIO\" >/dev/null",
       "echo model_available=" + shellQuote(settings.model)
     ].join("\n");
@@ -5443,7 +5452,7 @@
     if (isWhisperxCommand(settings.command)) {
       return [
         settings.command,
-        "--model " + shellQuote(settings.model),
+        "--model " + shellQuote(settings.model) + whisperLanguageArg(settings),
         "--device " + shellQuote(whisperDeviceForCli(settings.device)),
         "--compute_type " + shellQuote(whisperComputeTypeForCli(settings.device)),
         "--vad_method silero",
