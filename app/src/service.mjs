@@ -17,6 +17,7 @@ import {
   ensureUxpInstalled,
 } from './core.mjs';
 import { detect, platform, connectListener } from './connectors.mjs';
+import { createMediaSetup } from './media-setup.mjs';
 
 const CONNECTOR_GAP = { premiere: 'not found', panel: 'not installed', cepDebug: 'off', listener: 'not installed', autostart: 'off', accessibility: 'not granted' };
 
@@ -117,39 +118,9 @@ export function createService(ctx) {
     }
     return '';
   };
-  // WhisperX on Windows (2026-11-21): it needs Python 3.13 or older (3.14 was the only one on the user's PC, and
-  // pip found no version for it), so it gets its own environment in the support folder, made with a Python it
-  // supports: one already installed, else 3.12 from Python's install manager (py install), else from winget.
-  const whisperVenv = path.join(supportDir, 'whisperx-env');
-  const whisperVenvExe = process.platform === 'win32' ? path.join(whisperVenv, 'Scripts', 'whisperx.exe') : '';
-  const WHISPER_PYTHONS = ['3.12', '3.11', '3.13', '3.10'];
-  async function whisperPython() {
-    for (const v of WHISPER_PYTHONS) {
-      const found = await run('py.exe', [`-V:${v}`, '-c', 'import sys; print(sys.executable)'], 30_000);
-      if (found.ok && found.detail && fs.existsSync(found.detail.trim())) return found.detail.trim();
-    }
-    return '';
-  }
-  async function installWhisperWindows() {
-    let python = await whisperPython();
-    if (!python) {
-      const manager = await run('py.exe', ['install', '3.12'], 15 * 60_000);
-      if (!manager.ok) await run('winget.exe', ['install', '--id', 'Python.Python.3.12', '-e', '--accept-package-agreements', '--accept-source-agreements'], 15 * 60_000);
-      python = await whisperPython();
-    }
-    if (!python) return { ok: false, detail: 'WhisperX needs Python 3.10 to 3.13, and one could not be installed. Install Python 3.12 (python.org), then press Install again.' };
-    const venvPython = path.join(whisperVenv, 'Scripts', 'python.exe');
-    if (!fs.existsSync(venvPython)) {
-      const made = await run(python, ['-m', 'venv', whisperVenv], 5 * 60_000);
-      if (!made.ok) return made;
-    }
-    await run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip'], 5 * 60_000);
-    const installed = await run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'whisperx'], 40 * 60_000);
-    if (!installed.ok) return installed;
-    if (!fs.existsSync(whisperVenvExe)) return { ok: false, detail: 'WhisperX installed, but whisperx.exe is missing from ' + path.dirname(whisperVenvExe) };
-    writeSettings({ whisperCommand: `"${whisperVenvExe}"` });
-    return { ok: true, detail: 'WhisperX installed (Python ' + path.basename(path.dirname(python)) + ').' };
-  }
+  // WhisperX and ffmpeg installs, as jobs with steps and real progress (media-setup.mjs), the same on both systems.
+  const setup = createMediaSetup({ supportDir, writeSettings, readSettings });
+  const whisperVenvExe = setup.envWhisper;
 
   const media = () => {
     const s = readSettings(), home = os.homedir();
@@ -205,29 +176,14 @@ export function createService(ctx) {
       const whisper = found.whisper.command ? await shellTest(found.whisper.command) : { ok: false, detail: 'WhisperX was not found.' };
       return { ffmpeg, whisper, media: media() };
     },
-    'media:install': async body => {
+    // Starts the install and answers at once; the page follows it with media:progress, and can stop it.
+    'media:install': body => {
       const kind = body && body.kind;
-      if (kind === 'ffmpeg') {
-        if (process.platform === 'darwin') {
-          const brew = executable(['brew', '/opt/homebrew/bin/brew', '/usr/local/bin/brew']);
-          if (!brew) return { ok: false, message: 'Homebrew is not installed. Install ffmpeg in Terminal, then press Detect.' };
-          const installed = await run(brew, ['install', 'ffmpeg'], 15 * 60_000);
-          if (installed.ok) { const found = media(); if (found.ffmpeg.path) writeSettings({ ffmpegPath: found.ffmpeg.path }); }
-          return { ...installed, media: media() };
-        }
-        const installed = await run('winget.exe', ['install', '--id', 'Gyan.FFmpeg', '--accept-package-agreements', '--accept-source-agreements'], 15 * 60_000);
-        return { ...installed, media: media() };
-      }
-      if (kind === 'whisper' && process.platform === 'win32') return { ...(await installWhisperWindows()), media: media() };
-      if (kind === 'whisper') {
-        const python = media().python;
-        if (!python) return { ok: false, message: 'Python 3 was not found. Install Python, then press Detect.' };
-        const installed = await run(python, ['-m', 'pip', 'install', '--user', '--upgrade', 'whisperx'], 20 * 60_000);
-        if (installed.ok) writeSettings({ whisperCommand: `${JSON.stringify(python)} -m whisperx` });
-        return { ...installed, media: media() };
-      }
-      return { ok: false, message: 'Choose ffmpeg or WhisperX.' };
+      const out = setup.start(kind, { findFfmpeg: () => media().ffmpeg.path });
+      return { ...out, media: media() };
     },
+    'media:progress': () => ({ job: setup.state(), media: media() }),
+    'media:stop': () => setup.stop(),
     journal: body => readJournal(Math.max(1, Math.min(500, Number(body && body.limit) || 80))),
     run: command => result(control('/run', command)),
     palette: () => result(control('/open-palette', '')),

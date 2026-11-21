@@ -15,7 +15,7 @@ for (const f of ['ui/app.js', 'ui/overlay.js', 'ui/web-bridge.js']) {
   try { execFileSync(process.execPath, ['--check', path.join(root, f)]); check(true, 'parses: ' + f); }
   catch (e) { check(false, 'parses: ' + f + '\n' + e.stderr); }
 }
-for (const f of ['src/core.mjs', 'src/service.mjs', 'src/mcp.mjs', 'src/connectors.mjs']) {
+for (const f of ['src/core.mjs', 'src/service.mjs', 'src/mcp.mjs', 'src/connectors.mjs', 'src/media-setup.mjs']) {
   try { execFileSync(process.execPath, ['--check', path.join(root, f)]); check(true, 'parses: ' + f); }
   catch (e) { check(false, 'parses: ' + f + '\n' + e.stderr); }
 }
@@ -172,6 +172,29 @@ check(win.exe === 'C:\\X\\native\\windows\\build\\PRFXShortcutListener.exe', 'wi
 check(win.pr === 'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2025\\Adobe Premiere Pro.exe', 'win32 Premiere 2025 path expands');
 check(win.csxs === 'HKCU\\Software\\Adobe\\CSXS.12', 'win32 CEP debug key expands');
 check(win.none === null, 'unsupported OS has no connectors');
+
+// WhisperX / ffmpeg setup (media-setup.mjs): progress is read from the tools' own output, never guessed.
+const mediaOut = execFileSync(process.execPath, ['--input-type=module', '-e', `
+  import { parseLine, stepFraction } from ${JSON.stringify('file:///' + path.join(root, 'src', 'media-setup.mjs').replace(/\\/g, '/').replace(/^\//, ''))};
+  const lines = ['Progress 1048576 of 204800000', 'Collecting torch>=2 (from whisperx)', 'Collecting whisperx',
+    'Downloading torch-2.11.0-cp312-cp312-win_amd64.whl (204.8 MB)', '  Using cached faster_whisper-1.0.0-py3-none-any.whl.metadata (14 kB)',
+    'Installing collected packages: tqdm, torch', 'Successfully installed torch-2.11.0', '  ██████████▒▒▒▒  10.0 MB / 85.3 MB',
+    '==> Fetching dependencies for ffmpeg: aom, dav1d and x264', '==> Pouring dav1d--1.4.3.arm64_sonoma.bottle.tar.gz',
+    'ERROR: No matching distribution found for ctranslate2==4.4.0', 'Requirement already satisfied: pip'];
+  const steps = [{ weight: 2 }, { weight: 8 }, { weight: 90 }];
+  console.log(JSON.stringify({ parsed: lines.map(parseLine), f0: stepFraction(steps, 0, 0), f2half: stepFraction(steps, 2, 0.5), fover: stepFraction(steps, 2, 3) }));
+`]).toString();
+const media = JSON.parse(mediaOut);
+const [bytes, pkgFrom, pkg, file, cached, installing, installed, winget, brewTotal, brewPour, err, nothing] = media.parsed;
+check(bytes.kind === 'bytes' && bytes.done === 1048576 && bytes.total === 204800000, "media setup: pip's raw progress is read as bytes of a total");
+check(pkgFrom.kind === 'package' && pkgFrom.name === 'torch' && pkg.name === 'whisperx', 'media setup: each package pip collects is counted by name');
+check(file.kind === 'file' && file.name === 'torch' && file.total === 204800000, 'media setup: a download names its package and size');
+check(cached === null && nothing === null, 'media setup: cached metadata and other chatter move nothing');
+check(installing.kind === 'installing' && installed.kind === 'installed', "media setup: pip's install phase and its end are seen");
+check(winget.kind === 'bytes' && winget.done === 10000000 && winget.total === 85300000, "media setup: winget's MB of MB is read");
+check(brewTotal.kind === 'brew-total' && brewTotal.count === 4 && brewPour.kind === 'brew-poured' && brewPour.name === 'dav1d', "media setup: Homebrew's dependency count and each pour are read");
+check(err.kind === 'error', 'media setup: an error line is kept for the message');
+check(media.f0 === 0 && Math.abs(media.f2half - 0.55) < 1e-9 && media.fover === 1, 'media setup: the overall bar adds whole steps and the current share, never past 100%');
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll app checks passed');
 process.exit(failures ? 1 : 0);
