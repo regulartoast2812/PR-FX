@@ -319,7 +319,13 @@
     var cp = nodeRequire("child_process");
     var proc = nodeRequire("process");
     var parse = opts.provider === "claude" ? claudeEvents : codexReader();
-    var child = cp.spawn("/bin/zsh", ["-lc", opts.command], { cwd: opts.cwd || nodeRequire("os").homedir(), detached: true, env: proc.env });
+    var child;
+    try {
+      child = window.prfxShell.spawn(nodeRequire, opts.command, { cwd: opts.cwd || nodeRequire("os").homedir(), detached: true, env: proc.env });
+    } catch (err) {
+      setTimeout(function () { if (opts.onExit) opts.onExit({ code: 1, errors: String(err && err.message || err), cancelled: false }); }, 0);
+      return { stop: function () {} };
+    }
     var buffer = "";
     var errors = "";
     var cancelled = false;
@@ -373,14 +379,10 @@
           return;
         }
         cancelled = true;
-        try {
-          proc.kill(-child.pid, "SIGTERM");
-        } catch (err) {
-          try { child.kill("SIGTERM"); } catch (e2) {}
-        }
+        window.prfxShell.endTree(nodeRequire, child, false);
         setTimeout(function () {
           if (!exited) {
-            try { proc.kill(-child.pid, "SIGKILL"); } catch (err) {}
+            window.prfxShell.endTree(nodeRequire, child, true);
           }
         }, 1500);
       }

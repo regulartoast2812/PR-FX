@@ -854,15 +854,15 @@
     else if (node.fs.existsSync(root + '/native/build-macos.sh')) {
       // On soft-launch machines this validates and uses the bundled app. On a
       // dev machine it can still rebuild when the bundled app is missing.
-      steps.push({ label: 'checking the bundled listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 });
+      steps.push({ label: 'checking the bundled listener', command: '/bin/zsh', args: [root + '/native/build-macos.sh'], timeout: 120000 }); // mac-only: the else of IS_WINDOWS
     }
     // The app arrives inside the extension rather than as a download, but
     // clear any quarantine flag anyway or Gatekeeper blocks the first launch.
     if (!IS_WINDOWS) {
       steps.push({ label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true });
-      steps.push({ label: 'installing autostart', command: '/bin/zsh', args: [root + '/native/install-autostart-macos.sh'] });
-      steps.push({ label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 });
-      steps.push({ label: 'starting the listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'] });
+      steps.push({ label: 'installing autostart', command: '/bin/zsh', args: [root + '/native/install-autostart-macos.sh'] }); // mac-only: the else of IS_WINDOWS
+      steps.push({ label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 }); // mac-only: the else of IS_WINDOWS
+      steps.push({ label: 'starting the listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'] }); // mac-only: the else of IS_WINDOWS
     }
 
     var index = 0;
@@ -1177,8 +1177,8 @@
     if (!node.fs.existsSync(app)) { complete('Native listener is not built yet. Use Install / Repair first.'); return; }
     var steps = IS_WINDOWS ? windowsListenerSteps() : [
       { label: 'clearing quarantine', command: '/usr/bin/xattr', args: ['-dr', 'com.apple.quarantine', app], optional: true },
-      { label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 },
-      { label: 'starting current listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'], timeout: 10000 }
+      { label: 'quitting stale listener', command: '/bin/zsh', args: [root + '/native/stop-listener-macos.sh'], optional: true, timeout: 6000 }, // mac-only: IS_WINDOWS takes the other side
+      { label: 'starting current listener', command: '/bin/zsh', args: [root + '/native/start-listener-macos.sh'], timeout: 10000 } // mac-only: IS_WINDOWS takes the other side
     ];
     var index = 0;
     function next() {

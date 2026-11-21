@@ -19,6 +19,16 @@ import { spawn, execFile } from 'node:child_process';
 export const WHISPER_PYTHONS = ['3.12', '3.11', '3.13', '3.10'];
 
 /** What one output line says about progress. Lines may hold several \r-separated updates; pass each part. */
+/** Git for Windows' bash.exe, where the panel's shell layer (client/prai/js/platform-shell.js) looks for it, or ''. */
+export function findBash(env = process.env) {
+  if (process.platform !== 'win32') return '/bin/zsh'; // mac-only: the Mac's shell, never reached on Windows
+  const places = [env.ProgramFiles && path.join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    env['ProgramFiles(x86)'] && path.join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+    ...String(env.PATH || env.Path || '').split(';').filter(d => /[\\/]Git[\\/]cmd[\\/]?$/i.test(d)).map(d => path.join(d, '..', 'bin', 'bash.exe'))];
+  return places.find(p => p && fs.existsSync(p)) || '';
+}
+
 export function parseLine(line) {
   const text = String(line || '').trim();
   if (!text) return null;
@@ -249,13 +259,34 @@ export function createMediaSetup({ supportDir, writeSettings, readSettings, pkg 
     finish(j, true, 'ffmpeg is ready.');
   }
 
+  // Windows only: AI functions run their shell steps in Git Bash (the panel's shell layer).
+  async function installGit() {
+    const j = begin('git', [
+      { id: 'download', label: 'Download Git for Windows (winget)', weight: 85 },
+      { id: 'check', label: 'Check Git Bash runs', weight: 15 },
+    ]);
+    enter(j, 'download');
+    const r = await runStep('winget.exe', ['install', '--id', 'Git.Git', '-e', '--accept-package-agreements', '--accept-source-agreements'], line => {
+      const p = parseLine(line);
+      if (p && p.kind === 'bytes' && p.total) { j.file = { name: 'Git for Windows', done: p.done, total: p.total }; advance(j, p.done / p.total); }
+      else if (/Installing/i.test(line)) { j.now = 'Installing'; j.file = null; advance(j, 0.95); }
+    }, 20 * 60_000);
+    if (j.stopped) return finish(j, false, 'Stopped.');
+    enter(j, 'check');
+    const bash = findBash();
+    if (!bash) return finish(j, false, r.ok ? "Git installed but its bash wasn't found." : `The install stopped: ${r.why}`);
+    const ok = await quick(bash, ['-lc', 'echo ok'], 30_000);
+    if (ok !== 'ok') return finish(j, false, `Git Bash was found at ${bash} but doesn't run.`);
+    finish(j, true, 'Git Bash is ready: AI functions can run on Windows.');
+  }
+
   return {
     envWhisper,
     /** Starts an install unless one runs; answers at once. */
     start(kind, { findFfmpeg } = {}) {
       if (job && job.ok === null) return { ok: false, detail: 'An install is already running.' , job };
-      const run = kind === 'whisper' ? installWhisper() : kind === 'ffmpeg' ? installFfmpeg(findFfmpeg) : null;
-      if (!run) return { ok: false, detail: 'Choose ffmpeg or WhisperX.' };
+      const run = kind === 'whisper' ? installWhisper() : kind === 'ffmpeg' ? installFfmpeg(findFfmpeg) : kind === 'git' && isWin ? installGit() : null;
+      if (!run) return { ok: false, detail: 'Choose ffmpeg, WhisperX or Git Bash.' };
       run.catch(e => { if (job) finish(job, false, e.message); });
       return { ok: true, job };
     },

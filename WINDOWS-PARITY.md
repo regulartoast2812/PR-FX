@@ -54,6 +54,20 @@ using it.
 - The CEP panel ("Edie" in Window ▸ Extensions) draws and runs commands when docked. Floating on its own it can come
   up blank on this machine: dock it, or close and reopen it.
 
+- **AI functions run on Windows through one shell layer** (`client/prai/js/platform-shell.js`, 2026-11-21). Every AI
+  function, the panel's agent chat and its lookups are POSIX shell scripts of small steps (ffmpeg, WhisperX, sed, curl).
+  They ran only in `/bin/zsh`. Now every shell starts in that one file: zsh on the Mac, Git for Windows' bash on
+  Windows, so each function works there without being rewritten; Stop ends the whole tree (taskkill on Windows).
+  The few truly Mac-only lines sit in branches Windows never takes, each marked `mac-only:`; `stat -f%z` became
+  `wc -c`. `app/tools/check.js` fails on any Mac-only command (`/bin/zsh`, `osascript`, `open -a`, `stat -f`,
+  `pbcopy`, `launchctl`, `defaults`) outside the layer or a marked branch, so new functions can't quietly be Mac-only.
+  Git Bash is a card on Edie's board in Creative Assist, with Install (winget, with progress) when it's missing.
+  Seen in Git Bash: ffmpeg found from its Windows path, a WAV written to bash's temp folder, WhisperX answering.
+- **WhisperX and ffmpeg install with real progress** (`app/src/media-setup.mjs`): WhisperX in its own Python 3.12
+  environment (it doesn't support 3.14), ffmpeg from winget, as steps with the bytes downloaded.
+- Subtitles run from Ctrl+Space or a shortcut read the project first: the hidden runtime had never read it, and
+  reported "No active sequence audio tracks".
+
 ## Checks
 
 - `tools\check-windows-bridge.cmd` (or `.sh` on the Mac): the platform-neutral core, nudges, settings, scoping reasons.

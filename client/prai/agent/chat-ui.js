@@ -748,7 +748,14 @@
   function findNode(nodeRequire, cb) {
     var cp = nodeRequire("child_process");
     var candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
-    cp.execFile("/bin/zsh", ["-lc", "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; command -v node"], { timeout: 15000 }, function (err, stdout) {
+    if (window.prfxShell.isWindows(nodeRequire)) {
+      // Windows: where.exe finds node.exe on PATH (a Git Bash path like /c/... couldn't be started from here).
+      cp.execFile("where.exe", ["node"], { timeout: 15000, windowsHide: true }, function (err, stdout) {
+        cb(String(stdout || "").split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)[0] || "");
+      });
+      return;
+    }
+    window.prfxShell.execFile(nodeRequire, "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; command -v node", { timeout: 15000 }, function (err, stdout) {
       var found = String(stdout || "").split("\n").map(function (l) { return l.replace(/^\s+|\s+$/g, ""); }).filter(function (l) { return l.charAt(0) === "/"; })[0];
       if (found) {
         cb(found);

@@ -173,6 +173,34 @@ check(win.pr === 'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2025\\Adobe Premi
 check(win.csxs === 'HKCU\\Software\\Adobe\\CSXS.12', 'win32 CEP debug key expands');
 check(win.none === null, 'unsupported OS has no connectors');
 
+// Mac and Windows from one code (2026-11-21, the user: "i don't want to have to request every single function to be
+// fixed for windows"). Shells start only in client/prai/js/platform-shell.js (zsh on the Mac, Git Bash on Windows); a
+// Mac-only command anywhere else must sit in a branch Windows never takes and say so with a "mac-only:" note on its line.
+{
+  const macOnly = /\/bin\/zsh|osascript|\bopen -a |\bstat -f|\bpbcopy\b|\blaunchctl\b|\bdefaults (write|read)\b/;
+  const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory()
+    ? (['node_modules', 'templates', 'scripts'].includes(e.name) ? [] : walk(path.join(dir, e.name)))
+    : /\.(m?js)$/.test(e.name) ? [path.join(dir, e.name)] : []);
+  const files = [...walk(path.join(repoRoot, 'client')), ...walk(path.join(root, 'src'))];
+  const loose = [];
+  for (const f of files) {
+    if (path.basename(f) === 'platform-shell.js') continue;
+    fs.readFileSync(f, 'utf8').split(/\r?\n/).forEach((line, i) => {
+      if (macOnly.test(line) && !/mac-only:/.test(line)) loose.push(`${path.relative(repoRoot, f)}:${i + 1}`);
+    });
+  }
+  check(loose.length === 0, 'no Mac-only command outside the shell layer or a marked Mac branch' + (loose.length ? ': ' + loose.join(', ') : ''));
+  const shellLayer = readRepo('client/prai/js/platform-shell.js');
+  check(/Git[\\/\[\]\\]*bin|"Git", "bin", "bash\.exe"/.test(shellLayer) && shellLayer.includes('"/bin/zsh", ["-lc", command]') && shellLayer.includes('taskkill.exe'), 'the shell layer runs zsh on the Mac, Git Bash on Windows, and ends whole trees on both');
+  for (const page of ['client/index.html', 'client/prai/index.html']) {
+    const html = readRepo(page);
+    const layer = html.indexOf('platform-shell.js'), first = Math.min(...['agent/tools.js', 'js/main.js'].map(s => html.indexOf(s)).filter(i => i >= 0));
+    check(layer > 0 && layer < first, `${page} loads the shell layer before anything that runs a shell`);
+  }
+  const main = readRepo('client/prai/js/main.js');
+  check(!/spawn\(\s*["']\/bin\/zsh/.test(main) && main.includes('window.prfxShell.spawn(nodeRequire, command, extra)'), 'AI functions start their steps through the shell layer');
+}
+
 // WhisperX / ffmpeg setup (media-setup.mjs): progress is read from the tools' own output, never guessed.
 const mediaOut = execFileSync(process.execPath, ['--input-type=module', '-e', `
   import { parseLine, stepFraction } from ${JSON.stringify('file:///' + path.join(root, 'src', 'media-setup.mjs').replace(/\\/g, '/').replace(/^\//, ''))};

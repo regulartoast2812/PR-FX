@@ -4182,7 +4182,7 @@
       "mkdir -p \"$LOG_DIR\"",
       "if [ \"$COMFY\" = \"/Applications/ComfyUI.app/Contents/Resources/ComfyUI\" ]; then",
       "  echo 'Launching ComfyUI desktop app so it uses the writable user directory...'",
-      "  open -a ComfyUI",
+      "  open -a ComfyUI", // mac-only: inside the /Applications/ComfyUI.app branch, never true on Windows
       "  for I in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do",
       "    if curl -fsS --max-time 2 " + shellQuote(settings.serverUrl.replace(/\/+$/, "") + "/system_stats") + " >/dev/null 2>&1; then echo server_ready=" + shellQuote(settings.serverUrl) + "; exit 0; fi",
       "    if curl -fsS --max-time 2 http://127.0.0.1:8000/system_stats >/dev/null 2>&1; then echo server_ready=http://127.0.0.1:8000; exit 0; fi",
@@ -4195,7 +4195,7 @@
       "if [ ! -f \"$COMFY/main.py\" ]; then",
       "  if [ -d \"/Applications/ComfyUI.app\" ]; then",
       "    echo 'Configured folder is ComfyUI user data, not the app source. Opening ComfyUI.app instead...'",
-      "    open -a ComfyUI",
+      "    open -a ComfyUI", // mac-only: inside the /Applications/ComfyUI.app branch, never true on Windows
       "    sleep 8",
       "    curl -fsS --max-time 3 " + shellQuote(settings.serverUrl.replace(/\/+$/, "") + "/system_stats") + " >/dev/null || curl -fsS --max-time 3 http://127.0.0.1:8000/system_stats >/dev/null",
       "    echo server_ready=ComfyUI.app",
@@ -4479,7 +4479,7 @@
       ];
       for (var i = 0; i < files.length; i++) {
         lines.push("mkdir -p " + shellQuote(path.dirname(files[i].path)));
-        lines.push("SIZE=$(stat -f%z " + shellQuote(files[i].path) + " 2>/dev/null || echo 0)");
+        lines.push("SIZE=$({ wc -c < " + shellQuote(files[i].path) + "; } 2>/dev/null | tr -d ' '); [ -n \"$SIZE\" ] || SIZE=0");
         lines.push("echo 'Checking " + files[i].label.replace(/'/g, "") + " (" + files[i].sizeHint.replace(/'/g, "") + ")...'");
         lines.push("if [ \"$SIZE\" -ge " + String(files[i].minBytes) + " ]; then echo 'Already present: " + files[i].path.replace(/'/g, "") + "'; else echo 'Downloading/resuming to " + files[i].path.replace(/'/g, "") + "'; curl -L --fail --connect-timeout 20 --progress-bar -C - -o " + shellQuote(files[i].path) + " " + shellQuote(files[i].url) + "; fi");
       }
@@ -5910,6 +5910,18 @@
     var settings = getWhisperSettings();
     if (!settings.command) {
       return Promise.reject(new Error("Whisper is not configured. Open Settings, detect/install Whisper, and test the model first."));
+    }
+    // Run from the palette or a shortcut, this hidden runtime may never have read the project (its panel wasn't
+    // opened), and the tracks came up empty: "No active sequence audio tracks" with audio on A1 (2026-11-21, Windows).
+    // Read it first, once.
+    if ((!state || !state.activeSequence || !state.activeSequence.audioTracks) && !action.__projectRead) {
+      return refreshProjectContextForWork({ quiet: true, skipComponents: true }).then(function () {
+        if (!state || !state.activeSequence) {
+          throw new Error("No sequence is open. Open one in Premiere's Timeline, then run this again.");
+        }
+        action.__projectRead = true;
+        return runLocalAudioSubtitleAction(action);
+      });
     }
 
     try {
@@ -16660,6 +16672,17 @@
     });
   }
 
+  // Shells start in one place, platform-shell.js (window.prfxShell): zsh on the Mac, Git Bash on Windows.
+  function isWindowsPlatform() {
+    return window.prfxShell.isWindows(getNodeRequire());
+  }
+  function shellSpawn(nodeRequire, command, extra) {
+    return window.prfxShell.spawn(nodeRequire, command, extra);
+  }
+  function endProcessTree(nodeRequire, child, hard) {
+    window.prfxShell.endTree(nodeRequire, child, hard);
+  }
+
   function runShell(command, input) {
     return new Promise(function (resolve, reject) {
       var nodeRequire = getNodeRequire();
@@ -16668,10 +16691,13 @@
         return;
       }
 
-      var child = nodeRequire("child_process").spawn("/bin/zsh", ["-lc", command], {
-        cwd: nodeRequire("os").homedir(),
-        env: nodeRequire("process").env
-      });
+      var child;
+      try {
+        child = shellSpawn(nodeRequire, command);
+      } catch (spawnErr) {
+        reject(spawnErr);
+        return;
+      }
 
       var stdout = "";
       var stderr = "";
@@ -16708,23 +16734,11 @@
     }
     try {
       var nodeRequire = getNodeRequire();
-      var processModule = nodeRequire ? nodeRequire("process") : null;
-      if (processModule && activeAgentChild.pid) {
-        try {
-          processModule.kill(-activeAgentChild.pid, "SIGTERM");
-        } catch (groupErr) {
-          activeAgentChild.kill("SIGTERM");
-        }
+      if (nodeRequire && activeAgentChild.pid) {
+        endProcessTree(nodeRequire, activeAgentChild, false);
         window.setTimeout(function (childRef) {
           if (childRef && !childRef.killed) {
-            try {
-              processModule.kill(-childRef.pid, "SIGKILL");
-            } catch (killGroupErr) {
-              try {
-                childRef.kill("SIGKILL");
-              } catch (killErr) {
-              }
-            }
+            endProcessTree(nodeRequire, childRef, true);
           }
         }, 1200, activeAgentChild);
       } else {
@@ -16743,11 +16757,13 @@
         return;
       }
 
-      var child = nodeRequire("child_process").spawn("/bin/zsh", ["-lc", command], {
-        cwd: nodeRequire("os").homedir(),
-        detached: true,
-        env: nodeRequire("process").env
-      });
+      var child;
+      try {
+        child = shellSpawn(nodeRequire, command, { detached: true });
+      } catch (spawnErr) {
+        reject(spawnErr);
+        return;
+      }
 
       activeAgentChild = child;
       var stdout = "";
@@ -16801,10 +16817,13 @@
         return;
       }
 
-      var child = nodeRequire("child_process").spawn("/bin/zsh", ["-lc", command], {
-        cwd: nodeRequire("os").homedir(),
-        env: nodeRequire("process").env
-      });
+      var child;
+      try {
+        child = shellSpawn(nodeRequire, command);
+      } catch (spawnErr) {
+        reject(spawnErr);
+        return;
+      }
 
       var stdout = "";
       var stderr = "";

@@ -17,7 +17,7 @@ import {
   ensureUxpInstalled,
 } from './core.mjs';
 import { detect, platform, connectListener } from './connectors.mjs';
-import { createMediaSetup } from './media-setup.mjs';
+import { createMediaSetup, findBash } from './media-setup.mjs';
 
 const CONNECTOR_GAP = { premiere: 'not found', panel: 'not installed', cepDebug: 'off', listener: 'not installed', autostart: 'off', accessibility: 'not granted' };
 
@@ -135,7 +135,9 @@ export function createService(ctx) {
       path.join(home, '.local', 'bin', 'whisper'), ...pythonBins, '/opt/homebrew/bin/whisperx', '/opt/homebrew/bin/whisper',
       '/usr/local/bin/whisperx', '/usr/local/bin/whisper']);
     const python = executable([process.platform === 'win32' ? 'python.exe' : 'python3', 'python']);
-    return { ffmpeg: { ready: !!ffmpeg, path: ffmpeg }, whisper: { ready: !!whisper, command: whisper }, python,
+    // The shell AI functions run their steps in: zsh on the Mac, Git Bash on Windows (client/prai/js/platform-shell.js).
+    const shell = findBash();
+    return { ffmpeg: { ready: !!ffmpeg, path: ffmpeg }, whisper: { ready: !!whisper, command: whisper }, shell: { ready: !!shell, path: shell }, python,
       configured: { ffmpegPath: s.ffmpegPath, whisperCommand: s.whisperCommand, whisperModel: s.whisperModel, whisperDevice: s.whisperDevice } };
   };
   // A failure says why: the last error line the command printed (pip's "No matching distribution…"), not only
@@ -152,7 +154,7 @@ export function createService(ctx) {
   // passed as is: a quoted command path with spaces ("…\PR FX Palette\whisperx-env\Scripts\whisperx.exe") stays whole.
   const shellTest = command => process.platform === 'win32'
     ? run('cmd.exe', ['/d', '/s', '/c', `"${command} --help"`], 120_000, true)
-    : run('/bin/zsh', ['-lc', `${command} --help`]);
+    : run('/bin/zsh', ['-lc', `${command} --help`]); // mac-only: the non-Windows side
 
   const routes = {
     state: () => ({
