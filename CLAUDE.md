@@ -140,6 +140,15 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   clapperboard. His mood carries the state: awake and blinking when armed, dozing (a "z") when not, clapping the board shut
   and grinning when a key fires, startled when it is passed to Premiere (the stroke also pulses).
   `EdieSprite` is the same art as Creative Assist's `ui/sprite.ts` `edie`, so change both together.
+- **His pace and his laptop (2026-11-22, the user: "none of the animation should be in unrealist speed"; "when he's working on
+  a long task like this let him type and look down on a laptop, also add tiny arms and hand on the side").** `EdiePace`
+  (in `PRFXTimelineHighlight.swift`, ported line for line to `native/windows/Core/EdiePace.cs`) times every pose within a human
+  range: blink 0.11-0.15 s every 3-6 s at random (sometimes twice), a leg swing every 7-18 s (0.35-0.6 s holds), talking mouth
+  0.17-0.32 s open / 0.11-0.24 s shut. During "Working on …" he types on a laptop on his lap, looking down at it: taps of
+  0.08-0.15 s in bursts, pauses of 0.5-2 s, a glance up now and then (moods `typeDown/typeLeft/typeRight/typeUp`). A one-shot
+  timer wakes him only when his pose changes; Reduce motion (macOS) or Animation effects off (Windows) holds him still. He has
+  tiny arms with round hands (a 4-fine-pixel circle in his legs' colour) on both sides in every pose. Checked in
+  `tools/check-windows-bridge` (pace) and `tools/check-windows-listener` (frames, against Creative Assist's).
 - **Colours:** PR FX's accent is orange (`#ff9a3d`, the stroke's), never Sage's mint. `client/styles.css` `:root` and the
   native palette's `PaletteStyle` (`PRFXShortcutListener.swift`) carry the same tokens; change both together.
 - The panel extends 44pt above the window so Edie still fits when the Timeline is docked at the top.

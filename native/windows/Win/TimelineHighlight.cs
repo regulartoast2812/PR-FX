@@ -9,10 +9,11 @@ namespace PrFxShortcutListener
 {
     // The Timeline highlight with Edie sitting on it, a port of PRFXTimelineHighlight.swift (2026-11-21).
     // It shows the exact panel the listener judges every keystroke against:
-    //   armed       full orange, Edie awake (blinks now and then, swings a leg)
+    //   armed       full orange, Edie awake (blinks now and then, swings a leg; EdiePace times both)
     //   not armed   faded orange, Edie dozing, and a short note saying why
     //   key fired   the stroke pulses brighter, Edie grins
     //   key passed  the stroke pulses red, Edie startles
+    //   working     an AI function runs: "Working on …", and Edie types on a laptop, looking down at it
     // and it carries his nudges (EdieNudges) in a speech bubble beside him.
     //
     // A per-pixel-alpha layered window that ignores the mouse and never activates. It is owned by Premiere's
@@ -33,6 +34,8 @@ namespace PrFxShortcutListener
             public string Title = "", Detail = "";
             public DateTime Started;
             public double Duration;
+            // His mouth open and shut in turn, each for its own time (EdiePace.TalkBeats).
+            public double[] Beats = Array.Empty<double>();
             public const double FadeIn = 0.2, FadeOut = 0.4, Talking = 1.6;
         }
 
@@ -53,6 +56,12 @@ namespace PrFxShortcutListener
         private Speech? speech;
         private string drawnKey = "";
         private readonly Timer animation = new Timer { Interval = 33 };
+        // Wakes once, when his pose (blink, leg, typing) next changes: no steady tick while he's idle.
+        private readonly Timer paceTimer = new Timer();
+        private readonly EdiePace pace = new EdiePace();
+        private readonly Random talkRandom = new Random();
+        private bool motion = true;
+        private DateTime motionRead = DateTime.MinValue;
 
         public TimelineHighlight()
         {
@@ -60,6 +69,7 @@ namespace PrFxShortcutListener
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             animation.Tick += (_, __) => Render(force: false);
+            paceTimer.Tick += (_, __) => { paceTimer.Stop(); Render(force: false); };
         }
 
         public bool IsShowing => Visible && state != null;
@@ -117,6 +127,7 @@ namespace PrFxShortcutListener
             state = null;
             drawnKey = "";
             animation.Stop();
+            paceTimer.Stop();
             if (Visible) { Hide(); Log.Write("Timeline highlight hidden"); }
         }
 
@@ -129,13 +140,14 @@ namespace PrFxShortcutListener
             Render(force: true);
         }
 
-        public void StartWorking(string name) { workingName = name; workingStarted = DateTime.UtcNow; animation.Start(); Render(force: true); }
+        public void StartWorking(string name) { workingName = name; workingStarted = DateTime.UtcNow; Render(force: true); }
         public void StopWorking() { workingName = null; Render(force: true); }
 
         public void Say(string title, string detail, double seconds)
         {
             if (!IsShowing) return;
-            speech = new Speech { Title = title, Detail = detail, Started = DateTime.UtcNow, Duration = seconds };
+            speech = new Speech { Title = title, Detail = detail, Started = DateTime.UtcNow, Duration = seconds,
+                Beats = EdiePace.TalkBeats(talkRandom.NextDouble, Speech.Talking) };
             animation.Start();
             Render(force: true);
             Log.Write("Edie says: " + title + " / " + detail);
@@ -152,19 +164,29 @@ namespace PrFxShortcutListener
         // Only what changed is drawn again: the frame's look is summed up in a key.
         private void Render(bool force)
         {
-            if (state is not State s || !Visible) { animation.Stop(); return; }
+            if (state is not State s || !Visible) { animation.Stop(); paceTimer.Stop(); return; }
             var now = DateTime.UtcNow;
             var since = (now - flashStarted).TotalSeconds;
             var pulse = since < FlashDuration ? 1 - since / FlashDuration : 0;
             if (speech != null && (now - speech.Started).TotalSeconds >= speech.Duration) speech = null;
-            var animating = pulse > 0 || speech != null || workingName != null;
+            // The working note's seconds are redrawn by the housekeeping Update (4 times a second); his typing by paceTimer.
+            var animating = pulse > 0 || speech != null;
             if (!animating) animation.Stop();
-            // A blink for one refresh (0.2 s) in every twenty; two leg swings every eleven seconds.
-            var tick = (long)((now - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds / 200);
-            var blink = tick % 20 == 0;
-            var step = (int)(tick % 55);
-            var swing = step < 12 ? new[] { 1, 1, 0, -1, -1, 0 }[step % 6] : 0;
-            var key = placed + "|" + s.Armed + "|" + s.Reason + "|" + blink + "|" + swing + "|" + workingName + "|" +
+            // Reduced motion, read at most every 2 s.
+            if ((now - motionRead).TotalSeconds > 2) { motion = Native.AnimationsOn(); motionRead = now; }
+            // His blink, leg and typing, each held for its own human time (EdiePace).
+            var seconds = (now - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            var pose = pace.At(seconds, motion, workingName != null);
+            var blink = pose.Blink;
+            var swing = pose.Swing;
+            // Awake or at his laptop, wake once when the pose next changes; dozing, he holds still.
+            paceTimer.Stop();
+            if (s.Armed || workingName != null)
+            {
+                paceTimer.Interval = (int)Math.Max(15, Math.Min(60000, Math.Ceiling((pose.Next - seconds) * 1000)));
+                paceTimer.Start();
+            }
+            var key = placed + "|" + s.Armed + "|" + s.Reason + "|" + blink + "|" + swing + "|" + pose.Typing + "|" + workingName + "|" +
                       (workingName != null ? (int)(now - workingStarted).TotalSeconds : 0);
             if (!force && !animating && key == drawnKey) return;
             drawnKey = key;
@@ -173,13 +195,13 @@ namespace PrFxShortcutListener
                 using (var g = Graphics.FromImage(bitmap))
                 {
                     g.Clear(Color.Transparent);
-                    Draw(g, s, pulse, blink, swing, now);
+                    Draw(g, s, pulse, blink, swing, pose.Typing, now);
                 }
                 Present(bitmap);
             }
         }
 
-        private void Draw(Graphics g, State s, double pulse, bool blink, int swing, DateTime now)
+        private void Draw(Graphics g, State s, double pulse, bool blink, int swing, EdiePace.Hands typing, DateTime now)
         {
             var px = 2 * scale;
             var headroom = (float)Math.Ceiling(Headroom * scale);
@@ -208,7 +230,16 @@ namespace PrFxShortcutListener
             var spoken = speech != null ? (now - speech.Started).TotalSeconds : (double?)null;
             EdieSprite.Mood mood;
             if (pulse > 0) mood = flashFired ? EdieSprite.Mood.Grin : EdieSprite.Mood.Shocked;
-            else if (spoken is double t) mood = t >= Speech.Talking ? EdieSprite.Mood.Rest : ((int)(t / 0.25) % 2 == 0 ? EdieSprite.Mood.Talk : EdieSprite.Mood.TalkPause);
+            else if (spoken is double t) mood = t >= Speech.Talking ? EdieSprite.Mood.Rest
+                : !motion ? EdieSprite.Mood.Talk : (EdiePace.TalkMouthOpen(speech!.Beats, t) ? EdieSprite.Mood.Talk : EdieSprite.Mood.TalkPause);
+            // A long task (an AI function): at his laptop, typing and looking down at it.
+            else if (workingName != null) mood = typing switch
+            {
+                EdiePace.Hands.Left => EdieSprite.Mood.TypeLeft,
+                EdiePace.Hands.Right => EdieSprite.Mood.TypeRight,
+                EdiePace.Hands.Up => EdieSprite.Mood.TypeUp,
+                _ => EdieSprite.Mood.TypeDown,
+            };
             else if (!s.Armed) mood = EdieSprite.Mood.Sleepy;
             else mood = blink ? EdieSprite.Mood.Blink : EdieSprite.Mood.Rest;
             var edieX = (float)Math.Round(rect.Right - EdieSprite.Columns * px - 10 * scale);

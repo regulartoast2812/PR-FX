@@ -14,8 +14,8 @@ internal static class Check
         if (!condition) failures++;
     }
 
-    // EdieSprite.face(.rest, right: true): facing right with his clapperboard ahead of him (2026-11-22), as Creative
-    // Assist's sprite.ts draws his rest frame.
+    // EdieSprite.face(.rest, right: true): facing right with his clapperboard ahead of him (2026-11-22), his tiny arms
+    // with round hands (2026-11-22), as Creative Assist's sprite.ts draws his rest frame.
     private static readonly string[] FacingRight =
     {
         "................................",
@@ -41,13 +41,51 @@ internal static class Check
         "..OOOOOOOKKKOOOOKKKOOOBBBBBBBBBB",
         "..OOPOPOPKKKOOOOKKKPOPBBBBBBBBBB",
         "..OOPOPOPOOOOOOOOPOPOPBBWWWWWWBB",
-        "..OOPOPOPOOmOOOOmPOPOPBBWWWWWWBB",
-        "..OOOOOOOOOmmmmmmOOOOOBBBBBBBBBB",
-        "..OOOOOOOOOOmmmmOOOOOOBBBBBBBBBB",
-        "..OOOOOOOOOOOOOOOOOOOOOOWWWWBBBB",
-        "....OOOOOOOOOOOOOOOO..OOWWWWBBBB",
-        "....OOOOOOOOOOOOOOOO..BBBBBBBBBB",
+        ".DDOPOPOPOOmOOOOmPOPOPBBWWWWWWBB",
+        "DDDDOOOOOOOmmmmmmOOOOOBBBBBBBBBB",
+        "DDDDOOOOOOOOmmmmOOOOOODDBBBBBBBB",
+        ".DDOOOOOOOOOOOOOOOOOODDDDWWWBBBB",
+        "....OOOOOOOOOOOOOOOO.DDDDWWWBBBB",
+        "....OOOOOOOOOOOOOOOO..DDBBBBBBBB",
         "......OOOOOOOOOOOO....BBBBBBBBBB",
+        "......DDD......DDD..............",
+        "......DDD......DDD..............",
+    };
+
+    // EdieSprite.face(.typeDown, right: true): at his laptop, looking down at it, his clapperboard aside (2026-11-22), as
+    // Creative Assist's sprite.ts draws working frame 5.
+    private static readonly string[] TypingRight =
+    {
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "...............y................",
+        "............yyyy................",
+        "......y..yYyyyy.................",
+        ".......yyyyyyyyyyyyyyyy.........",
+        "......yYyYyyYYyyyyyyy...........",
+        "......YYyYYYyyyyyy..............",
+        ".....yYYYyYYYYyyYO............WW",
+        "....OYYYYyYYYYYYyyYO..........WW",
+        "....YYYYYyYYYYYYYYyY......WWBB..",
+        "..OOYYOOYYYYOOYYYYYYYY....WWBB..",
+        "..OOOOOOYYYYOOOOOOOYYYY.WWBB....",
+        "..OOOOOOOOOOOOOOOOOOOO..WWBB....",
+        "..OOOOOOOOOOOOOOOOOOOOWWBB......",
+        "..OOOOOOOOOOOOOOOOOOOOWWBB......",
+        "..OOOOOOOKKKOOOOKKKOOOBBBBBBBBBB",
+        "..OOPOPOPKKKOOOOKKKPOPBBBBBBBBBB",
+        "..OOPOPOPOOOOOOOOPOPOPBBWWWWWWBB",
+        "..OOPOPOPBBBBBBBBBBPOPBBWWWWWWBB",
+        "..OOOOOOOBBBBBBBBBBOOOBBBBBBBBBB",
+        "..OOOOOOOBBBBWWBBBBOOOBBBBBBBBBB",
+        "..OOOOOOOBBBBWWBBBBOOOBBWWWWBBBB",
+        "....OOODDBBBBBBBBBBDD.BBWWWWBBBB",
+        "....OODDDDBBBBBBBBDDDDBBBBBBBBBB",
+        "......ODDWWWWWWWWWWDD.BBBBBBBBBB",
         "......DDD......DDD..............",
         "......DDD......DDD..............",
     };
@@ -65,6 +103,13 @@ internal static class Check
         Expect(sitting.Length == EdieSprite.Crown + 26 && sitting.All(r => r.Length == 32), "edie: sitting is 34 fine rows of 32 (leaf, body, legs over the line)");
         Expect(sitting[EdieSprite.Crown + 22].Contains('D') && sitting[EdieSprite.Crown + 25].Contains('D'), "edie: his legs hang over the line");
         Expect(!EdieSprite.Sitting(EdieSprite.Mood.Rest, 1).SequenceEqual(sitting) && EdieSprite.Sitting(EdieSprite.Mood.Rest, 0).SequenceEqual(sitting), "edie: a swing moves his leg, still doesn't");
+        Expect(EdieSprite.Face(EdieSprite.Mood.TypeDown, right: true).SequenceEqual(TypingRight), "edie: at his laptop as Creative Assist draws him (working frame 5)");
+        Expect(!EdieSprite.Face(EdieSprite.Mood.TypeLeft, right: true).SequenceEqual(TypingRight) && !EdieSprite.Face(EdieSprite.Mood.TypeRight, right: true).SequenceEqual(TypingRight), "edie: a tap lifts a hand");
+        int HandPixels(string[] rows, int fromCol, int toCol) => rows.Take(EdieSprite.Crown + 22).Sum(r => r.Substring(fromCol, toCol - fromCol + 1).Count(c => c == 'D'));
+        Expect(HandPixels(sitting, 0, 3) == 12 && HandPixels(sitting, 21, 24) == 12, "edie: sitting, a round hand on each side (12 fine pixels each)");
+        var typingSit = EdieSprite.Sitting(EdieSprite.Mood.TypeDown);
+        Expect(typingSit.Any(r => r.Contains("WWWWWWWWWW")) && typingSit.Skip(EdieSprite.Crown + 12).Take(10).All(r => r.Substring(22).IndexOfAny(new[] { 'B', 'W' }) >= 0), "edie: typing on the Timeline, a laptop on his lap, the clapperboard still behind him");
+        Expect(typingSit.All(r => r.Substring(22).IndexOf('O') < 0 && r.Substring(22).IndexOf('D') < 0 || r == typingSit[typingSit.Length - 1]), "edie: typing, no hand on the clapperboard");
         foreach (EdieSprite.Mood mood in Enum.GetValues(typeof(EdieSprite.Mood)))
             Expect(EdieSprite.Sitting(mood).Length == 34, "edie: " + mood + " draws");
         Expect(!EdieSprite.Sitting(EdieSprite.Mood.Grin).SequenceEqual(sitting) && !EdieSprite.Sitting(EdieSprite.Mood.Sleepy).SequenceEqual(sitting), "edie: grin and sleepy differ from rest");

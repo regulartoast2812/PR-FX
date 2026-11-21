@@ -11,7 +11,11 @@ namespace PrFxShortcutListener
     // mouth, blush, rounded corners, legs and maple leaf are drawn. `Draw` sizes cells from the rows.
     internal static class EdieSprite
     {
-        public enum Mood { Rest, Blink, Grin, Sleepy, Shocked, Talk, TalkPause }
+        // TypeDown/TypeLeft/TypeRight/TypeUp: at his laptop while an AI function works (2026-11-22), looking down at it,
+        // both hands on the keys, the left or the right lifted for a tap, or glancing up.
+        public enum Mood { Rest, Blink, Grin, Sleepy, Shocked, Talk, TalkPause, TypeDown, TypeLeft, TypeRight, TypeUp }
+
+        public static bool IsTyping(Mood mood) => mood == Mood.TypeDown || mood == Mood.TypeLeft || mood == Mood.TypeRight || mood == Mood.TypeUp;
 
         public const int Columns = 16;
         // Rows above the line he sits on.
@@ -92,6 +96,8 @@ namespace PrFxShortcutListener
                 case Mood.Shocked: return Put(RestRows, new[] { new Edit(4, 0, 'w'), new Edit(5, 0, 'w') });
                 case Mood.Talk: return Put(RestRows, new[] { new Edit(2, 0, 'O'), new Edit(3, 0, 'O'), new Edit(4, 0, 'D') });
                 case Mood.TalkPause: return Put(RestRows, new[] { new Edit(4, 0, 'O'), new Edit(5, 0, 'D') });
+                // His hand off the clapperboard, which stands aside while he types: the slate's edge where it was.
+                case Mood.TypeDown: case Mood.TypeLeft: case Mood.TypeRight: case Mood.TypeUp: return Put(RestRows, new[] { new Edit(9, 11, 'B') });
                 default: return RestRows;
             }
         }
@@ -105,6 +111,11 @@ namespace PrFxShortcutListener
                 case Mood.Blink:
                 case Mood.Sleepy:
                     return At('K', new[] { 15 }, new[] { 7, 8, 9, 14, 15, 16 });
+                // Looking down at his screen: the lower two rows of each eye, no glint.
+                case Mood.TypeDown:
+                case Mood.TypeLeft:
+                case Mood.TypeRight:
+                    return At('K', new[] { 14, 15 }, new[] { 7, 8, 9, 14, 15, 16 });
                 case Mood.Shocked:
                     return At('K', new[] { 12, 13, 14, 15 }, new[] { 6, 7, 8, 9, 14, 15, 16, 17 }).Concat(new[] { new Edit(12, 6, 'g'), new Edit(12, 14, 'g') });
                 default:
@@ -170,13 +181,42 @@ namespace PrFxShortcutListener
 
         private static readonly int[] LeftLeg = { 6, 7, 8 }, RightLeg = { 15, 16, 17 };
 
+        // His tiny arms (2026-11-22, the user: "add tiny arms and hand on the side. hands are pretty much just
+        // circles/ovals"): a round hand, a circle four fine pixels across in his legs' darker orange, on each side, in
+        // the frame's fine rows (leaf included). The back one at his far side (columns 0-3), the front one on the
+        // clapperboard's near edge (21-24), where his hand always was. Talking, his back arm is the one he waves.
+        // Creative Assist draws the same (sprite.ts edieHand, edieArms).
+        private static IEnumerable<Edit> Hand(int top, int left) =>
+            At('D', new[] { top, top + 3 }, new[] { left + 1, left + 2 }).Concat(At('D', new[] { top + 1, top + 2 }, Span(left, left + 3)));
+
+        private static IEnumerable<Edit> Arms(Mood mood) =>
+            mood == Mood.Talk || mood == Mood.TalkPause ? Hand(25, 21) : Hand(23, 0).Concat(Hand(25, 21));
+
+        // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look down on a laptop"): its
+        // lid's back, grey with a light mark, the light front edge of its keyboard, and his hands on the keys at its
+        // ends, one lifted a whole pixel for a tap. `left` is the keyboard's first fine column. Creative Assist draws the
+        // same (sprite.ts edieLaptop).
+        private static IEnumerable<Edit> Laptop(int left, Mood mood)
+        {
+            IEnumerable<Edit> KeyHand(int x, bool lifted)
+            {
+                var top = lifted ? 25 : 27;
+                return At('D', new[] { top, top + 2 }, new[] { x + 1, x + 2 }).Concat(At('D', new[] { top + 1 }, Span(x, x + 3)));
+            }
+            return At('B', Span(23, 28), Span(left + 1, left + 10))
+                .Concat(At('W', new[] { 25, 26 }, new[] { left + 5, left + 6 }))
+                .Concat(At('W', new[] { 29 }, Span(left, left + 11)))
+                .Concat(KeyHand(left - 2, mood == Mood.TypeLeft))
+                .Concat(KeyHand(left + 10, mood == Mood.TypeRight));
+        }
+
         // Standing: his legs are stubs under him. `right`: all of him mirrored, facing screen right. Either way his
         // clapperboard is ahead of him, on the side he faces (2026-11-22, the user: "have the clapper in front of him in
         // all instances aside from timeline rectangle"); sitting on the Timeline he keeps it behind him.
         public static string[] Face(Mood mood, bool right = false)
         {
             var rows = Crowned(Put(Fine(Art(mood), mood), At('D', new[] { 22, 23 }, LeftLeg.Concat(RightLeg))));
-            var toRight = Ahead(rows.Select(r => new string(r.Reverse().ToArray())).ToArray());
+            var toRight = Put(Ahead(rows.Select(r => new string(r.Reverse().ToArray())).ToArray()), IsTyping(mood) ? Laptop(8, mood) : Arms(mood));
             return right ? toRight : toRight.Select(r => new string(r.Reverse().ToArray())).ToArray();
         }
 
@@ -205,7 +245,7 @@ namespace PrFxShortcutListener
                 .Concat(At('D', new[] { 22 }, RightLeg)).Concat(At('D', new[] { 23 }, shin))
                 .Concat(At('D', new[] { 24, 25 }, Span(13, 17).Select(x => x + 2 * s)));
             var body = Art(mood).Take(SeatRow).Concat(Enumerable.Repeat(new string('.', Columns), 2)).ToArray();
-            return Crowned(Put(Fine(body, mood), legs));
+            return Put(Crowned(Put(Fine(body, mood), legs)), IsTyping(mood) ? Laptop(4, mood) : Arms(mood));
         }
 
         // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.

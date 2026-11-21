@@ -8,10 +8,11 @@ import AppKit
 //
 // No fill: a thin orange stroke laid over Premiere's own blue panel border, and
 // Edie sitting on its top-right corner.
-//   armed       full orange, Edie awake (blinks now and then)
+//   armed       full orange, Edie awake (blinks now and then, swings a leg; EdiePace times both)
 //   not armed   faded orange, Edie dozing, and a short note saying why
 //   key fired   the stroke pulses brighter, Edie grins
 //   key passed  the stroke pulses red, Edie startles
+//   working     an AI function runs: "Working on ...", and Edie types on a laptop, looking down at it
 //
 // Everything here is in Accessibility coordinates (top-left origin of the
 // primary screen), the same space the listener stores regions in.
@@ -27,12 +28,186 @@ struct TimelineHighlightState: Equatable {
     var covers: [CGRect] = []
 }
 
+// Edie's pacing on the Timeline highlight (2026-11-22, the user: "edie clapper animation is
+// way too fast, it needs to be how we as human do it with correct pacing, none of the
+// animation should be in unrealist speed"). The Windows port is native/windows/Core/EdiePace.cs,
+// line for line (checked there by tools/check-windows-bridge); Creative Assist paces his standing
+// sprite the same way (ui/sprite.ts `ediePace`). Every pose is held for a time picked within a
+// range a person would recognise, so nothing ticks like a metronome:
+//   blink    eyes shut 0.11-0.15 s, every 3-6 s at random, one time in five twice (0.14-0.22 s
+//            open between). It used to be one 0.2 s refresh in every twenty, exactly every 4 s.
+//   leg      still for 7-18 s, then one or two swings: out 0.35-0.6 s, still 0.2-0.35 s, back
+//            0.35-0.6 s, still 0.2-0.35 s. It used to be two swings of 0.4 s holds every 11 s.
+//   talking  mouth open 0.17-0.32 s, shut 0.11-0.24 s, for as long as he talks (was 0.25 s each).
+//   typing   while an AI function works (the user: "when he's working on a long task like this
+//            let him type and look down on a laptop"): bursts of taps, a hand lifted 0.08-0.15 s
+//            and down 0.07-0.13 s, pauses of 0.5-2 s looking down at the screen, now and then a
+//            glance up (0.45-1 s); never the same move twice running.
+// With Reduce motion on he holds still: eyes open, legs still, typing hands down.
+final class EdiePace {
+    enum Hands { case down, left, right, up }
+
+    struct Pose {
+        var blink: Bool
+        var swing: Int
+        var typing: Hands
+        // When (seconds, the same clock as `now`) any of it changes next.
+        var next: Double
+    }
+
+    struct Step<T> {
+        var value: T
+        var seconds: Double
+        var move: String? = nil
+    }
+
+    // One of his poses running through a queue of steps, refilled when it empties.
+    final class Track<T> {
+        private var queue: [Step<T>] = []
+        var refill: () -> [Step<T>] = { [] }
+        var value: T
+        var ends = -Double.infinity
+        var lastMove: String?
+
+        init(_ start: T) { value = start }
+
+        func restart(_ now: Double, _ first: [Step<T>]) {
+            queue = first
+            ends = now
+            lastMove = nil
+        }
+
+        func advance(_ now: Double) {
+            while now >= ends {
+                if queue.isEmpty {
+                    let steps = refill()
+                    if let move = steps.first?.move { lastMove = move }
+                    queue = steps
+                }
+                let step = queue.removeFirst()
+                value = step.value
+                // Woken late (a sleep, a busy main thread): this pose starts now rather than racing through the run.
+                ends = (now - ends > 0.25 ? now : ends) + step.seconds
+            }
+        }
+    }
+
+    static let blinkShut = (0.11, 0.15), blinkEvery = (3.0, 6.0), blinkApart = (0.14, 0.22)
+    static let blinkTwice = 0.2
+    static let swingStill = (7.0, 18.0), swingOut = (0.35, 0.6), swingPass = (0.2, 0.35)
+    static let talkOpen = (0.17, 0.32), talkShut = (0.11, 0.24)
+    static let tapUp = (0.08, 0.15), tapDown = (0.07, 0.13), typePause = (0.5, 2.0), typeGlance = (0.45, 1.0)
+
+    private let random: () -> Double
+    private let blink = Track<Bool>(false)
+    private let swing = Track<Int>(0)
+    private let typing = Track<Hands>(.down)
+    private var wasTyping = false, started = false
+
+    init(random: @escaping () -> Double = { Double.random(in: 0..<1) }) {
+        self.random = random
+        blink.refill = { [unowned self] in self.blinkRun() }
+        swing.refill = { [unowned self] in self.swingRun() }
+        typing.refill = { [unowned self] in self.typingRun(self.typing.lastMove) }
+    }
+
+    private func pick(_ range: (Double, Double)) -> Double { range.0 + (range.1 - range.0) * random() }
+
+    private func blinkRun() -> [Step<Bool>] {
+        var run = [Step(value: false, seconds: pick(Self.blinkEvery)), Step(value: true, seconds: pick(Self.blinkShut))]
+        if random() < Self.blinkTwice { run += [Step(value: false, seconds: pick(Self.blinkApart)), Step(value: true, seconds: pick(Self.blinkShut))] }
+        return run
+    }
+
+    private func swingRun() -> [Step<Int>] {
+        var run = [Step(value: 0, seconds: pick(Self.swingStill))]
+        let swings = random() < 0.5 ? 1 : 2
+        for _ in 0..<swings {
+            run += [Step(value: 1, seconds: pick(Self.swingOut)), Step(value: 0, seconds: pick(Self.swingPass)),
+                    Step(value: -1, seconds: pick(Self.swingOut)), Step(value: 0, seconds: pick(Self.swingPass))]
+        }
+        return run
+    }
+
+    // His typing moves: (name, weight, how many times over, the beats).
+    static let typingMoves: [(name: String, weight: Double, times: (Int, Int), beats: [Hands])] = [
+        ("burst", 4, (3, 7), [.left, .down, .right, .down]),
+        ("pecks", 2, (1, 2), [.right, .down]),
+        ("quick", 2, (2, 4), [.left, .down, .left, .down, .right, .down]),
+        ("glance", 1, (1, 1), [.up]),
+    ]
+
+    // One move (a burst first, then any but the last one, by weight) and the pause after it.
+    private func typingRun(_ last: String?) -> [Step<Hands>] {
+        var move = Self.typingMoves[0]
+        if let last {
+            let choices = Self.typingMoves.filter { $0.name != last }
+            var roll = random() * choices.reduce(0) { $0 + $1.weight }
+            move = choices[choices.count - 1]
+            for m in choices { roll -= m.weight; if roll < 0 { move = m; break } }
+        }
+        let times = move.times.0 + Int((random() * Double(move.times.1 - move.times.0 + 1)).rounded(.down))
+        var run: [Step<Hands>] = []
+        for _ in 0..<times {
+            for hands in move.beats {
+                let range = hands == .up ? Self.typeGlance : hands == .down ? Self.tapDown : Self.tapUp
+                run.append(Step(value: hands, seconds: pick(range), move: run.isEmpty ? move.name : nil))
+            }
+        }
+        run.append(Step(value: .down, seconds: pick(Self.typePause)))
+        return run
+    }
+
+    // Where he is at `now` (seconds). `isTyping`: an AI function is working, so he's at his laptop.
+    func at(_ now: Double, motion: Bool, isTyping: Bool) -> Pose {
+        if !motion { wasTyping = false; started = false; return Pose(blink: false, swing: 0, typing: .down, next: now + 1) }
+        if !started {
+            started = true
+            blink.restart(now, [Step(value: false, seconds: pick(Self.blinkEvery))])
+            swing.restart(now, [Step(value: 0, seconds: pick(Self.swingStill))])
+        }
+        if isTyping && !wasTyping { typing.restart(now, [Step(value: .down, seconds: pick(Self.typePause))]) }
+        wasTyping = isTyping
+        blink.advance(now)
+        swing.advance(now)
+        var next = min(blink.ends, swing.ends)
+        if isTyping { typing.advance(now); next = min(next, typing.ends) }
+        return Pose(blink: blink.value, swing: swing.value, typing: isTyping ? typing.value : .down, next: next)
+    }
+
+    // His mouth while he talks: open and shut in turn, each for its own time, enough to cover `length` seconds.
+    static func talkBeats(_ random: () -> Double, _ length: Double) -> [Double] {
+        var beats: [Double] = []
+        var total = 0.0
+        while total < length {
+            let range = beats.count % 2 == 0 ? talkOpen : talkShut
+            let beat = range.0 + (range.1 - range.0) * random()
+            beats.append(beat)
+            total += beat
+        }
+        return beats
+    }
+
+    // Open (`true`) or shut `elapsed` seconds into his talking.
+    static func talkMouthOpen(_ beats: [Double], _ elapsed: Double) -> Bool {
+        var at = 0.0
+        for (i, beat) in beats.enumerated() {
+            at += beat
+            if elapsed < at { return i % 2 == 0 }
+        }
+        return false
+    }
+}
+
 final class TimelineHighlight {
     private var panel: NSPanel?
     private var view: TimelineHighlightView?
     // Room above the window for Edie when the Timeline is docked at its top.
     static let headroom: CGFloat = 44
     private var workingTimer: Timer?
+    // His blink, leg and typing (EdiePace); one timer that wakes once, when his pose next changes.
+    private let pace = EdiePace()
+    private var paceTimer: Timer?
 
     func update(_ state: TimelineHighlightState?) {
         guard let state, state.window.width > 40, state.window.height > 40 else {
@@ -49,22 +224,38 @@ final class TimelineHighlight {
         let placed = NSRect(x: area.minX, y: primaryHeight - area.maxY, width: area.width, height: area.height)
         if panel.frame != placed { panel.setFrame(placed, display: false) }
         guard let view else { return }
-        // A blink for one refresh (0.2 s) in every twenty.
-        let blink = Int(Date().timeIntervalSince1970 / 0.2) % 20 == 0
-        // Now and then (two swings every eleven seconds) he swings a leg: out, out, still, back, back, still.
-        let tick = Int(Date().timeIntervalSince1970 / 0.2) % 55
-        let swing = tick < 12 ? [1, 1, 0, -1, -1, 0][tick % 6] : 0
-        if view.state != state || view.area != area || view.blink != blink || view.swing != swing {
+        if view.state != state || view.area != area {
             view.state = state
             view.area = area
-            view.blink = blink
-            view.swing = swing
             view.needsDisplay = true
         }
         if !panel.isVisible {
             panel.orderFrontRegardless()
             listenerLog("Timeline highlight shown over \(NSStringFromRect(placed)) visible=\(panel.isVisible)")
         }
+        stepPace()
+    }
+
+    // His pose now (EdiePace), and a wake when it next changes: awake or at his laptop only;
+    // dozing he holds still. With Reduce motion on he holds still too.
+    private func stepPace() {
+        paceTimer?.invalidate()
+        paceTimer = nil
+        guard let view, let state = view.state, panel?.isVisible == true else { return }
+        let now = Date().timeIntervalSince1970
+        let motion = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let pose = pace.at(now, motion: motion, isTyping: view.workingName != nil)
+        view.motion = motion
+        if view.blink != pose.blink || view.swing != pose.swing || view.typing != pose.typing {
+            view.blink = pose.blink
+            view.swing = pose.swing
+            view.typing = pose.typing
+            view.needsDisplay = true
+        }
+        guard state.armed || view.workingName != nil else { return }
+        let timer = Timer(timeInterval: max(0.015, min(60, pose.next - now)), repeats: false) { [weak self] _ in self?.stepPace() }
+        paceTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     func flash(fired: Bool) {
@@ -76,6 +267,7 @@ final class TimelineHighlight {
         view?.workingName = name
         view?.workingStarted = Date()
         view?.needsDisplay = true
+        stepPace()
         workingTimer?.invalidate()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.view?.needsDisplay = true }
         workingTimer = timer
@@ -87,6 +279,7 @@ final class TimelineHighlight {
         workingTimer = nil
         view?.workingName = nil
         view?.needsDisplay = true
+        stepPace()
     }
 
     // Drawn and on screen (it only ever draws a live region).
@@ -98,7 +291,8 @@ final class TimelineHighlight {
     // Never takes focus or clicks: it's drawn in this click-through panel.
     func say(_ title: String, _ detail: String, for duration: TimeInterval) {
         guard let view, isShowing else { return }
-        view.speech = TimelineHighlightView.Speech(title: title, detail: detail, started: Date(), duration: duration)
+        view.speech = TimelineHighlightView.Speech(title: title, detail: detail, started: Date(), duration: duration,
+                                                   beats: EdiePace.talkBeats({ Double.random(in: 0..<1) }, TimelineHighlightView.Speech.talking))
         view.needsDisplay = true
         speechTimer?.invalidate()
         // Ten frames a second for the fade and his wave, only while he speaks.
@@ -130,6 +324,8 @@ final class TimelineHighlight {
             speechTimer = nil
             view?.speech = nil
         }
+        paceTimer?.invalidate()
+        paceTimer = nil
         guard panel?.isVisible == true else { return }
         panel?.orderOut(nil)
         listenerLog("Timeline highlight hidden")
@@ -159,6 +355,8 @@ final class TimelineHighlightView: NSView {
     var area: CGRect = .zero
     var blink = false
     var swing = 0
+    var typing = EdiePace.Hands.down
+    var motion = true
     var workingName: String?
     var workingStarted = Date()
     // What Edie is saying, if anything (TimelineHighlight.say).
@@ -167,6 +365,8 @@ final class TimelineHighlightView: NSView {
         var detail: String
         var started: Date
         var duration: TimeInterval
+        // His mouth open and shut in turn, each for its own time (EdiePace.talkBeats).
+        var beats: [Double] = []
         static let fadeIn: TimeInterval = 0.2
         static let fadeOut: TimeInterval = 0.4
         // He talks (mouth and wave) this long, then listens, awake.
@@ -238,7 +438,17 @@ final class TimelineHighlightView: NSView {
         if pulse > 0 { mood = flashFired ? .grin : .shocked }
         else if let spoken {
             // Speaking wakes him: he talks and waves, then listens.
-            mood = spoken >= Speech.talking ? .rest : (Int(spoken / 0.25) % 2 == 0 ? .talk : .talkPause)
+            mood = spoken >= Speech.talking ? .rest
+                : !motion ? .talk : (EdiePace.talkMouthOpen(speech?.beats ?? [], spoken) ? .talk : .talkPause)
+        }
+        // A long task (an AI function): at his laptop, typing and looking down at it.
+        else if workingName != nil {
+            switch typing {
+            case .left: mood = .typeLeft
+            case .right: mood = .typeRight
+            case .up: mood = .typeUp
+            case .down: mood = .typeDown
+            }
         }
         else if !state.armed { mood = .sleepy }
         else { mood = blink ? .blink : .rest }
@@ -349,7 +559,12 @@ final class TimelineHighlightView: NSView {
 enum EdieSprite {
     // talk / talkPause: speaking (Edie's nudges), mouth open and hand up, then
     // shut and hand lower, alternated; native only, like sleepy and shocked.
-    enum Mood { case rest, blink, grin, sleepy, shocked, talk, talkPause }
+    // typeDown / typeLeft / typeRight / typeUp: at his laptop while an AI function works
+    // (2026-11-22), looking down at it, both hands on the keys, the left or the right lifted
+    // for a tap, or glancing up.
+    enum Mood { case rest, blink, grin, sleepy, shocked, talk, talkPause, typeDown, typeLeft, typeRight, typeUp }
+
+    static func isTyping(_ mood: Mood) -> Bool { mood == .typeDown || mood == .typeLeft || mood == .typeRight || mood == .typeUp }
 
     static let columns = 16
     // Rows above the line he sits on.
@@ -383,7 +598,7 @@ enum EdieSprite {
         + (10...13).flatMap { [(18, $0, Character("m")), (19, $0, Character("m"))] }
     static func mouth(_ mood: Mood) -> [Edit] {
         switch mood {
-        case .rest, .blink, .talkPause: return smile
+        case .rest, .blink, .talkPause, .typeDown, .typeLeft, .typeRight, .typeUp: return smile
         // Wider and open, on a clean cut.
         case .grin: return (8...15).flatMap { [(17, $0, Character("m")), (18, $0, Character("m"))] }
             + (9...14).map { (19, $0, "m") } + (10...13).map { (20, $0, "m") }
@@ -407,6 +622,8 @@ enum EdieSprite {
         case .shocked: return put(rest, [(4, 0, "w"), (5, 0, "w")])
         case .talk: return put(rest, [(2, 0, "O"), (3, 0, "O"), (4, 0, "D")])
         case .talkPause: return put(rest, [(4, 0, "O"), (5, 0, "D")])
+        // His hand off the clapperboard, which stands aside while he types: the slate's edge where it was.
+        case .typeDown, .typeLeft, .typeRight, .typeUp: return put(rest, [(9, 11, "B")])
         }
     }
 
@@ -421,6 +638,8 @@ enum EdieSprite {
     static func eyes(_ mood: Mood) -> [Edit] {
         switch mood {
         case .blink, .sleepy: return at("K", [15], [7, 8, 9, 14, 15, 16])
+        // Looking down at his screen: the lower two rows of each eye, no glint.
+        case .typeDown, .typeLeft, .typeRight: return at("K", [14, 15], [7, 8, 9, 14, 15, 16])
         case .shocked: return at("K", [12, 13, 14, 15], [6, 7, 8, 9, 14, 15, 16, 17]) + [(12, 6, "g"), (12, 14, "g")]
         default: return at("K", [13, 14, 15], [7, 8, 9, 14, 15, 16]) + [(13, 9, "g"), (13, 16, "g")]
         }
@@ -487,6 +706,36 @@ enum EdieSprite {
     // His legs (2026-11-20, the user: thicker), three fine pixels wide.
     static let leftLeg = [6, 7, 8], rightLeg = [15, 16, 17]
 
+    // His tiny arms (2026-11-22, the user: "add tiny arms and hand on the side. hands are
+    // pretty much just circles/ovals"): a round hand, a circle four fine pixels across in his
+    // legs' darker orange, on each side, in the frame's fine rows (leaf included). The back one
+    // at his far side (columns 0-3), the front one on the clapperboard's near edge (21-24),
+    // where his hand always was. Talking, his back arm is the one he waves. Creative Assist
+    // draws the same (sprite.ts edieHand, edieArms); the Windows port is EdieSprite.cs.
+    static func hand(_ top: Int, _ left: Int) -> [Edit] {
+        at("D", [top, top + 3], [left + 1, left + 2]) + at("D", [top + 1, top + 2], Array(left...(left + 3)))
+    }
+
+    static func arms(_ mood: Mood) -> [Edit] {
+        mood == .talk || mood == .talkPause ? hand(25, 21) : hand(23, 0) + hand(25, 21)
+    }
+
+    // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look
+    // down on a laptop"): its lid's back, grey with a light mark, the light front edge of its
+    // keyboard, and his hands on the keys at its ends, one lifted a whole pixel for a tap.
+    // `left` is the keyboard's first fine column. Creative Assist draws the same (sprite.ts edieLaptop).
+    static func laptop(_ left: Int, _ mood: Mood) -> [Edit] {
+        func keyHand(_ x: Int, _ lifted: Bool) -> [Edit] {
+            let top = lifted ? 25 : 27
+            return at("D", [top, top + 2], [x + 1, x + 2]) + at("D", [top + 1], Array(x...(x + 3)))
+        }
+        return at("B", Array(23...28), Array((left + 1)...(left + 10)))
+            + at("W", [25, 26], [left + 5, left + 6])
+            + at("W", [29], Array(left...(left + 11)))
+            + keyHand(left - 2, mood == .typeLeft)
+            + keyHand(left + 10, mood == .typeRight)
+    }
+
     // Standing: his legs are stubs under him.
     // `right`: facing screen right, as in the palette (2026-11-21, the user: "flip his
     // entire body"): all of him mirrored, leaf and clapperboard too. Either way his
@@ -495,7 +744,7 @@ enum EdieSprite {
     // the Timeline he keeps it behind him.
     static func face(_ mood: Mood, right: Bool = false) -> [String] {
         let rows = crowned(put(fine(art(mood), mood), at("D", [22, 23], leftLeg + rightLeg)))
-        let toRight = ahead(rows.map { String($0.reversed()) })
+        let toRight = put(ahead(rows.map { String($0.reversed()) }), isTyping(mood) ? laptop(8, mood) : arms(mood))
         return right ? toRight : toRight.map { String($0.reversed()) }
     }
 
@@ -523,7 +772,7 @@ enum EdieSprite {
         let legs = at("D", [22, 23, 24, 25], leftLeg) + at("D", [24, 25], [4, 5])
             + at("D", [22], rightLeg) + at("D", [23], shin)
             + at("D", [24, 25], (13...17).map { $0 + 2 * s })
-        return crowned(put(fine(Array(art(mood).prefix(seatRow)) + Array(repeating: "................", count: 2), mood), legs))
+        return put(crowned(put(fine(Array(art(mood).prefix(seatRow)) + Array(repeating: "................", count: 2), mood), legs)), isTyping(mood) ? laptop(4, mood) : arms(mood))
     }
 
     // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.

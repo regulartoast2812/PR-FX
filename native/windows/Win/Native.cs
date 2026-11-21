@@ -178,5 +178,17 @@ namespace PrFxShortcutListener
             keybd_event(VK_MENU_MASK, 0, 0, UIntPtr.Zero);
             keybd_event(VK_MENU_MASK, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         }
+
+        // Windows' Settings > Accessibility > Visual effects > "Animation effects" (SPI_GETCLIENTAREAANIMATION): off means
+        // reduce motion, and Edie holds still on the Timeline highlight (2026-11-22).
+        private const uint SPI_GETCLIENTAREAANIMATION = 0x1042;
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, [MarshalAs(UnmanagedType.Bool)] ref bool pvParam, uint fWinIni);
+
+        public static bool AnimationsOn()
+        {
+            var on = true;
+            return !SystemParametersInfo(SPI_GETCLIENTAREAANIMATION, 0, ref on, 0) || on;
+        }
     }
 }

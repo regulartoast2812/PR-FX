@@ -175,6 +175,64 @@ internal static class Check
         Expect(EdieNudges.Span(59) == "1 min" && EdieNudges.Span(3600) == "1 hr" && EdieNudges.Span(5400) == "1 hr 30 min", "nudges: spans read as minutes and hours");
         Expect(EdieNudges.Short(new string('a', 40)).Length == 30 && EdieNudges.Short("Short") == "Short", "nudges: long command names are shortened");
 
+
+        // ---- Edie's pace on the Timeline highlight (EdiePace, 2026-11-22): human timings, not a metronome.
+        {
+            var seed = 7UL;
+            double Rand() { seed = seed * 6364136223846793005UL + 1442695040888963407UL; return (seed >> 11) / (double)(1UL << 53); }
+            var pace = new EdiePace(Rand);
+            double t = 1000, end = t + 600;
+            var blinks = new System.Collections.Generic.List<(double At, double Shut)>();
+            var swings = new System.Collections.Generic.List<(int Swing, double Held)>();
+            bool wasBlink = false; int lastSwing = 0; double blinkAt = 0, swingAt = t; var wakes = 0; var shortest = double.MaxValue;
+            while (t < end)
+            {
+                var pose = pace.At(t, true, false);
+                if (pose.Blink && !wasBlink) blinkAt = t;
+                if (!pose.Blink && wasBlink) blinks.Add((blinkAt, t - blinkAt));
+                if (pose.Swing != lastSwing) { swings.Add((lastSwing, t - swingAt)); swingAt = t; lastSwing = pose.Swing; }
+                wasBlink = pose.Blink;
+                shortest = Math.Min(shortest, pose.Next - t);
+                t = pose.Next; wakes++;
+            }
+            Expect(blinks.Count >= 100 && blinks.Count <= 240, "edie pace: about one blink every 3-6 s (" + blinks.Count + " in 10 min, some twice)");
+            Expect(blinks.All(b => b.Shut >= 0.1 && b.Shut <= 0.15 + 1e-9), "edie pace: a blink is shut 0.10-0.15 s");
+            var gaps = blinks.Skip(1).Select((b, i) => b.At - blinks[i].At).ToList();
+            Expect(gaps.Count(g => g < 0.5) >= 5 && gaps.Where(g => g >= 0.5).All(g => g >= 3.1 && g <= 6.2), "edie pace: blinks 3-6 s apart at random, now and then twice in a row");
+            Expect(gaps.Where(g => g >= 0.5).Distinct().Count() > 20, "edie pace: no two waits alike (not every 4 s)");
+            var moving = swings.Where(s => s.Swing != 0).ToList();
+            Expect(moving.Count >= 40 && moving.All(s => s.Held >= 0.35 - 1e-9 && s.Held <= 0.6 + 1e-9), "edie pace: a leg swing holds out or back 0.35-0.6 s");
+            // The first still is his start; after a swing, its last 0.2-0.35 s pass runs into the still.
+            var stills = swings.Skip(1).Where(s => s.Swing == 0 && s.Held > 1).Select(s => s.Held).ToList();
+            Expect(stills.Count > 20 && stills.All(s => s >= 7 - 1e-9 && s <= 18 + 0.35 + 1e-9) && stills.Max() - stills.Min() > 4, "edie pace: 7-18 s between swings, irregular");
+            Expect(wakes < 600 * 1.5, "edie pace: wakes only when his pose changes (" + wakes + " in 10 min)");
+
+            // At his laptop: taps, pauses, a glance up now and then.
+            var typing = new EdiePace(Rand);
+            t = 5000; end = t + 300;
+            var held = new System.Collections.Generic.List<(EdiePace.Hands Hands, double Held)>();
+            var last = typing.At(t, true, true).Typing; var since = t;
+            while (t < end)
+            {
+                var pose = typing.At(t, true, true);
+                if (pose.Typing != last) { held.Add((last, t - since)); since = t; last = pose.Typing; }
+                t = pose.Next;
+            }
+            var taps = held.Where(h => h.Hands == EdiePace.Hands.Left || h.Hands == EdiePace.Hands.Right).ToList();
+            Expect(taps.Count > 200 && taps.All(h => h.Held >= 0.08 - 1e-9 && h.Held <= 0.15 + 1e-9), "edie pace: a tap lifts a hand 0.08-0.15 s (" + taps.Count + " in 5 min)");
+            Expect(held.All(h => h.Held >= 0.07 - 1e-9), "edie pace: no typing pose under 70 ms");
+            var pauses = held.Where(h => h.Hands == EdiePace.Hands.Down && h.Held >= 0.5).ToList();
+            Expect(pauses.Count > 40 && pauses.All(p => p.Held <= 2.0 + 0.13 + 1e-9), "edie pace: pauses of 0.5-2 s between bursts");
+            Expect(held.Count(h => h.Hands == EdiePace.Hands.Up) >= 3 && held.Where(h => h.Hands == EdiePace.Hands.Up).All(h => h.Held >= 0.45 - 1e-9 && h.Held <= 1 + 1e-9), "edie pace: glances up 0.45-1 s, now and then");
+            var held0 = new EdiePace(Rand).At(9000, false, true);
+            Expect(!held0.Blink && held0.Swing == 0 && held0.Typing == EdiePace.Hands.Down && held0.Next == 9001, "edie pace: reduced motion holds him still");
+            var beats = EdiePace.TalkBeats(Rand, 1.6);
+            Expect(beats.Sum() >= 1.6 && beats.Where((b, i) => i % 2 == 0).All(b => b >= 0.17 && b <= 0.32) && beats.Where((b, i) => i % 2 == 1).All(b => b >= 0.11 && b <= 0.24)
+                && EdiePace.TalkMouthOpen(beats, 0) && !EdiePace.TalkMouthOpen(beats, beats[0] + 0.001), "edie pace: talking, mouth open 0.17-0.32 s and shut 0.11-0.24 s in turn");
+            var lateAt = new EdiePace(Rand); lateAt.At(100, true, false);
+            Expect(lateAt.At(100 + 3600, true, false).Next > 100 + 3600, "edie pace: back after an hour, no racing through what he missed");
+        }
+
         try { Directory.Delete(support, true); } catch (Exception) { }
         Console.WriteLine(failures == 0 ? "\nAll Windows bridge checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;

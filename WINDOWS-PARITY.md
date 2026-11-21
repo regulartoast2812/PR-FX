@@ -42,6 +42,8 @@ using it.
 - **Edie's nudges** (`Core/EdieNudges.cs`, settings `edieNudges` and `edieNudgeMinutes`): "Still with me?" after a
   quiet stretch and "Welcome back!" after being away, in a speech bubble beside him on the highlight.
 - Edie's sprite is one port of the macOS `EdieSprite` (`Win/EdieSprite.cs`); the palette draws from it too.
+- Edie's pace (`Core/EdiePace.cs`, 2026-11-22) is the port of the macOS `EdiePace`: human timings for his blink, leg swing and
+  talking, and typing on a laptop during "Working on …". Built and installed on Windows; the Swift side is not compiled here.
 - **Connectors** (`connectors.json`, `app/src/connectors.mjs`, 2026-11-21, built on the Mac, not yet run here):
   Creative Assist and Edie detect the OS and find this OS's pieces from one table (the exe and its installed copy,
   the HKCU Run value, the `%APPDATA%` folders, the CSXS registry keys, Premiere 2025+ under `%ProgramFiles%\Adobe`),
