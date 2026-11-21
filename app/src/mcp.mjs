@@ -9,6 +9,9 @@ import readline from 'node:readline';
 import {
   health, statusLine, readSettings, readCatalog, findCommands, commandByName, runPayload, runAndWait, readJournal, startListener,
 } from './core.mjs';
+import { detect } from './connectors.mjs';
+
+const missingLines = report => report.connectors.filter(c => !c.ok && !c.optional).map(c => `- ${c.label}: ${c.detail}`);
 
 const VERSION = '0.4.0';
 
@@ -60,7 +63,11 @@ async function call(name, args) {
     if (!h) {
       const started = await startListener();
       try { h = await health(); } catch (_) {}
-      if (!h) return text('The PR FX listener is not running' + (started.ok ? ' and did not answer after starting.' : ': ' + started.message), true);
+      if (!h) {
+        const report = await detect({ health: null });
+        return text(['The PR FX listener is not running' + (started.ok ? ' and did not answer after starting.' : ': ' + started.message),
+          `On ${report.label}, what is missing:`, ...missingLines(report)].join('\n'), true);
+      }
     }
     const s = statusLine(h);
     const g = h.geometry || {};
@@ -70,6 +77,7 @@ async function call(name, args) {
       `Timeline detected: ${g.live ? 'yes' : g.saved ? 'remembered position only' : 'no'}`,
       `Export/Import mode: ${g.panelsHidden ? 'yes (plain-key shortcuts paused)' : 'no'}`,
       `Commands available: ${readCatalog().length}`,
+      ...await detect({ health: h }).then(r => r.ready ? [`${r.label}: every connector in place`] : [`${r.label}, not in place:`, ...missingLines(r)]),
       'Agent runs work whatever the shortcut scope is; they act on the clips selected in the Timeline.',
     ].join('\n'));
   }

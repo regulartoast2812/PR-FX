@@ -15,7 +15,7 @@ for (const f of ['ui/app.js', 'ui/overlay.js', 'ui/web-bridge.js']) {
   try { execFileSync(process.execPath, ['--check', path.join(root, f)]); check(true, 'parses: ' + f); }
   catch (e) { check(false, 'parses: ' + f + '\n' + e.stderr); }
 }
-for (const f of ['src/core.mjs', 'src/service.mjs', 'src/mcp.mjs']) {
+for (const f of ['src/core.mjs', 'src/service.mjs', 'src/mcp.mjs', 'src/connectors.mjs']) {
   try { execFileSync(process.execPath, ['--check', path.join(root, f)]); check(true, 'parses: ' + f); }
   catch (e) { check(false, 'parses: ' + f + '\n' + e.stderr); }
 }
@@ -146,6 +146,32 @@ check(items.length === 3, 'restarted sequence opens a new item');
 check(items[0].name === 'Dump' && items[0].state === 'pending', 'newest item first and still pending');
 check(items[2].state === 'ok' && items[2].ms === 200 && items[2].msg === 'Applied Grow to 1 selected clip.', 'result parsed with timing');
 check(items[0].id !== items[2].id, 'ids differ across restarts');
+
+// Connectors: one table (connectors.json) per OS, which every side follows.
+const conn = JSON.parse(readRepo('connectors.json'));
+const connKeys = ['label', 'support', 'logs', 'cepExtensions', 'uxpExternal', 'premiere', 'listener', 'autostart', 'cepDebug', 'overlay'];
+for (const os of ['darwin', 'win32']) for (const k of connKeys) check(conn[os] && conn[os][k] != null, `connectors.json ${os} has ${k}`);
+check(conn.premiere.minYear === 2025 && conn.premiere.cepVersions.includes(12), 'connectors target Premiere 2025+ on CEP 12');
+check(conn.darwin.overlay === 'listener' && conn.win32.overlay === 'listener', 'overlay: the listener draws it on both OSes');
+check(conn.win32.listener.install && conn.win32.listener.paths[0].startsWith(conn.win32.listener.install.to), 'Windows runs the installed copy first');
+const appJs = readRepo('client/app.js');
+check(appJs.includes(`WINDOWS_RUN_VALUE = '${conn.win32.autostart.value}'`) && appJs.includes(conn.win32.autostart.key.replace(/\\/g, '\\\\')), 'panel Run key matches connectors.json');
+check(appJs.includes(conn.darwin.autostart.path.replace('~/', '/')), 'panel LaunchAgent matches connectors.json');
+check(appJs.includes(`'${conn.win32.listener.process}'`), 'panel listener exe matches connectors.json');
+check(readRepo('native/windows/Core/Support.cs').includes('"PR FX Palette"') && conn.win32.support.endsWith('\\PR FX Palette'), 'Windows listener support folder matches connectors.json');
+// The Windows table expands to Windows paths, run from any OS.
+const winOut = execFileSync(process.execPath, ['--input-type=module', '-e', `
+  import { expand, platform } from ${JSON.stringify('file://' + path.join(root, 'src', 'connectors.mjs'))};
+  const w = platform('win32');
+  console.log(JSON.stringify({ support: expand(w.support, {}, 'win32'), exe: expand(w.listener.paths[1], { ext: 'C:\\\\X' }, 'win32'),
+    pr: expand(w.premiere[0], { year: 2025 }, 'win32'), csxs: expand(w.cepDebug.key, { v: 12 }, 'win32'), none: platform('linux') }));
+`], { env: { ...process.env, APPDATA: 'C:\\Users\\u\\AppData\\Roaming', ProgramFiles: 'C:\\Program Files' } }).toString();
+const win = JSON.parse(winOut);
+check(win.support === 'C:\\Users\\u\\AppData\\Roaming\\PR FX Palette', 'win32 support folder expands');
+check(win.exe === 'C:\\X\\native\\windows\\build\\PRFXShortcutListener.exe', 'win32 listener path expands with backslashes');
+check(win.pr === 'C:\\Program Files\\Adobe\\Adobe Premiere Pro 2025\\Adobe Premiere Pro.exe', 'win32 Premiere 2025 path expands');
+check(win.csxs === 'HKCU\\Software\\Adobe\\CSXS.12', 'win32 CEP debug key expands');
+check(win.none === null, 'unsupported OS has no connectors');
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll app checks passed');
 process.exit(failures ? 1 : 0);

@@ -47,7 +47,7 @@
     if (location.pathname.indexOf('/overlay.html') >= 0) return;
     if (!source) {
       source = new EventSource(base + 'events', { withCredentials: true });
-      ['health', 'overlay-state', 'files-changed', 'displays', 'journal-changed'].forEach(function (name) {
+      ['health', 'overlay-state', 'files-changed', 'displays', 'journal-changed', 'connectors'].forEach(function (name) {
         source.addEventListener(name, function (e) {
           var data = null;
           try { data = JSON.parse(e.data); } catch (_) {}
@@ -72,11 +72,13 @@
     restartListener: function () { return call('listener:restart'); },
     open: function (which) { return call('open', { which: which }); },
     accessibility: function () { return call('accessibility'); },
+    connectors: function () { return call('connectors'); },
     onHealth: function (h) { on('health', h); },
     onOverlay: function (h) { window.__toolOverlay = function (state) { try { h(state); } catch (err) { console.error(err); } }; },
     onOverlayState: function (h) { on('overlay-state', h); },
     onFilesChanged: function (h) { on('files-changed', h); },
     onDisplays: function (h) { on('displays', h); },
     onJournalChanged: function (h) { on('journal-changed', h); },
+    onConnectors: function (h) { on('connectors', h); },
   };
 })();

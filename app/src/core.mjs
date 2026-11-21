@@ -3,23 +3,20 @@
 // else. No Electron here: paths, settings, the listener's bridge, the journal.
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import http from 'node:http';
-import { execFile, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { paths, extensionDir, platform, connectListener, stopListener, table } from './connectors.mjs';
 
 export const IS_WIN = process.platform === 'win32';
 export const IS_MAC = process.platform === 'darwin';
-export const PORT = 27389;
-
-const here = path.dirname(fileURLToPath(import.meta.url));
+export const PORT = table.bridge.port;
 
 // MARK: Paths (the same ones client/app.js and the listeners use)
 
-export const supportDir = IS_WIN
-  ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'PR FX Palette')
-  : path.join(os.homedir(), 'Library', 'Application Support', 'PR FX Palette');
-export const logsDir = IS_WIN ? path.join(supportDir, 'Logs') : path.join(os.homedir(), 'Library', 'Logs');
+// Per-OS paths come from connectors.json (see connectors.mjs), shared with
+// the Windows listener and the CEP panel.
+export const supportDir = paths.support;
+export const logsDir = paths.logs;
 export const files = {
   settings: path.join(supportDir, 'settings.json'),
   backup: path.join(supportDir, 'settings.backup.json'),
@@ -30,11 +27,7 @@ export const files = {
   listenerLog: path.join(logsDir, 'PR FX Shortcut Listener.log'),
 };
 
-/** The extension folder: this file is <ext>/app/src/core.mjs. */
-export function extensionDir() {
-  const dir = path.resolve(here, '..', '..');
-  return fs.existsSync(path.join(dir, 'jsx', 'host.jsx')) ? dir : '';
-}
+export { extensionDir };
 
 /** Install/update the unpacked UXP companion without restarting Premiere.
  * Creative Assist calls this when the PR FX tool starts, so installing the
@@ -47,13 +40,10 @@ export function ensureUxpInstalled() {
   if (!fs.existsSync(manifestFile)) return { ok: false, message: 'This PR FX build has no UXP runtime.' };
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-    const adobe = IS_WIN
-      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Adobe')
-      : path.join(os.homedir(), 'Library', 'Application Support', 'Adobe');
     const folderName = `${manifest.id}_${manifest.version}`;
-    const external = path.join(adobe, 'UXP', 'Plugins', 'External');
+    const external = paths.uxpExternal;
     const destination = path.join(external, folderName);
-    const infoDir = path.join(adobe, 'UXP', 'PluginsInfo', 'v1');
+    const infoDir = path.join(external, '..', '..', 'PluginsInfo', 'v1');
     const infoFile = path.join(infoDir, 'premierepro.json');
     fs.mkdirSync(external, { recursive: true });
     fs.mkdirSync(infoDir, { recursive: true });
@@ -286,47 +276,14 @@ export async function runAndWait(command, { timeoutMs = 20000 } = {}) {
 
 // MARK: Listener launch
 
-export function startListener() {
-  return new Promise(resolve => {
-    const ext = extensionDir();
-    if (IS_MAC) {
-      const script = ext && path.join(ext, 'native', 'start-listener-macos.sh');
-      if (!script || !fs.existsSync(script)) return resolve({ ok: false, message: 'Could not find the PR FX extension folder.' });
-      execFile('/bin/zsh', [script], { timeout: 20000 }, error => resolve(error ? { ok: false, message: 'The listener did not start. Open the listener log for details.' } : { ok: true }));
-    } else if (IS_WIN) {
-      const bin = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'PR FX Palette', 'bin');
-      const installed = path.join(bin, 'PRFXShortcutListener.exe');
-      const shipped = ext && path.join(ext, 'native', 'windows', 'build', 'PRFXShortcutListener.exe');
-      // Put the shipped exe in place when the copy is missing or from another build, as the panel's Install and the
-      // engine do, so the extension's own exe is never the one running (and never locked during an update).
-      const stamp = dir => { try { return fs.readFileSync(path.join(dir, 'listener-build.txt'), 'utf8').replace(/^﻿/, '').trim(); } catch { return ''; } };
-      const shippedBuild = shipped ? stamp(path.dirname(shipped)) : '';
-      if (shipped && fs.existsSync(shipped) && (!fs.existsSync(installed) || (shippedBuild && shippedBuild !== stamp(bin)))) {
-        try {
-          fs.mkdirSync(bin, { recursive: true });
-          fs.copyFileSync(shipped, installed);
-          if (shippedBuild) fs.writeFileSync(path.join(bin, 'listener-build.txt'), shippedBuild);
-        } catch { /* a running copy holds the file: start what's there */ }
-      }
-      const exe = fs.existsSync(installed) ? installed : shipped;
-      if (!exe || !fs.existsSync(exe)) return resolve({ ok: false, message: 'The listener is not installed. Use Install in the Premiere panel once.' });
-      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      setTimeout(() => resolve({ ok: true }), 1200);
-    } else resolve({ ok: false, message: 'PR FX runs on Mac and Windows only.' });
-  });
-}
+// Whichever listener this OS has (connectors.json): the Swift app through its
+// start script on macOS, the exe on Windows.
+export function startListener() { return connectListener(); }
 
-export function restartListener() {
-  return new Promise(resolve => {
-    if (IS_MAC) {
-      const ext = extensionDir();
-      const stop = ext && path.join(ext, 'native', 'stop-listener-macos.sh');
-      if (!stop || !fs.existsSync(stop)) return startListener().then(resolve);
-      execFile('/bin/zsh', [stop], { timeout: 10000 }, () => setTimeout(() => startListener().then(resolve), 400));
-    } else if (IS_WIN) {
-      execFile('taskkill', ['/IM', 'PRFXShortcutListener.exe', '/F'], { windowsHide: true }, () => setTimeout(() => startListener().then(resolve), 600));
-    } else resolve({ ok: false, message: 'PR FX runs on Mac and Windows only.' });
-  });
+export async function restartListener() {
+  await stopListener();
+  await new Promise(r => setTimeout(r, 500));
+  return connectListener();
 }
 
 // MARK: Showing files
@@ -337,7 +294,8 @@ export function reveal(target, folder) {
 }
 
 export function openAccessibility() {
-  if (IS_MAC) spawn('open', ['x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'], { detached: true, stdio: 'ignore' }).unref();
+  const pane = platform() && platform().accessibility;
+  if (pane && IS_MAC) spawn('open', [pane], { detached: true, stdio: 'ignore' }).unref();
 }
 
 /** One line for a person: is it working right now. */

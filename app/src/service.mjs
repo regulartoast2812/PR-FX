@@ -12,20 +12,31 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import {
-  IS_MAC, supportDir, logsDir, files, readJSON, readSettings, readCatalog, writeSettings, lastOwnWrite, control, health as getHealth,
+  supportDir, logsDir, files, readJSON, readSettings, readCatalog, writeSettings, lastOwnWrite, control, health as getHealth,
   readJournal, startListener, restartListener, reveal, openAccessibility, extensionDir, statusLine,
   ensureUxpInstalled,
 } from './core.mjs';
+import { detect, platform, connectListener } from './connectors.mjs';
+
+const CONNECTOR_GAP = { premiere: 'not found', panel: 'not installed', cepDebug: 'off', listener: 'not installed', autostart: 'off', accessibility: 'not granted' };
 
 export function createService(ctx) {
   const uxp = ensureUxpInstalled();
   const stateFile = path.join(ctx.dataDir, 'state.json');
   const saved = readJSON(stateFile, {}) || {};
-  // On macOS the listener draws the box itself (PRFXTimelineHighlight.swift):
-  // native, at screen-saver level, from the very state each keystroke is judged
-  // by. The switch is the `timelineHighlight` setting. Elsewhere the host's
-  // overlay window draws it from health.
-  let overlayOn = IS_MAC ? readSettings().timelineHighlight === 'on' : saved.overlay === true;
+  // Who draws the Timeline box comes from connectors.json. "listener": the
+  // macOS listener draws it itself (PRFXTimelineHighlight.swift), native, at
+  // screen-saver level, from the very state each keystroke is judged by; the
+  // switch is the `timelineHighlight` setting. "host": Creative Assist's
+  // overlay window draws it from health (Windows).
+  const nativeOverlay = (platform() || {}).overlay === 'listener';
+  let overlayOn = nativeOverlay ? readSettings().timelineHighlight === 'on' : saved.overlay === true;
+  // What this OS connects to and whether each piece is there; refreshed in
+  // the background so summary() stays synchronous.
+  let connectors = null, detecting = null, detectedAt = 0;
+  const redetect = () => detecting || (detecting = detect({ health }).then(report => {
+    connectors = report; detectedAt = Date.now(); ctx.emit('connectors', report); return report;
+  }).catch(() => connectors).finally(() => { detecting = null; }));
   let health = null, healthError = '', timer = null, stopped = false;
   const watchers = [];
 
@@ -44,6 +55,7 @@ export function createService(ctx) {
     try { health = await getHealth(); healthError = ''; }
     catch (error) { health = null; healthError = error.message; }
     ctx.emit('health', { health, error: healthError, at: Date.now() });
+    if (!connectors || Date.now() - detectedAt > 30_000 || !!health !== connectors.connectors.some(c => c.id === 'bridge' && c.ok)) redetect();
     pushOverlay();
     clearTimeout(timer);
     timer = setTimeout(poll, overlayOn ? 200 : ctx.watching() > 0 ? 400 : 2000);
@@ -52,7 +64,7 @@ export function createService(ctx) {
   function pushOverlay() {
     const g = health && health.geometry;
     // Only over Premiere: a box drawn over another app would be a lie.
-    if (IS_MAC || !overlayOn || !g || !g.premiereFrontmost) return ctx.overlay(null);
+    if (nativeOverlay || !overlayOn || !g || !g.premiereFrontmost) return ctx.overlay(null);
     // Rectangles stay in the listener's coordinates ([x, y, w, h]; points on
     // macOS, physical pixels on Windows); the host's window converts them.
     ctx.overlay({ live: g.live || null, saved: g.saved || null, window: g.window || null, click: g.click || null,
@@ -61,7 +73,7 @@ export function createService(ctx) {
 
   function setOverlay(on) {
     overlayOn = !!on;
-    if (IS_MAC) writeSettings({ timelineHighlight: overlayOn ? 'on' : 'off' });
+    if (nativeOverlay) writeSettings({ timelineHighlight: overlayOn ? 'on' : 'off' });
     else save({ overlay: overlayOn });
     ctx.emit('overlay-state', overlayOn);
     pushOverlay();
@@ -129,8 +141,10 @@ export function createService(ctx) {
     state: () => ({
       platform: process.platform, supportDir, logsDir,
       settings: readSettings(), catalog: readCatalog(), overlay: overlayOn,
-      extensionDir: extensionDir(), displays: ctx.displays ? ctx.displays() : [], media: media(), uxp,
+      extensionDir: extensionDir(), displays: ctx.displays ? ctx.displays() : [], media: media(), uxp, connectors,
     }),
+    connectors: () => redetect(),
+    'connectors:connect': async () => { const out = await connectListener(); clearTimeout(timer); timer = setTimeout(poll, 50); return { ...out, connectors: await redetect() }; },
     'settings:write': patch => writeSettings(patch && typeof patch === 'object' ? patch : {}),
     'media:detect': () => {
       const found = media(), patch = {};
@@ -185,6 +199,14 @@ export function createService(ctx) {
     accessibility: () => { openAccessibility(); return true; },
   };
 
+  // Offline, the card says which connector is missing first (Premiere, the
+  // listener itself…) rather than only "Listener offline".
+  function offlineLabel(label) {
+    if (health || !connectors) return label;
+    const gap = connectors.connectors.find(c => !c.ok && !c.optional && c.id !== 'bridge');
+    return gap ? `${label} · ${gap.label}: ${CONNECTOR_GAP[gap.id] || 'missing'}` : label;
+  }
+
   watch();
   poll();
 
@@ -204,8 +226,10 @@ export function createService(ctx) {
         .map(l => ({ time: l.time, outcome: l.event, command: l.command, detail: l.detail.replace(/^\d+ms\s*/, '') }));
       const g = health && health.geometry;
       return {
-        ok: !!health, kind: s.kind, label: s.label, error: healthError,
+        ok: !!health, kind: s.kind, label: offlineLabel(s.label), error: healthError,
         installed: !!extensionDir(), overlay: overlayOn, commands: readCatalog().length, uxp,
+        connectors: connectors && { platform: connectors.platform, label: connectors.label, ready: connectors.ready,
+          missing: connectors.connectors.filter(c => !c.ok && !c.optional).map(c => c.label) },
         today: { ok: count('ok'), failed: count('failed') + count('expired'), fired: count('fired') },
         geometry: g ? { live: g.live || null, saved: g.saved || null, window: g.window || null, click: g.click || null, premiereFrontmost: !!g.premiereFrontmost, panelsHidden: !!g.panelsHidden } : null,
         recent,

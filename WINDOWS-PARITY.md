@@ -34,6 +34,10 @@ using it.
 - **Edie's nudges** (`Core/EdieNudges.cs`, settings `edieNudges` and `edieNudgeMinutes`): "Still with me?" after a
   quiet stretch and "Welcome back!" after being away, in a speech bubble beside him on the highlight.
 - Edie's sprite is one port of the macOS `EdieSprite` (`Win/EdieSprite.cs`); the palette draws from it too.
+- **Connectors** (`connectors.json`, `app/src/connectors.mjs`, 2026-11-21, built on the Mac, not yet run here):
+  Creative Assist and Edie detect the OS and find this OS's pieces from one table (the exe and its installed copy,
+  the HKCU Run value, the `%APPDATA%` folders, the CSXS registry keys, Premiere 2025+ under `%ProgramFiles%\Adobe`),
+  show each as found or missing on the PR FX page, and put the copy in place and start it when the bridge is down.
 - The palette (Ctrl+Space) opens and runs commands; the catalog CEP pushes is cached.
 - The CEP panel ("Edie" in Window ▸ Extensions) draws and runs commands when docked. Floating on its own it can come
   up blank on this machine: dock it, or close and reopen it.
@@ -48,5 +52,7 @@ using it.
 - Plain-key shortcuts end to end with real key presses (the hook ignores synthesised keys, so this needs a person).
 - Effect, video and audio transition, custom Function, selection errors and repeated bulk applies.
 - Bundled-preset roots (`prfx.bundledPresetFiles`) are guessed.
+- `detect()` on Windows: the `reg.exe` queries for CSXS and the Run value, and Premiere's install path.
+- Connectors `detect()` here: the `reg.exe` queries for CSXS and the Run value, and Premiere's install path.
 - A Windows CI build and a code-signed exe before distributing.
 - The Edie UXP demo needs Premiere 26.3 or later; it was refused on 26.0.1, as expected.

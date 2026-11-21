@@ -1,0 +1,41 @@
+{
+  "_": "What PR FX connects to on each OS. One table for every side: app/src/connectors.mjs (Creative Assist, MCP) reads it, and the Windows listener and CEP panel name the same paths. ~ is the home folder, %VAR% an environment variable, {ext} the PR FX extension folder, {year} a Premiere release year. overlay says who draws the Timeline highlight: listener (natively, both OSes since 2026-11-21) or host (Creative Assist's overlay window). listener.install, where present, is copied into place before starting, so the extension's own exe never runs and is never locked during an update. Change a path here, not in code.",
+  "bridge": { "port": 27389, "health": "/health" },
+  "premiere": { "minYear": 2025, "cepVersions": [9, 10, 11, 12, 13] },
+  "darwin": {
+    "label": "macOS",
+    "support": "~/Library/Application Support/PR FX Palette",
+    "logs": "~/Library/Logs",
+    "cepExtensions": "~/Library/Application Support/Adobe/CEP/extensions",
+    "uxpExternal": "~/Library/Application Support/Adobe/UXP/Plugins/External",
+    "premiere": ["/Applications/Adobe Premiere Pro {year}/Adobe Premiere Pro {year}.app"],
+    "listener": {
+      "kind": "app",
+      "paths": ["{ext}/native/build/PR FX Shortcut Listener.app"],
+      "start": ["/bin/zsh", "{ext}/native/start-listener-macos.sh"],
+      "stop": ["/bin/zsh", "{ext}/native/stop-listener-macos.sh"]
+    },
+    "autostart": { "kind": "launchagent", "path": "~/Library/LaunchAgents/com.prfx.shortcut-listener.plist" },
+    "cepDebug": { "kind": "defaults", "domain": "com.adobe.CSXS.{v}", "key": "PlayerDebugMode" },
+    "overlay": "listener",
+    "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+  },
+  "win32": {
+    "label": "Windows",
+    "support": "%APPDATA%\\PR FX Palette",
+    "logs": "%APPDATA%\\PR FX Palette\\Logs",
+    "cepExtensions": "%APPDATA%\\Adobe\\CEP\\extensions",
+    "uxpExternal": "%APPDATA%\\Adobe\\UXP\\Plugins\\External",
+    "premiere": ["%ProgramFiles%\\Adobe\\Adobe Premiere Pro {year}\\Adobe Premiere Pro.exe"],
+    "listener": {
+      "kind": "exe",
+      "process": "PRFXShortcutListener.exe",
+      "paths": ["%LOCALAPPDATA%\\PR FX Palette\\bin\\PRFXShortcutListener.exe", "{ext}\\native\\windows\\build\\PRFXShortcutListener.exe"],
+      "install": { "from": "{ext}\\native\\windows\\build", "to": "%LOCALAPPDATA%\\PR FX Palette\\bin", "file": "PRFXShortcutListener.exe", "stamp": "listener-build.txt" }
+    },
+    "autostart": { "kind": "run-key", "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "value": "PR FX Shortcut Listener" },
+    "cepDebug": { "kind": "reg", "key": "HKCU\\Software\\Adobe\\CSXS.{v}", "value": "PlayerDebugMode" },
+    "overlay": "listener",
+    "accessibility": null
+  }
+}

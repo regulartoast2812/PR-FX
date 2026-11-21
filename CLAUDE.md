@@ -197,7 +197,8 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   Check: `swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXPanelPixels.swift tools/check-panel-pixels.swift -o /tmp/prfx-check-panel-pixels && /tmp/prfx-check-panel-pixels`
 
 Setting `timelineHighlight: "on"|"off"`. On macOS the PR FX page's overlay switch
-writes it. Creative Assist's Electron overlay is now used only on Windows.
+writes it. Windows' listener draws its own too (`Win/TimelineHighlight.cs`), so Creative Assist's
+Electron overlay is used only where connectors.json says `"overlay": "host"` (no OS today).
 
 ### CEP vs host vs listener changes
 - `host.jsx` / `app.js` → reload the settings panel, **no rebuild**
@@ -230,6 +231,35 @@ writes it. Creative Assist's Electron overlay is now used only on Windows.
   removes a slow low-level hook. It is reinstalled on every Premiere activation.
   It ignores injected keys, so Ctrl+Space can't be tested by sending keys.
 - Bundled-preset roots on Windows (`prfx.bundledPresetFiles`) are guessed.
+
+---
+
+## Connectors: what PR FX connects to on each OS (2026-11-21)
+
+`connectors.json` (repo root) is the one table of per-OS pieces: support and log
+folders, CEP and UXP install folders, where Premiere 2025+ is installed, the
+listener (Swift .app via its start/stop scripts on macOS, the exe on Windows),
+autostart (LaunchAgent vs HKCU Run), CEP debug mode (`defaults` vs `reg`), who
+draws the Timeline highlight (`listener` on both since Windows got its own;
+`host` would be Creative Assist's overlay window), the Accessibility pane (macOS
+only) and, on Windows, `listener.install`: the stamped copy put in
+`%LOCALAPPDATA%\PR FX Palette\bin` before starting, as the engine does.
+
+- `app/src/connectors.mjs` reads it for this OS: `paths`, `listenerPath()`,
+  `premiereInstalls()`, `cepDebugVersions()`, `autostartOn()`, `detect()` (a
+  read-only report, one item per connector with `ok` and a plain detail) and
+  `connectListener()` / `stopListener()`. core.mjs takes its paths and listener
+  start/restart from it; service.mjs picks the overlay provider from it and
+  serves the report (`state.connectors`, routes `connectors` and
+  `connectors:connect`, `summary().connectors`); the MCP `premiere_status` lists
+  what's missing.
+- Don't branch on `process.platform` for a path or a launcher in new Node code:
+  add it to both OS entries in `connectors.json`. `npm run check` fails if an
+  entry is incomplete, if the Windows templates don't expand to Windows paths,
+  or if the CEP panel's Run key, LaunchAgent or exe name, or the Windows
+  listener's support folder, drift from the table.
+- Windows side: keep `native/windows/Core/Support.cs` and the panel's
+  `windowsListenerSteps` on the `win32` entry's paths.
 
 ---
 

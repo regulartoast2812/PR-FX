@@ -13,6 +13,7 @@ let displays = [];
 let health = null;
 let journal = [];
 let media = null;
+let connectors = null;
 const undoStack = [];
 const isMac = () => platform === 'darwin';
 
@@ -215,6 +216,33 @@ function renderFacts() {
   for (const [label, value, cls] of rows) {
     list.append(el('dt', '', label));
     list.append(el('dd', cls, value));
+  }
+}
+
+// MARK: Connectors: what PR FX connects to on this OS (connectors.json)
+
+const CONNECTOR_VALUE = {
+  premiere: c => c.ok ? c.installs.map(i => i.year).join(', ') : 'not found',
+  panel: c => c.ok ? 'installed' : 'not installed',
+  cepDebug: c => c.ok ? 'on' : 'off',
+  uxp: c => c.ok ? 'installed' : 'not installed',
+  listener: c => c.ok ? 'found' : 'missing',
+  bridge: c => c.ok ? 'answering' : 'not answering',
+  autostart: c => c.ok ? 'on' : 'off',
+  overlay: c => c.provider === 'listener' ? 'native' : 'Creative Assist',
+  accessibility: c => c.ok ? 'granted' : 'not granted',
+};
+
+function renderConnectors() {
+  const list = $('connectors');
+  list.textContent = '';
+  if (!connectors) { $('connectorsTitle').textContent = 'This computer'; return; }
+  const missing = connectors.connectors.filter(c => !c.ok && !c.optional);
+  $('connectorsTitle').textContent = connectors.label + (connectors.ready ? ' · all connected' : ` · ${missing.length} missing`);
+  for (const c of connectors.connectors) {
+    const dd = el('dd', c.ok ? (c.id === 'overlay' ? '' : 'good') : c.optional ? '' : 'bad', (CONNECTOR_VALUE[c.id] || (x => x.ok ? 'ok' : 'missing'))(c));
+    dd.title = c.detail;
+    list.append(el('dt', '', c.label), dd);
   }
 }
 
@@ -637,6 +665,7 @@ function renderAll() {
   renderHero();
   renderMap();
   renderFacts();
+  renderConnectors();
   renderSettings();
   if (view === 'commands') renderCommands();
 }
@@ -662,6 +691,7 @@ api.onFilesChanged(async ({ settings: s, catalog: c }) => {
 });
 api.onDisplays(d => { displays = d; renderMap(); });
 api.onJournalChanged(() => refreshJournal());
+api.onConnectors(report => { connectors = report; renderConnectors(); });
 
 (async () => {
   const state = await api.state();
@@ -670,6 +700,8 @@ api.onJournalChanged(() => refreshJournal());
   media = state.media;
   catalog = state.catalog || [];
   displays = state.displays || [];
+  connectors = state.connectors || null;
+  if (!connectors) api.connectors().then(report => { connectors = report; renderConnectors(); }).catch(() => {});
   document.body.classList.add(isMac() ? 'mac' : 'win');
   $('undoKey').textContent = isMac() ? '⌘Z' : 'Ctrl+Z';
   $('overlayToggle').checked = state.overlay;
