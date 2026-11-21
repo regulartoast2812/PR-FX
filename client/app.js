@@ -98,7 +98,7 @@
   var paletteTitle = document.getElementById('palette-title');
   var paletteCharacter = document.getElementById('palette-character');
   var brandFace = document.querySelector('.brand-face');
-  // The palette has its own Edie, facing right toward the commands (2026-11-21); the
+  // The palette has its own Edie, flipped to face right toward the commands (2026-11-21); the
   // header's copy is only a fallback.
   if (paletteCharacter && brandFace && !paletteCharacter.firstElementChild) {
     paletteCharacter.appendChild(brandFace.cloneNode(true));
