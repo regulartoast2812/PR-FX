@@ -29,6 +29,19 @@ export function findBash(env = process.env) {
   return places.find(p => p && fs.existsSync(p)) || '';
 }
 
+/**
+ * WhisperX's own Python writes UTF-8, whoever starts it (2026-11-22). On Windows Python writes to a pipe in cp1252, and
+ * WhisperX prints each line it transcribes, so the first Chinese or Vietnamese line ended a run with "UnicodeEncodeError:
+ * 'charmap' codec". The panel sets PYTHONUTF8 too, but a .pth line runs at every start of this environment's Python, so
+ * no caller can forget it. Harmless on the Mac, where output is UTF-8 already.
+ */
+export const UTF8_PTH = "import sys; [s.reconfigure(encoding='utf-8', errors='replace') for s in (sys.stdout, sys.stderr) if hasattr(s, 'reconfigure')]\n";
+export function ensureUtf8(envDir) {
+  const lib = process.platform === 'win32' ? [path.join(envDir, 'Lib', 'site-packages')]
+    : (() => { try { return fs.readdirSync(path.join(envDir, 'lib')).filter(d => d.startsWith('python')).map(d => path.join(envDir, 'lib', d, 'site-packages')); } catch (_) { return []; } })();
+  for (const dir of lib) { try { if (fs.existsSync(dir)) fs.writeFileSync(path.join(dir, 'prfx_utf8.pth'), UTF8_PTH); } catch (_) { /* the panel's PYTHONUTF8 still covers it */ } }
+}
+
 export function parseLine(line) {
   const text = String(line || '').trim();
   if (!text) return null;
@@ -221,6 +234,7 @@ export function createMediaSetup({ supportDir, writeSettings, readSettings, pkg 
     enter(j, 'check');
     const check = await runStep(envWhisper, ['--help'], null, 120_000);
     if (!check.ok || !fs.existsSync(envWhisper)) return finish(j, false, `WhisperX installed but doesn't run: ${check.why}`);
+    ensureUtf8(envDir);
     writeSettings({ whisperCommand: quoted(envWhisper) });
     finish(j, true, `WhisperX is ready (its own Python ${py.version === 'env' ? '' : py.version + ' '}environment).`.replace('  ', ' '));
   }
