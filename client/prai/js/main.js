@@ -1139,7 +1139,9 @@
       "if [ -z \"$FFMPEG\" ]; then",
       "  echo 'ffmpeg not found. Click Install ffmpeg, run Detect, or paste the ffmpeg path.' >&2",
       "  exit 127",
-      "fi"
+      "fi",
+      // WhisperX decodes audio by running "ffmpeg" itself: put the one found here on its PATH too.
+      "PATH=\"$(dirname \"$FFMPEG\"):$PATH\"; export PATH"
     ].join("\n");
   }
 
@@ -4556,6 +4558,10 @@
     } catch (_) {}
     try {
       var pathname = decodeURIComponent(String(window.location.pathname || ""));
+      // Windows: location.pathname is "/C:/Users/...". Left as is, path.join made it "\C:\Users\...", and
+      // ExtendScript's $.evalFile could not load jsx/prai/host.jsx from that, so every project read failed (seen
+      // as "No active sequence audio tracks" with audio on A1, 2026-11-21). The Mac's "/Users/..." is untouched.
+      pathname = pathname.replace(/^\/(?=[A-Za-z]:)/, "");
       return path.dirname(pathname);
     } catch (_) {}
     return "/Library/Application Support/Adobe/CEP/extensions/PR FX/client/prai";
@@ -5587,7 +5593,9 @@
       throw new Error("Node.js is not available in this CEP panel. Check manifest CEFCommandLine.");
     }
     if (!state || !state.activeSequence || !state.activeSequence.audioTracks) {
-      throw new Error("No active sequence audio tracks are available. Refresh the project and try again.");
+      throw new Error(lastProjectContextError
+        ? "Could not read the Premiere project: " + lastProjectContextError
+        : "No active sequence audio tracks are available. Refresh the project and try again.");
     }
     if (action.type === "transcribeAudioTrackToSrt" && action.allTracks !== false && !audioExportTrackWasRequested(action)) {
       return buildSequenceAudioExport(action, nodeRequire);
@@ -5917,7 +5925,10 @@
     if ((!state || !state.activeSequence || !state.activeSequence.audioTracks) && !action.__projectRead) {
       return refreshProjectContextForWork({ quiet: true, skipComponents: true }).then(function () {
         if (!state || !state.activeSequence) {
-          throw new Error("No sequence is open. Open one in Premiere's Timeline, then run this again.");
+          // A read that failed says why (host script not loaded, CEP unavailable), not "no sequence".
+          throw new Error(lastProjectContextError
+            ? "Could not read the Premiere project: " + lastProjectContextError
+            : "No sequence is open. Open one in Premiere's Timeline, then run this again.");
         }
         action.__projectRead = true;
         return runLocalAudioSubtitleAction(action);

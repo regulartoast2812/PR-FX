@@ -71,7 +71,7 @@
     {
       name: "create_optimized_subtitles",
       mutates: true,
-      description: "Create finished subtitles deterministically: transcribe the active sequence audio with Whisper, run Edie's Optimized Text splitter using Whisper word timings, save the optimized SRT next to the Premiere project (or ~/Movies/Edie Captions), then import that exact optimized SRT as a caption track unless import_to_timeline is false. Use this for requests to create subtitles/captions and save an SRT. Never substitute Audio + Text, which is a script-driven cutting workflow.",
+      description: "Create finished subtitles deterministically: transcribe the active sequence audio with Whisper, run Edie's Optimized Text splitter using Whisper word timings, save the optimized SRT next to the Premiere project (or Edie Captions in the Movies folder, Videos on Windows), then import that exact optimized SRT as a caption track unless import_to_timeline is false. Use this for requests to create subtitles/captions and save an SRT. Never substitute Audio + Text, which is a script-driven cutting workflow.",
       inputSchema: obj({
         audio_track: { type: "string", description: "Only this track, e.g. A1. Omit for the whole mix." },
         start_seconds: { type: "number", description: "Start of the range in sequence seconds." },
@@ -524,7 +524,9 @@
             if (ctx && ctx.project_path) {
               return { folder: path.dirname(ctx.project_path), why: "next to the project file", sequence: ctx.active_sequence && ctx.active_sequence.name };
             }
-            return { folder: path.join(os.homedir(), "Movies", "Edie Captions"), why: "the project has not been saved yet, so ~/Movies/Edie Captions" };
+            // The Mac keeps videos in ~/Movies, Windows in Videos.
+            var videos = os.platform() === "win32" ? "Videos" : "Movies";
+            return { folder: path.join(os.homedir(), videos, "Edie Captions"), why: "the project has not been saved yet, so ~/" + videos + "/Edie Captions" };
           });
         }
         return folderReady.then(function (target) {

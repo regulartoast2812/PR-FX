@@ -65,8 +65,24 @@ using it.
   Seen in Git Bash: ffmpeg found from its Windows path, a WAV written to bash's temp folder, WhisperX answering.
 - **WhisperX and ffmpeg install with real progress** (`app/src/media-setup.mjs`): WhisperX in its own Python 3.12
   environment (it doesn't support 3.14), ffmpeg from winget, as steps with the bytes downloaded.
-- Subtitles run from Ctrl+Space or a shortcut read the project first: the hidden runtime had never read it, and
-  reported "No active sequence audio tracks".
+- **Every AI function's project read failed on Windows; fixed 2026-11-22.** "No active sequence audio tracks are
+  available" with audio on A1 was not about the sequence. The AI runtime (`client/prai`) loads its own ExtendScript,
+  `jsx/prai/host.jsx`, with `$.evalFile` before each host call, from a path built out of `location.pathname`
+  (`extensionRootPath()` in `client/prai/js/main.js`). On Windows that is `/C:/Users/...`, and `path.join` turned it
+  into `\C:\Users\...\jsx\prai\host.jsx`, a path that doesn't exist (Node agrees: `existsSync` false), so
+  `prAI_getProjectSnapshot` and the lite read both failed, quietly, and the subtitle step found no tracks. The leading
+  slash before a drive letter is now dropped, as `engine.js` and `app.js` already did for PR FX's own host. This hit
+  the palette, shortcuts and the panel's Edie tab alike. A failed read now says why ("Could not read the Premiere
+  project: ...") instead of "No active sequence audio tracks". The earlier note here (the hidden runtime "had never
+  read the project") was wrong: `transcribe` always read it first; the read itself failed. Premiere hadn't been
+  restarted since that change either (engine log: one start, 14:46Z, before it), so the runs at 17:41Z used old code.
+- **The rest of the Whisper pipeline, seen in Git Bash on this machine (2026-11-22)** with PR FX's own builders taken
+  from `main.js` and run through `platform-shell.js`: a WAV at a path with spaces cut by ffmpeg, joined through the
+  concat list (Windows paths in `file '...'` lines), copied to `sequence_mix.wav` in `%TEMP%\PR_AI_Whisper_*`, then
+  `whisperx.exe` (quoted Windows path from settings) wrote `.srt` and `.json`, read back with the right text. Run with
+  `--model small --no_align` (the cached model; see below). WhisperX's "torchcodec is not installed" warning is
+  harmless: it decodes with the ffmpeg program. The ffmpeg found is now also put on PATH for WhisperX.
+- Without a saved project, the SRT is saved in `~\Videos\Edie Captions` on Windows (it was `~/Movies/...`).
 
 ## Checks
 
@@ -82,3 +98,8 @@ using it.
 - Connectors `detect()` here: the `reg.exe` queries for CSXS and the Run value, and Premiere's install path.
 - A Windows CI build and a code-signed exe before distributing.
 - The Edie UXP demo needs Premiere 26.3 or later; it was refused on 26.0.1, as expected.
+- A whole AI function run in Premiere on Windows (needs Premiere restarted after 2026-11-22): the project read with
+  the fixed host path, the SRT import as a caption track (`prAI_applyActions` `importSrtFile`). The first real
+  Subtitles run downloads the configured model (large-v3-turbo, about 1.6 GB) and WhisperX's English alignment model
+  (about 360 MB); only `faster-whisper-small` is cached here. The engine gives an AI function 10 minutes, so a first
+  run on a long sequence on CPU may time out while the work goes on.
