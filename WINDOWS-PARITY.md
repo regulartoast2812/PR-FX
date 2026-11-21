@@ -19,8 +19,12 @@ using it.
   and at most 6% in any other panel. Each panel is captured with PrintWindow (works while Premiere is covered, about
   50 ms), only when it's new, never on the keyboard path. Rules as on macOS: plain keys only in the Timeline, Ctrl or
   Alt shortcuts and Ctrl+Space in any panel, nothing in a menu, no plain keys while a text caret shows.
-  - A panel whose playhead is scrolled out of view reads as "not the Timeline" until it's looked at again (every
-    3 s while focused). A Timeline verdict stays for as long as the panel's window exists.
+  - It also goes by how the panel looks, the port of macOS `PanelPixels.timelineLook` (2026-11-21): the blue time
+    in its top-left corner, the time ruler's ticks, the yellow work-area bar and the blue V1/A1 track buttons. Two
+    signs or more make it the Timeline, so it's found with the playhead scrolled out of view. Sizes are the macOS
+    points times the display scale. On this machine: Timeline 5 signs, every other panel 0.
+  - A panel that shows neither reads as "not the Timeline" until it's looked at again (every 3 s while focused). A
+    Timeline verdict stays for as long as the panel's window exists.
 - **Timeline highlight with Edie sitting on it** (`Win/TimelineHighlight.cs`, setting `timelineHighlight`, off by
   default), with his moods: awake and armed, dozing with "Click the Timeline to arm", grinning when a key fires,
   startled when one is passed on, and "Working on …" for AI functions. The stroke lies on Premiere's own panel border: the panel's frame window (tab row included), where Premiere draws a 1 px line 2 px in, blue on the focused panel, with black gutter around it; the stroke covers that line and the gutter pixel beside it. He stays on the Timeline whenever Premiere's
@@ -45,7 +49,7 @@ using it.
 ## Checks
 
 - `tools\check-windows-bridge.cmd` (or `.sh` on the Mac): the platform-neutral core, nudges, settings, scoping reasons.
-- `tools\check-windows-listener.cmd` (Windows only): Edie's sprite matches the macOS one, and the playhead detector.
+- `tools\check-windows-listener.cmd` (Windows only): Edie's sprite matches the macOS one, the playhead detector and the Timeline look.
 
 ## Still to verify on Windows
 

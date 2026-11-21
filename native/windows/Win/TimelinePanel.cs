@@ -162,8 +162,7 @@ namespace PrFxShortcutListener
 
         private bool Measure(IntPtr panel)
         {
-            var fraction = PlayheadFraction(panel, out var size);
-            var isTimeline = fraction >= 0.4;
+            var isTimeline = LooksLikeTimeline(panel, out var measured);
             lock (gate)
             {
                 var t = new HashSet<IntPtr>(timelines);
@@ -172,7 +171,7 @@ namespace PrFxShortcutListener
                 timelines = t; others = o;
                 checkedAt[panel] = DateTime.UtcNow;
             }
-            Details = "panel=" + panel + " " + size + " playhead=" + fraction.ToString("0.00") + (isTimeline ? " timeline" : " other");
+            Details = "panel=" + panel + " " + measured + (isTimeline ? " timeline" : " other");
             Log?.Invoke((isTimeline ? "Timeline panel found: " : "Panel in use is not the Timeline: ") + Details);
             return isTimeline;
         }
@@ -189,14 +188,30 @@ namespace PrFxShortcutListener
             }
         }
 
-        // The longest unbroken run of playhead-blue pixels in any one column, as a fraction of the panel's height.
-        public static double PlayheadFraction(IntPtr panel, out string size)
+        // A panel is the Timeline when its playhead runs down most of it, or when it looks like one (time, ruler,
+        // work-area bar, V1/A1 buttons): the playhead can be scrolled out of view, and the look needs the panel tall
+        // and wide enough to show its headers. One capture serves both.
+        public static bool LooksLikeTimeline(IntPtr panel, out string details)
         {
-            size = "";
-            if (!Native.GetWindowRect(panel, out var r)) return 0;
+            details = "";
+            if (!Native.GetWindowRect(panel, out var r)) return false;
             int w = r.Right - r.Left, h = r.Bottom - r.Top;
-            size = w + "x" + h;
-            if (w < 120 || h < 80) return 0;
+            details = w + "x" + h;
+            var pixels = Capture(panel, w, h, out var stride);
+            if (pixels == null) return false;
+            var dpi = Native.GetDpiForWindow(panel);
+            var scale = dpi > 0 ? dpi / 96.0 : 1.0;
+            var playhead = LongestBlueRun(pixels, stride, w, h) / (double)h;
+            var look = TimelineLook(pixels, stride, w, h, scale);
+            details += " playhead=" + playhead.ToString("0.00") + " look=" + look;
+            return playhead >= 0.4 || look >= TimelineLookNeeded;
+        }
+
+        // The panel's own pixels as BGRA rows (PrintWindow: works while Premiere is covered), or null.
+        public static byte[]? Capture(IntPtr panel, int w, int h, out int stride)
+        {
+            stride = 0;
+            if (w < 120 || h < 80) return null;
             try
             {
                 using (var bitmap = new Bitmap(w, h, PixelFormat.Format32bppArgb))
@@ -210,12 +225,107 @@ namespace PrFxShortcutListener
                     var data = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
                     var pixels = new byte[data.Stride * h];
                     Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-                    var stride = data.Stride;
+                    stride = data.Stride;
                     bitmap.UnlockBits(data);
-                    return LongestBlueRun(pixels, stride, w, h) / (double)h;
+                    return pixels;
                 }
             }
-            catch (Exception) { return 0; }
+            catch (Exception) { return null; }
+        }
+
+        // How much a panel looks like a Timeline in its own pixels: the port of PanelPixels.timelineLook in
+        // PRFXPanelPixels.swift (2026-11-21, the user: "a clear way of knowing the panel is the timeline are these
+        // V# A# and icons, time number and ruler"). Signs, each looked for where the Timeline draws it:
+        //   - the current time in Premiere's blue (67,160,255) in the panel's top-left corner (the Program monitor
+        //     draws its blue time at the bottom, so it doesn't count there);
+        //   - the time ruler: a row near the top with many thin light ticks between dark;
+        //   - the work-area bar under the ruler, yellow (233,233,1);
+        //   - the track headers' targeted buttons (V1, A1…), solid blue (0,92,200) blocks in the left part,
+        //     stacked in one column (2 signs for two or more).
+        // Two or more signs: it's a Timeline, whether or not its playhead is in view. The macOS sizes are points;
+        // here they're physical pixels, so every size is multiplied by the display scale (`scale`, 1 at 96 dpi).
+        public const int TimelineLookNeeded = 2;
+
+        public static int TimelineLook(byte[] bgra, int stride, int w, int h, double scale)
+        {
+            int S(double v) => (int)Math.Round(v * scale);
+            if (w < S(200) || h < S(120)) return 0;
+            int R(int x, int y) => bgra[y * stride + x * 4 + 2];
+            int G(int x, int y) => bgra[y * stride + x * 4 + 1];
+            int B(int x, int y) => bgra[y * stride + x * 4];
+            int Luma(int x, int y) => (R(x, y) * 30 + G(x, y) * 59 + B(x, y) * 11) / 100;
+            var signs = 0;
+            // Time: top 80, left 260.
+            var blue = 0;
+            for (var y = 0; y < Math.Min(h, S(80)); y++)
+                for (var x = 0; x < Math.Min(w, S(260)); x++)
+                {
+                    int r = R(x, y), g = G(x, y), b = B(x, y);
+                    if (b >= 215 && g >= 125 && g <= 195 && r >= 35 && r <= 120) blue++;
+                }
+            if (blue >= 20 * scale * scale) signs++;
+            // Ruler and work-area bar: top 110, right of the track headers. A tick is a light, grey run at most one
+            // point wide (one or two pixels when scaled) with dark on both sides.
+            var rx0 = w / 4;
+            var widest = Math.Max(1, (int)Math.Ceiling(scale));
+            bool ruler = false, yellowBar = false;
+            for (var y = 0; y < Math.Min(h, S(110)) && !(ruler && yellowBar); y++)
+            {
+                int ticks = 0, yellow = 0, run = 0;
+                var darkBefore = false;
+                for (var x = rx0; x < w; x++)
+                {
+                    int r = R(x, y), g = G(x, y), b = B(x, y), l = Luma(x, y);
+                    if (r >= 200 && g >= 200 && b <= 70) yellow++;
+                    if (l >= 100 && Math.Abs(r - b) <= 20) { run++; continue; }
+                    if (run > 0 && run <= widest && darkBefore && l <= 60) ticks++;
+                    darkBefore = l <= 60;
+                    run = 0;
+                }
+                if (ticks >= 12) ruler = true;
+                if (yellow * 5 >= (w - rx0) * 2) yellowBar = true;
+            }
+            if (ruler) signs++;
+            if (yellowBar) signs++;
+            // Targeted track buttons: rows holding a 12 pt+ run of their blue in the left 300 (its left end), grouped
+            // into blocks 10 pt+ tall that share one column.
+            var rows = new int?[h + 1];
+            for (var y = 0; y < h; y++)
+            {
+                int start = 0, current = 0;
+                for (var x = 0; x < Math.Min(w, S(300)); x++)
+                {
+                    int r = R(x, y), g = G(x, y), b = B(x, y);
+                    if (r <= 35 && g >= 70 && g <= 115 && b >= 170 && b <= 235)
+                    {
+                        if (current == 0) start = x;
+                        if (++current >= S(12)) { rows[y] = start; break; }
+                    }
+                    else current = 0;
+                }
+            }
+            var blocks = new List<int>();
+            int count = 0, column = 0, near = S(6);
+            foreach (var row in rows)
+            {
+                if (row.HasValue && (count == 0 || Math.Abs(row.Value - column) <= near))
+                {
+                    if (count == 0) column = row.Value;
+                    count++;
+                    continue;
+                }
+                if (count >= S(10)) blocks.Add(column);
+                count = row.HasValue ? 1 : 0;
+                column = row ?? 0;
+            }
+            var stacked = 0;
+            foreach (var c in blocks)
+            {
+                var n = 0;
+                foreach (var other in blocks) if (Math.Abs(other - c) <= near) n++;
+                if (n > stacked) stacked = n;
+            }
+            return signs + Math.Min(2, stacked);
         }
 
         // BGRA rows. Playhead blue: strongly blue, little red. Clip blue (≈120,160,210) and selection

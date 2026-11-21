@@ -86,6 +86,36 @@ internal static class Check
         Paint(program, 10, 20, 190, 100, 120, 160, 210);   // and a big blue picture
         Expect(TimelinePanel.LongestBlueRun(program, stride, w, h) / (double)h < 0.4, "timeline: a short marker and clip-blue areas are not a playhead");
 
+        // ---- the Timeline by its look (the drawn panels from tools/check-panel-pixels.swift), at 100% and 150%:
+        // blue time top-left, ruler, yellow work-area bar, V1 and A1. Program: a ruler on top and its blue time at
+        // the bottom, one sign. An empty panel: none.
+        foreach (var scale in new[] { 1.0, 1.5 })
+        {
+            int S(double v) => (int)Math.Round(v * scale);
+            int pw = S(500), ph = S(600), ps = pw * 4;
+            byte[] Blank()
+            {
+                var px = new byte[ps * ph];
+                for (var i = 0; i < px.Length; i += 4) { px[i] = 29; px[i + 1] = 29; px[i + 2] = 29; px[i + 3] = 255; }
+                return px;
+            }
+            void Fill(byte[] px, double x0, double y0, double x1, double y1, byte r, byte g, byte b)
+            {
+                for (var y = S(y0); y < S(y1); y++) for (var x = S(x0); x < S(x1); x++) { var i = y * ps + x * 4; px[i] = b; px[i + 1] = g; px[i + 2] = r; }
+            }
+            var look = Blank();
+            Fill(look, 6, 30, 56, 40, 67, 160, 255);
+            for (var x = 136; x < 496; x += 10) Fill(look, x, 60, x + 1, 64, 150, 150, 150);
+            Fill(look, 126, 70, 496, 72, 233, 233, 1);
+            Fill(look, 26, 200, 46, 230, 0, 92, 200); Fill(look, 26, 240, 46, 270, 0, 92, 200);
+            var monitor = Blank();
+            for (var x = 12; x < 382; x += 10) Fill(monitor, x, 10, x + 1, 14, 150, 150, 150);
+            Fill(monitor, 7, 560, 62, 570, 67, 160, 255);
+            Expect(TimelinePanel.TimelineLook(look, ps, pw, ph, scale) == 5, "look at " + scale * 100 + "%: time, ruler, work-area bar and two track buttons (" + TimelinePanel.TimelineLook(look, ps, pw, ph, scale) + ")");
+            Expect(TimelinePanel.TimelineLook(monitor, ps, pw, ph, scale) == 1, "look at " + scale * 100 + "%: the Program monitor shows one sign, not enough (" + TimelinePanel.TimelineLook(monitor, ps, pw, ph, scale) + ")");
+            Expect(TimelinePanel.TimelineLook(Blank(), ps, pw, ph, scale) == 0, "look at " + scale * 100 + "%: an empty panel shows none");
+        }
+
         Console.WriteLine(failures == 0 ? "\nAll Windows listener checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;
     }
