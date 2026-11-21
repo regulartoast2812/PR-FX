@@ -18,6 +18,7 @@ namespace PrFxShortcutListener
         private string workingName = "";
         private DateTime workingStarted;
         private IntPtr workingWindow;
+        private float fontScale = -1;
 
         public Toast()
         {
@@ -61,19 +62,41 @@ namespace PrFxShortcutListener
             label.Text = text;
             var screen = nearWindow != IntPtr.Zero ? Screen.FromHandle(nearWindow) : Screen.PrimaryScreen;
             var area = screen.WorkingArea;
-            var oneLine = TextRenderer.MeasureText(text, label.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-            var width = Math.Min(640, Math.Max(280, oneLine + 60));
-            var textWidth = width - 56;
-            var measured = TextRenderer.MeasureText(text, label.Font, new Size(textWidth, 120), TextFormatFlags.NoPadding | TextFormatFlags.WordBreak);
-            var height = Math.Max(42, measured.Height + 20);
-            Bounds = new Rectangle(area.Left + (area.Width - width) / 2, area.Bottom - height - 90, width, height);
-            icon.Bounds = new Rectangle(13, (height - 22) / 2, 20, 22);
-            label.Bounds = new Rectangle(41, 10, width - 55, height - 20);
+            // Physical pixels (the listener is per-monitor DPI aware): everything scales with the screen.
+            var dpi = nearWindow != IntPtr.Zero ? Native.GetDpiForWindow(nearWindow) : 0;
+            var s = dpi > 0 ? dpi / 96f : DeviceDpi / 96f;
+            int S(float v) => (int)Math.Round(v * s);
+            if (s != fontScale)
+            {
+                fontScale = s;
+                // Only when the display scale changes; the old fonts are left to the collector (the controls
+                // may still be drawing with them).
+                label.Font = new Font("Segoe UI", 10f * s, FontStyle.Regular, GraphicsUnit.Point);
+                icon.Font = new Font("Segoe UI Symbol", 11f * s, FontStyle.Bold, GraphicsUnit.Point);
+            }
+            // The icon and the text are one group, centred in the bubble, with the same space either side
+            // (2026-11-21, the user: it sat far left of centre). Long messages wrap at 640 px.
+            const TextFormatFlags flags = TextFormatFlags.NoPadding;
+            var pad = S(18); var iconWidth = S(18); var gap = S(9);
+            var oneLine = TextRenderer.MeasureText(text, label.Font, Size.Empty, flags | TextFormatFlags.SingleLine);
+            var maxText = S(640) - 2 * pad - iconWidth - gap;
+            var textSize = oneLine.Width <= maxText ? oneLine : TextRenderer.MeasureText(text, label.Font, new Size(maxText, S(200)), flags | TextFormatFlags.WordBreak);
+            var group = iconWidth + gap + textSize.Width;
+            var width = Math.Max(S(160), group + 2 * pad);
+            var height = Math.Max(S(40), textSize.Height + S(20));
+            Bounds = new Rectangle(area.Left + (area.Width - width) / 2, area.Bottom - height - S(90), width, height);
+            var left = (width - group) / 2;
+            icon.Bounds = new Rectangle(left, (height - S(22)) / 2, iconWidth, S(22));
+            label.Bounds = new Rectangle(left + iconWidth + gap, (height - textSize.Height) / 2, textSize.Width + S(2), textSize.Height);
+            label.TextAlign = ContentAlignment.TopLeft;
             using (var path = new System.Drawing.Drawing2D.GraphicsPath())
             {
-                var radius = Math.Min(32, height);
-                path.AddArc(0, 0, radius, radius, 90, 180);
-                path.AddArc(width - radius - 1, 0, radius, radius, 270, 180);
+                // A rounded rectangle, ends fully round on one line (corner diameter = height, at most 32 px).
+                var d = Math.Min(height, S(32));
+                path.AddArc(0, 0, d, d, 180, 90);
+                path.AddArc(width - d, 0, d, d, 270, 90);
+                path.AddArc(width - d, height - d, d, d, 0, 90);
+                path.AddArc(0, height - d, d, d, 90, 90);
                 path.CloseFigure();
                 Region?.Dispose();
                 Region = new Region(path);
