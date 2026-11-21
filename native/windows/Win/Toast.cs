@@ -19,13 +19,16 @@ namespace PrFxShortcutListener
         private DateTime workingStarted;
         private IntPtr workingWindow;
         private float fontScale = -1;
+        private IntPtr lastNear;
 
         public Toast()
         {
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            TopMost = true;
+            // Not TopMost = true: WinForms then makes the banner the active window when it shows, despite
+            // ShowWithoutActivation, and Premiere was no longer in front, so Ctrl+Space and every shortcut stopped
+            // after the first palette use (2026-11-21). WS_EX_TOPMOST in CreateParams keeps it on top without that.
             BackColor = Color.FromArgb(19, 19, 22);
             label.ForeColor = Color.White;
             label.Font = new Font("Segoe UI", 10f, FontStyle.Regular);
@@ -41,6 +44,15 @@ namespace PrFxShortcutListener
         }
 
         protected override bool ShowWithoutActivation => true;
+
+        // Should anything still make the banner the active window, Premiere gets the front straight back: the
+        // listener only acts on keys while Premiere is in front.
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            var back = lastNear != IntPtr.Zero ? Native.GetAncestor(lastNear, Native.GA_ROOT) : IntPtr.Zero;
+            if (back != IntPtr.Zero && Native.IsWindow(back)) Native.ForceForeground(back);
+        }
 
         protected override CreateParams CreateParams
         {
@@ -60,6 +72,7 @@ namespace PrFxShortcutListener
             icon.Text = kind == ToastKind.Ok ? "✓" : kind == ToastKind.Failed ? "×" : "!";
             icon.ForeColor = kind == ToastKind.Ok ? Color.FromArgb(79, 219, 140) : kind == ToastKind.Failed ? Color.FromArgb(255, 97, 87) : Color.FromArgb(255, 161, 71);
             label.Text = text;
+            if (nearWindow != IntPtr.Zero) lastNear = nearWindow;
             var screen = nearWindow != IntPtr.Zero ? Screen.FromHandle(nearWindow) : Screen.PrimaryScreen;
             var area = screen.WorkingArea;
             // Physical pixels (the listener is per-monitor DPI aware): everything scales with the screen.

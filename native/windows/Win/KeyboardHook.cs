@@ -138,7 +138,9 @@ namespace PrFxShortcutListener
                 var image = pid == 0 ? "" : System.IO.Path.GetFileName(Native.ProcessImagePath(pid));
                 var cls = new System.Text.StringBuilder(128);
                 if (hwnd != IntPtr.Zero) Native.GetClassName(hwnd, cls, cls.Capacity);
-                var line = "Foreground: " + (isPremiere ? "Premiere" : "not Premiere") + " (" + image + ", class " + cls + ")";
+                var title = new System.Text.StringBuilder(64);
+                if (hwnd != IntPtr.Zero) Native.InternalGetWindowText(hwnd, title, title.Capacity);
+                var line = "Foreground: " + (isPremiere ? "Premiere" : "not Premiere") + " (" + image + ", class " + cls + ", window " + hwnd + " '" + title + "')";
                 ThreadPool.QueueUserWorkItem(_ => Log?.Invoke(line));
                 ForegroundChanged?.Invoke(isPremiere);
             }

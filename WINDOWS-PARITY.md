@@ -42,7 +42,11 @@ using it.
   Creative Assist and Edie detect the OS and find this OS's pieces from one table (the exe and its installed copy,
   the HKCU Run value, the `%APPDATA%` folders, the CSXS registry keys, Premiere 2025+ under `%ProgramFiles%\Adobe`),
   show each as found or missing on the PR FX page, and put the copy in place and start it when the bridge is down.
-- The palette (Ctrl+Space) opens and runs commands; the catalog CEP pushes is cached.
+- The palette (Ctrl+Space) opens and runs commands, again and again; the catalog CEP pushes is cached. **No listener
+  window but the palette may take the front:** the listener acts on keys only while Premiere is in front, and a
+  banner made TopMost through WinForms became the active window when it showed (after every command run from the
+  palette), so Ctrl+Space worked once and never again (2026-11-21). The banner is topmost through WS_EX_TOPMOST
+  only, and gives the front back to Premiere if it's ever activated.
 - The CEP panel ("Edie" in Window ▸ Extensions) draws and runs commands when docked. Floating on its own it can come
   up blank on this machine: dock it, or close and reopen it.
 
