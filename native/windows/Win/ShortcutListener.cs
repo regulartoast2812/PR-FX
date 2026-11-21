@@ -170,6 +170,7 @@ namespace PrFxShortcutListener
         {
             housekeepingTicks++;
             bridge?.Sweep();
+            hook.Recheck();
             // Which panel is in use is worked out here, off the hook thread: the
             // hook only reads the verdict this leaves behind.
             var premiereOpen = PremiereOnScreen();

@@ -23,6 +23,7 @@ namespace PrFxShortcutListener
         public delegate bool KeyDecision(KeyChord chord);
 
         private const uint WM_REINSTALL = Native.WM_APP + 1;
+        private const uint WM_RECHECK = Native.WM_APP + 2;
 
         private readonly KeyDecision decide;
         private readonly Native.LowLevelKeyboardProc keyProc;
@@ -39,6 +40,8 @@ namespace PrFxShortcutListener
         private volatile bool premiereFrontmost;
         private volatile IntPtr premiereWindow = IntPtr.Zero;
         private volatile uint premiereThread;
+        // The window the foreground was last worked out for.
+        private IntPtr lastForeground = IntPtr.Zero;
         private int reinstalls;
 
         public bool PremiereFrontmost => premiereFrontmost;
@@ -71,6 +74,12 @@ namespace PrFxShortcutListener
             if (threadId != 0) Native.PostThreadMessage(threadId, WM_REINSTALL, IntPtr.Zero, IntPtr.Zero);
         }
 
+        // Works out again which window is in front (housekeeping calls this every tick): Windows doesn't always say.
+        public void Recheck()
+        {
+            if (threadId != 0) Native.PostThreadMessage(threadId, WM_RECHECK, IntPtr.Zero, IntPtr.Zero);
+        }
+
         public void Stop()
         {
             if (threadId != 0) Native.PostThreadMessage(threadId, Native.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
@@ -88,6 +97,7 @@ namespace PrFxShortcutListener
             while (Native.GetMessage(out var message, IntPtr.Zero, 0, 0) > 0)
             {
                 if (message.message == WM_REINSTALL) Install();
+                else if (message.message == WM_RECHECK) RecheckForeground(false);
             }
             if (keyHook != IntPtr.Zero) Native.UnhookWindowsHookEx(keyHook);
             if (foregroundHook != IntPtr.Zero) Native.UnhookWinEvent(foregroundHook);
@@ -118,8 +128,21 @@ namespace PrFxShortcutListener
             UpdateForeground(hwnd);
         }
 
-        private void UpdateForeground(IntPtr hwnd)
+        // The foreground event alone isn't enough (2026-11-21): Alt+Tab into Premiere reports Premiere, then 1 ms later
+        // the closing switcher ("Task Switching", explorer.exe), and nothing when Premiere is in front again. The
+        // listener then took Premiere for being behind and ignored every shortcut, Ctrl+Space too, until another
+        // app was clicked. So the real foreground window is looked at again on every keydown and housekeeping tick.
+        // From the hook callback (`inHook`) the hook is reinstalled by message, never from inside its own callback.
+        private void RecheckForeground(bool inHook)
         {
+            var hwnd = Native.GetForegroundWindow();
+            if (hwnd == lastForeground) return;
+            UpdateForeground(hwnd, inHook);
+        }
+
+        private void UpdateForeground(IntPtr hwnd, bool inHook = false)
+        {
+            lastForeground = hwnd;
             var wasPremiere = premiereFrontmost;
             uint pid = 0;
             var tid = hwnd == IntPtr.Zero ? 0u : Native.GetWindowThreadProcessId(hwnd, out pid);
@@ -129,7 +152,11 @@ namespace PrFxShortcutListener
             {
                 premiereWindow = hwnd;
                 premiereThread = tid;
-                if (!wasPremiere) Install();
+                if (!wasPremiere)
+                {
+                    if (inHook) Native.PostThreadMessage(threadId, WM_REINSTALL, IntPtr.Zero, IntPtr.Zero);
+                    else Install();
+                }
             }
             swallowed.Clear();
             if (isPremiere != wasPremiere)
@@ -166,6 +193,7 @@ namespace PrFxShortcutListener
             var info = Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
             var message = wParam.ToInt32();
             var vk = info.vkCode;
+            if (message == Native.WM_KEYDOWN || message == Native.WM_SYSKEYDOWN) RecheckForeground(true);
             // Diagnostics (files in the support folder, read at start): "log-keys" logs keys pressed in Premiere (never in other apps),
             // "accept-injected" lets synthesised keys through for testing.
             if (LogKeys && premiereFrontmost && (message == Native.WM_KEYDOWN || message == Native.WM_SYSKEYDOWN))

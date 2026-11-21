@@ -33,6 +33,10 @@ using it.
   in front cover it. **Never make Premiere its owner:** an owner in another process joins the two programs' input
   queues, and clicks in the Timeline then fell through to the app behind Premiere, which took the front, so Edie
   vanished and no shortcut fired (seen 2026-11-21).
+- **Which app is in front is checked, not only announced.** Alt+Tab into Premiere fires the foreground event for
+  Premiere and then, 1-4 ms later, for the closing switcher ("Task Switching", explorer.exe), and nothing after it:
+  the listener took Premiere for being behind and ignored every shortcut and Ctrl+Space until another app was
+  clicked (2026-11-21). The hook now reads the real foreground window on every keydown and housekeeping tick.
 - The listener logs which window takes the front whenever "Premiere is in front" changes. For key problems, create
   `%APPDATA%\PR FX Palette\log-keys` (logs keys pressed in Premiere only) and restart the listener.
 - **Edie's nudges** (`Core/EdieNudges.cs`, settings `edieNudges` and `edieNudgeMinutes`): "Still with me?" after a
