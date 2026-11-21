@@ -117,24 +117,70 @@ export function createService(ctx) {
     }
     return '';
   };
+  // WhisperX on Windows (2026-11-21): it needs Python 3.13 or older (3.14 was the only one on the user's PC, and
+  // pip found no version for it), so it gets its own environment in the support folder, made with a Python it
+  // supports: one already installed, else 3.12 from Python's install manager (py install), else from winget.
+  const whisperVenv = path.join(supportDir, 'whisperx-env');
+  const whisperVenvExe = process.platform === 'win32' ? path.join(whisperVenv, 'Scripts', 'whisperx.exe') : '';
+  const WHISPER_PYTHONS = ['3.12', '3.11', '3.13', '3.10'];
+  async function whisperPython() {
+    for (const v of WHISPER_PYTHONS) {
+      const found = await run('py.exe', [`-V:${v}`, '-c', 'import sys; print(sys.executable)'], 30_000);
+      if (found.ok && found.detail && fs.existsSync(found.detail.trim())) return found.detail.trim();
+    }
+    return '';
+  }
+  async function installWhisperWindows() {
+    let python = await whisperPython();
+    if (!python) {
+      const manager = await run('py.exe', ['install', '3.12'], 15 * 60_000);
+      if (!manager.ok) await run('winget.exe', ['install', '--id', 'Python.Python.3.12', '-e', '--accept-package-agreements', '--accept-source-agreements'], 15 * 60_000);
+      python = await whisperPython();
+    }
+    if (!python) return { ok: false, detail: 'WhisperX needs Python 3.10 to 3.13, and one could not be installed. Install Python 3.12 (python.org), then press Install again.' };
+    const venvPython = path.join(whisperVenv, 'Scripts', 'python.exe');
+    if (!fs.existsSync(venvPython)) {
+      const made = await run(python, ['-m', 'venv', whisperVenv], 5 * 60_000);
+      if (!made.ok) return made;
+    }
+    await run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip'], 5 * 60_000);
+    const installed = await run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'whisperx'], 40 * 60_000);
+    if (!installed.ok) return installed;
+    if (!fs.existsSync(whisperVenvExe)) return { ok: false, detail: 'WhisperX installed, but whisperx.exe is missing from ' + path.dirname(whisperVenvExe) };
+    writeSettings({ whisperCommand: `"${whisperVenvExe}"` });
+    return { ok: true, detail: 'WhisperX installed (Python ' + path.basename(path.dirname(python)) + ').' };
+  }
+
   const media = () => {
     const s = readSettings(), home = os.homedir();
-    const ffmpeg = executable([s.ffmpegPath, 'ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
+    // On Windows also winget's links folder: an ffmpeg installed with winget isn't on a running app's PATH yet.
+    const wingetLinks = process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe') : '';
+    const ffmpeg = executable([s.ffmpegPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg', wingetLinks, '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
     const pythonBins = ['3.13', '3.12', '3.11', '3.10', '3.9'].flatMap(version => [
       path.join(home, 'Library', 'Python', version, 'bin', 'whisperx'),
       path.join(home, 'Library', 'Python', version, 'bin', 'whisper'),
     ]);
-    const whisper = s.whisperCommand || executable(['whisperx', 'whisper', path.join(home, '.local', 'bin', 'whisperx'),
+    const whisper = s.whisperCommand || executable([whisperVenvExe, 'whisperx', 'whisper', path.join(home, '.local', 'bin', 'whisperx'),
       path.join(home, '.local', 'bin', 'whisper'), ...pythonBins, '/opt/homebrew/bin/whisperx', '/opt/homebrew/bin/whisper',
       '/usr/local/bin/whisperx', '/usr/local/bin/whisper']);
     const python = executable([process.platform === 'win32' ? 'python.exe' : 'python3', 'python']);
     return { ffmpeg: { ready: !!ffmpeg, path: ffmpeg }, whisper: { ready: !!whisper, command: whisper }, python,
       configured: { ffmpegPath: s.ffmpegPath, whisperCommand: s.whisperCommand, whisperModel: s.whisperModel, whisperDevice: s.whisperDevice } };
   };
-  const run = (cmd, args, timeout = 60_000) => new Promise(resolve => execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 1 << 20 },
-    (error, stdout) => resolve({ ok: !error, detail: error ? `Stopped with exit code ${error.code ?? '?'}. Check the command in a terminal.` : String(stdout || '').split(/\r?\n/).find(Boolean) || 'Ready.' })));
+  // A failure says why: the last error line the command printed (pip's "No matching distribution…"), not only
+  // its exit code (2026-11-21: "Stopped with exit code 2316632107" told the user nothing).
+  const run = (cmd, args, timeout = 60_000, verbatim = false) => new Promise(resolve => execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 1 << 24, windowsVerbatimArguments: verbatim },
+    (error, stdout, stderr) => {
+      if (!error) return resolve({ ok: true, detail: String(stdout || '').split(/\r?\n/).find(Boolean) || 'Ready.' });
+      const lines = String(stderr || stdout || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('[notice]'));
+      const why = [...lines].reverse().find(l => /error/i.test(l)) || lines[lines.length - 1] || '';
+      const code = typeof error.code === 'number' && error.code > 0xffff ? '0x' + (error.code >>> 0).toString(16).toUpperCase() : (error.code ?? '?');
+      resolve({ ok: false, detail: `Stopped with exit code ${code}${why ? ': ' + why.slice(0, 300) : '. Check the command in a terminal.'}` });
+    }));
+  // cmd /s /c drops the first and last quote of what follows, so the whole line is wrapped in one more pair and
+  // passed as is: a quoted command path with spaces ("…\PR FX Palette\whisperx-env\Scripts\whisperx.exe") stays whole.
   const shellTest = command => process.platform === 'win32'
-    ? run('cmd.exe', ['/d', '/s', '/c', `${command} --help`])
+    ? run('cmd.exe', ['/d', '/s', '/c', `"${command} --help"`], 120_000, true)
     : run('/bin/zsh', ['-lc', `${command} --help`]);
 
   const routes = {
@@ -172,6 +218,7 @@ export function createService(ctx) {
         const installed = await run('winget.exe', ['install', '--id', 'Gyan.FFmpeg', '--accept-package-agreements', '--accept-source-agreements'], 15 * 60_000);
         return { ...installed, media: media() };
       }
+      if (kind === 'whisper' && process.platform === 'win32') return { ...(await installWhisperWindows()), media: media() };
       if (kind === 'whisper') {
         const python = media().python;
         if (!python) return { ok: false, message: 'Python 3 was not found. Install Python, then press Detect.' };
