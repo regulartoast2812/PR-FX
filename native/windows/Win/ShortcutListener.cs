@@ -92,6 +92,9 @@ namespace PrFxShortcutListener
             LoadSettings();
 
             timeline.Log = Log.Write;
+            palette.Log = Log.Write;
+            toast.Log = Log.Write;
+            toast.PaletteWindow = () => palette.Visible ? palette.Handle : IntPtr.Zero;
             hook = new KeyboardHook(Decide)
             {
                 Log = Log.Write,
@@ -337,7 +340,8 @@ namespace PrFxShortcutListener
                 OnUi(() => RecordPassed(key, name, "Command bridge is offline"));
                 return false;
             }
-            if (isPalette) OnUi(() => palette.Open(hook.PremiereWindow));
+            // The banner goes first: it can't then be shown (or made active) while the palette takes the front.
+            if (isPalette) OnUi(() => { toast.Hide(); palette.Open(hook.PremiereWindow); });
             else
             {
                 var command = snapshot.Settings.Bindings[id].Command;

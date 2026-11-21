@@ -45,14 +45,22 @@ namespace PrFxShortcutListener
 
         protected override bool ShowWithoutActivation => true;
 
-        // Should anything still make the banner the active window, Premiere gets the front straight back: the
-        // listener only acts on keys while Premiere is in front.
+        // Should anything still make the banner the active window, the front goes back where it belongs: the open
+        // palette (`PaletteWindow`), else Premiere. Never Premiere while the palette is open: the banner can show
+        // just as the palette takes the front, and handing Premiere the front then closed the palette at once
+        // (2026-11-21, Ctrl+Space "unfocuses me and won't open").
+        public Func<IntPtr>? PaletteWindow;
+
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
-            var back = lastNear != IntPtr.Zero ? Native.GetAncestor(lastNear, Native.GA_ROOT) : IntPtr.Zero;
+            var palette = PaletteWindow?.Invoke() ?? IntPtr.Zero;
+            var back = palette != IntPtr.Zero ? palette : lastNear != IntPtr.Zero ? Native.GetAncestor(lastNear, Native.GA_ROOT) : IntPtr.Zero;
+            Log?.Invoke("Banner was made active; front handed back to " + (palette != IntPtr.Zero ? "the palette" : "Premiere"));
             if (back != IntPtr.Zero && Native.IsWindow(back)) Native.ForceForeground(back);
         }
+
+        public Action<string>? Log;
 
         protected override CreateParams CreateParams
         {

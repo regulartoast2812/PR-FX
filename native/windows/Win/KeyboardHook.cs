@@ -158,7 +158,8 @@ namespace PrFxShortcutListener
                     else Install();
                 }
             }
-            swallowed.Clear();
+            // `swallowed` is kept across a change of front window: the palette takes the front while Space is still
+            // down, and its key repeats and release must stay swallowed, not type spaces into the palette's search.
             if (isPremiere != wasPremiere)
             {
                 // Which window took the front, so a wrong "Premiere is not frontmost" can be traced.

@@ -115,7 +115,12 @@ namespace PrFxShortcutListener
             Controls.Add(searchHost);
             Controls.Add(header);
 
-            Deactivate += (_, __) => { if (Visible) ClosePalette(false); };
+            Deactivate += (_, __) =>
+            {
+                if (!Visible) return;
+                Log?.Invoke("Palette closed: " + WindowName(Native.GetForegroundWindow()) + " took the front");
+                ClosePalette(false);
+            };
             ResetApplyMenu();
         }
 
@@ -148,6 +153,17 @@ namespace PrFxShortcutListener
             using (var pen = new Pen(Color.FromArgb(70, 70, 75))) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
         }
 
+        public Action<string>? Log;
+
+        private static string WindowName(IntPtr window)
+        {
+            if (window == IntPtr.Zero) return "no window";
+            Native.GetWindowThreadProcessId(window, out var pid);
+            var title = new System.Text.StringBuilder(60);
+            Native.InternalGetWindowText(window, title, title.Capacity);
+            return System.IO.Path.GetFileName(Native.ProcessImagePath(pid)) + " '" + title + "'";
+        }
+
         public void Open(IntPtr premiereWindow)
         {
             returnWindow = premiereWindow;
@@ -161,6 +177,7 @@ namespace PrFxShortcutListener
             Native.ForceForeground(Handle);
             Activate();
             search.Focus();
+            Log?.Invoke("Palette opened" + (Native.GetForegroundWindow() == Handle ? "" : "; Windows kept " + WindowName(Native.GetForegroundWindow()) + " in front"));
         }
 
         public void ClosePalette(bool returnToPremiere)
