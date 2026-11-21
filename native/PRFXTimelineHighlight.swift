@@ -475,21 +475,31 @@ enum EdieSprite {
         edits.map { (y: Int, x: Int, c: Character) -> Edit in (y + faceShift.y, x + faceShift.x, c) }
     }
 
+    // Facing screen right (the Ctrl+Space palette, 2026-11-21, the user): his face as it
+    // is facing left, mirrored across him, the glint still at each eye's top right. His
+    // cheeks sit off centre, so they move less than his eyes and mouth.
+    static func facingRight(_ edits: [Edit], by dx: Int) -> [Edit] {
+        edits.map { (y: Int, x: Int, c: Character) -> Edit in (y, x + dx, c) }
+    }
+
     // Whole-pixel rows doubled onto the fine grid, with his blush and the mood's eyes and mouth.
-    static func fine(_ rows: [String], _ mood: Mood) -> [String] {
+    static func fine(_ rows: [String], _ mood: Mood, right: Bool = false) -> [String] {
         let doubled = rows.flatMap { row -> [String] in
             let wide = String(row.flatMap { [$0, $0] })
             return [wide, wide]
         }
-        return put(doubled, corners + turned(blush + eyes(mood) + mouth(mood)))
+        let face = right ? facingRight(blush, by: 2) + facingRight(eyes(mood) + mouth(mood), by: 4)
+            : blush + eyes(mood) + mouth(mood)
+        return put(doubled, corners + turned(face))
     }
 
     // His legs (2026-11-20, the user: thicker), three fine pixels wide.
     static let leftLeg = [6, 7, 8], rightLeg = [15, 16, 17]
 
     // Standing: his legs are stubs under him.
-    static func face(_ mood: Mood) -> [String] {
-        crowned(put(fine(art(mood), mood), at("D", [22, 23], leftLeg + rightLeg)))
+    // `right`: facing screen right, as in the palette.
+    static func face(_ mood: Mood, right: Bool = false) -> [String] {
+        crowned(put(fine(art(mood), mood, right: right), at("D", [22, 23], leftLeg + rightLeg)))
     }
 
     // Sitting on a line drawn under row 10; his legs hang over it, feet to the left,
@@ -535,6 +545,7 @@ final class EdiePaletteIconView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        EdieSprite.draw(EdieSprite.face(.rest), at: .zero, pixel: 2)
+        // Facing right, toward the commands (2026-11-21, the user).
+        EdieSprite.draw(EdieSprite.face(.rest, right: true), at: .zero, pixel: 2)
     }
 }

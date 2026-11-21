@@ -121,7 +121,7 @@ namespace PrFxShortcutListener
 
         private static Bitmap CreateEdieBitmap()
         {
-            // His fine-grid rows, standing, as EdieSprite.face(.rest) gives them.
+            // His fine-grid rows, standing and facing right, as EdieSprite.face(.rest, right: true) gives them.
             string[] rows = {
                 "................................",
                 "................................",
@@ -142,13 +142,13 @@ namespace PrFxShortcutListener
                 ".YYYYOOOOOOOYYYYOOOOOO..WWBB....",
                 "..OOOOOOOOOOOOOOOOOOOO..WWBB....",
                 "..OOOOOOOOOOOOOOOOOOOOWWBB......",
-                "..OOOKKgOOOOKKgOOOOOOOWWBB......",
-                "..OOOKKKOOOOKKKOOOOOOOBBBBBBBBBB",
-                "..POPKKKOOOOKKKPOPOPOOBBBBBBBBBB",
-                "..POPOPOOOOOOOOPOPOPOOBBWWWWWWBB",
-                "..POPOPmOOOOmOOPOPOPOOBBWWWWWWBB",
-                "..OOOOOmmmmmmOOOOOOOOOBBBBBBBBBB",
-                "..OOOOOOmmmmOOOOOOOOOOBBBBBBBBBB",
+                "..OOOOOOOKKgOOOOKKgOOOWWBB......",
+                "..OOOOOOOKKKOOOOKKKOOOBBBBBBBBBB",
+                "..OOPOPOPKKKOOOOKKKPOPBBBBBBBBBB",
+                "..OOPOPOPOOOOOOOOPOPOPBBWWWWWWBB",
+                "..OOPOPOPOOmOOOOmPOPOPBBWWWWWWBB",
+                "..OOOOOOOOOmmmmmmOOOOOBBBBBBBBBB",
+                "..OOOOOOOOOOmmmmOOOOOOBBBBBBBBBB",
                 "..OOOOOOOOOOOOOOOOOOOOOOWWWWBBBB",
                 "....OOOOOOOOOOOOOOOO..OOWWWWBBBB",
                 "....OOOOOOOOOOOOOOOO..BBBBBBBBBB",
