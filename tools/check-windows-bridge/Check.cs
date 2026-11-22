@@ -233,6 +233,38 @@ internal static class Check
             Expect(lateAt.At(100 + 3600, true, false).Next > 100 + 3600, "edie pace: back after an hour, no racing through what he missed");
         }
 
+        // ---- the palette keeps the front (PaletteFocus). It closed as it opened three times, each breaking every palette
+        // command (2026-11-22, the user: "have a safeguard so that won't happen again"). Each past cause is a row here.
+        {
+            var pt0 = new DateTime(2026, 11, 22, 12, 0, 0, DateTimeKind.Utc);
+            DateTime At(int ms) => pt0.AddMilliseconds(ms);
+            var f = new PaletteFocus();
+            f.BeginOpen();
+            Expect(f.OnDeactivate(true) == PaletteFocusAction.Keep, "palette focus: losing the front while opening (Windows reports Premiere as it hands the front over) never closes it");
+            f.EndOpen(At(0));
+            Expect(f.OnDeactivate(true) == PaletteFocusAction.CheckAgain, "palette focus: losing the front after opening is looked at again, not acted on at once");
+            Expect(f.OnRecheck(true, true, false, At(PaletteFocus.RecheckMs)) == PaletteFocusAction.Keep, "palette focus: a blip (the palette or the banner, ours, in front again) keeps it open");
+            Expect(f.OnRecheck(true, false, true, At(50)) == PaletteFocusAction.TakeBack, "palette focus: Premiere grabbing the front back 50 ms after opening: the palette takes it back");
+            Expect(f.OnRecheck(true, false, true, At(300)) == PaletteFocusAction.TakeBack, "palette focus: and once more");
+            Expect(f.OnRecheck(true, false, true, At(400)) == PaletteFocusAction.Close, "palette focus: but not forever (a third grab closes it, so it never fights the user)");
+            Expect(f.QuickCloses == 1, "palette focus: that close counts as closing as it opened (paletteQuickCloses on the health page)");
+
+            var g = new PaletteFocus();
+            g.BeginOpen(); g.EndOpen(At(0));
+            Expect(g.OnRecheck(true, false, true, At(5000)) == PaletteFocusAction.Close && g.QuickCloses == 0, "palette focus: clicking Premiere later closes it, and isn't counted as a failure");
+            g.BeginOpen(); g.EndOpen(At(10000));
+            Expect(g.OnRecheck(true, false, false, At(10100)) == PaletteFocusAction.Close, "palette focus: another app taking the front closes it at once");
+            Expect(g.OnRecheck(false, false, true, At(10200)) == PaletteFocusAction.Keep, "palette focus: an already closed palette does nothing");
+
+            var h = new PaletteFocus();
+            for (var i = 0; i < 2; i++) { h.BeginOpen(); h.EndOpen(At(i * 10000)); h.OnRecheck(true, false, false, At(i * 10000 + 200)); }
+            Expect(h.Wide && h.Grace == PaletteFocus.WideGraceMs && h.MaxTakeBacks == PaletteFocus.WideTakeBacks, "palette focus: closing as it opened twice in a row, it waits longer from then on");
+            h.BeginOpen(); h.EndOpen(At(30000));
+            Expect(h.OnRecheck(true, false, true, At(31000)) == PaletteFocusAction.TakeBack, "palette focus: waiting longer, Premiere grabbing it a second after opening is taken back");
+            h.OnClosedByUser();
+            Expect(!h.Wide, "palette focus: once the user closes it themselves (Esc, a command), it's back to normal");
+        }
+
         try { Directory.Delete(support, true); } catch (Exception) { }
         Console.WriteLine(failures == 0 ? "\nAll Windows bridge checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;

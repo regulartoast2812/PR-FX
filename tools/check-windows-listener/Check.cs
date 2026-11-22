@@ -90,8 +90,10 @@ internal static class Check
         "......DDD......DDD..............",
     };
 
-    private static int Main()
+    [STAThread]
+    private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--stand-in-premiere") return LiveFocus.StandInMain(args);
         // ---- Edie
         var right = EdieSprite.Face(EdieSprite.Mood.Rest, right: true);
         var mismatch = Enumerable.Range(0, Math.Max(right.Length, FacingRight.Length)).FirstOrDefault(i => i >= right.Length || i >= FacingRight.Length || right[i] != FacingRight[i]);
@@ -164,6 +166,8 @@ internal static class Check
             Expect(TimelinePanel.TimelineLook(monitor, ps, pw, ph, scale) == 1, "look at " + scale * 100 + "%: the Program monitor shows one sign, not enough (" + TimelinePanel.TimelineLook(monitor, ps, pw, ph, scale) + ")");
             Expect(TimelinePanel.TimelineLook(Blank(), ps, pw, ph, scale) == 0, "look at " + scale * 100 + "%: an empty panel shows none");
         }
+
+        LiveFocus.Run(Expect);
 
         Console.WriteLine(failures == 0 ? "\nAll Windows listener checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;

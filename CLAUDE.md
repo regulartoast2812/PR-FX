@@ -225,7 +225,17 @@ Electron overlay is used only where connectors.json says `"overlay": "host"` (no
   On Windows: `native\windows\build-windows.cmd`. The output
   `native/windows/build/PRFXShortcutListener.exe` is committed so editors need no SDK.
 - Checks: `./tools/check-windows-bridge.sh` (or `.cmd`) against `Core/` on net8, and on Windows
-  `tools\check-windows-listener.cmd` (Edie's sprite against the macOS one, the playhead detector).
+  `tools\check-windows-listener.cmd` (Edie's sprite against the macOS one, the playhead detector, and the live palette
+  focus checks).
+- **The palette must never close as it opens (2026-11-22, the user: "have a safeguard so that won't happen again… it's
+  literally break 50% of abilities").** It happened three times (the banner made TopMost took the front; Alt+Tab's switcher
+  hid Premiere; Windows reported Premiere in front while the palette took it) and every check passed each time. Now: every
+  keep/close decision is `Core/PaletteFocus.cs`'s (never `Hide()` the palette from a focus event directly); its rules are
+  checked in `check-windows-bridge`; `check-windows-listener` opens the real palette and banner against a stand-in Premiere
+  in another process that grabs the front back, one scenario per past cause; and `build-windows.cmd` refuses to build the
+  listener if either fails (`PRFX_SKIP_LIVE_FOCUS=1` skips only the live part, e.g. with the screen locked; say so if used).
+  Any new window the listener shows, or any change to how it takes the front, adds a scenario there. At run time, closing
+  as it opened twice in a row makes it wait longer, and `/health` reports `paletteQuickCloses` (0 is right).
 - Paths: support `%APPDATA%\PR FX Palette\`, logs `%APPDATA%\PR FX Palette\Logs\`
   (host.jsx `prfx.logPath` follows), installed exe `%LOCALAPPDATA%\PR FX Palette\bin\` with its
   `listener-build.txt`, autostart HKCU Run value "PR FX Shortcut Listener". The engine installs, registers

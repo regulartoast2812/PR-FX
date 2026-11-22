@@ -93,6 +93,7 @@ namespace PrFxShortcutListener
 
             timeline.Log = Log.Write;
             palette.Log = Log.Write;
+            palette.IsOurs = h => h == toast.Handle || h == highlight.Handle;
             toast.Log = Log.Write;
             toast.PaletteWindow = () => palette.Visible ? palette.Handle : IntPtr.Zero;
             hook = new KeyboardHook(Decide)
@@ -739,6 +740,7 @@ namespace PrFxShortcutListener
                    ",\"catalogCount\":" + catalogCount + ",\"catalogRevision\":" + revision + ",\"catalogFingerprint\":" + Json.Quote(fingerprint) +
                    ",\"pendingCommand\":" + Json.Quote(pending) + ",\"focus\":" + Json.Quote(scope.Reason) +
                    ",\"paletteFrameSaved\":" + (File.Exists(Paths.PaletteFrame) ? "true" : "false") +
+                   ",\"paletteQuickCloses\":" + palette.QuickCloses +
                    ",\"caretCalibrated\":" + (caretCalibrated || plainKeysOverride ? "true" : "false") +
                    ",\"timelineDetection\":" + Json.Quote(timeline.Details) +
                    ",\"geometry\":{\"live\":" + RectJson(timeline.LiveRect) + ",\"saved\":" + RectJson(timeline.LastTimelineRect) + ",\"click\":null,\"panelsHidden\":false,\"premiereFrontmost\":" + (premiere ? "true" : "false") +

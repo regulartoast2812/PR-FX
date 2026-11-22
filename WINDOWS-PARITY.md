@@ -96,7 +96,10 @@ using it.
 ## Checks
 
 - `tools\check-windows-bridge.cmd` (or `.sh` on the Mac): the platform-neutral core, nudges, settings, scoping reasons.
-- `tools\check-windows-listener.cmd` (Windows only): Edie's sprite matches the macOS one, the playhead detector and the Timeline look.
+- `tools\check-windows-listener.cmd` (Windows only): Edie's sprite matches the macOS one, the playhead detector and the Timeline look,
+  and the live palette focus checks: the real Ctrl+Space palette and banner against a stand-in Premiere (another process) that grabs
+  the front back. `build-windows.cmd` won't build the listener unless these and the bridge checks pass (2026-11-22, after the palette
+  closed as it opened a third time; see CLAUDE.md).
 
 ## Still to verify on Windows
 
