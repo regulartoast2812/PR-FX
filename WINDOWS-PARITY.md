@@ -84,6 +84,7 @@ using it.
   `whisperx.exe` (quoted Windows path from settings) wrote `.srt` and `.json`, read back with the right text. Run with
   `--model small --no_align` (the cached model; see below). WhisperX's "torchcodec is not installed" warning is
   harmless: it decodes with the ffmpeg program. The ffmpeg found is now also put on PATH for WhisperX.
+- **Captions: timing and made-up lines** (2026-11-22, both OSes). WhisperX's Vietnamese alignment model (`wav2vec2-base-vi-vlsp2020`) needs code WhisperX doesn't load, so its word times were noise (a 9 s sentence squeezed into 2 s), and its Silero gate missed most of the user's quiet speech. The Whisper caption functions now run `client/prai/scripts/prfx_transcribe.py` with WhisperX's own Python (faster-whisper, whole file, Whisper's word times, no new download), and `client/prai/js/whisper-clean.js` drops what Whisper made up (channel closing lines, collapsed word timing, bare numbers, Whisper's own low-confidence marks). Seen on the user's 7:19 sequence: 2 min, 16 lines kept, 13 made-up dropped, the known sentence at 23.72-33.04 s (speech 23.96-33.21 s).
 - Without a saved project, the SRT is saved in `~\Videos\Edie Captions` on Windows (it was `~/Movies/...`).
 
 - **WhisperX crashed on non-English speech** (2026-11-22): Python on Windows writes to a pipe in cp1252, and WhisperX

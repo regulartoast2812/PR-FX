@@ -5444,22 +5444,97 @@
     });
   }
 
+  /* The program a WhisperX command line starts: '"C:\...\whisperx.exe"', '/Users/x/env/bin/whisperx', or "" when it
+     isn't a path that exists (a bare "whisperx" found on PATH). */
+  function whisperCommandProgram(command, nodeRequire) {
+    var fs = nodeRequire("fs");
+    var text = String(command || "").replace(/^\s+|\s+$/g, "");
+    var quoted = /^(["'])(.*?)\1/.exec(text);
+    var program = quoted ? quoted[2] : (fs.existsSync(text) ? text : text.split(/\s+/)[0]);
+    try {
+      return program && fs.statSync(program).isFile() ? program : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  /* WhisperX's own Python, which has faster-whisper: beside its command in the environment Creative Assist makes
+     (whisperx-env/Scripts/python.exe on Windows, whisperx-env/bin/python on the Mac), else the one its launcher
+     script names on its first line (pip, pipx, Homebrew). "" when none is found. */
+  function whisperxPythonPath(command, nodeRequire) {
+    var fs = nodeRequire("fs");
+    var path = nodeRequire("path");
+    var program = whisperCommandProgram(command, nodeRequire);
+    if (!program) {
+      return "";
+    }
+    var names = isWindowsPlatform() ? ["python.exe"] : ["python3", "python"];
+    for (var i = 0; i < names.length; i++) {
+      var beside = path.join(path.dirname(program), names[i]);
+      if (fs.existsSync(beside)) {
+        return beside;
+      }
+    }
+    try {
+      var fd = fs.openSync(program, "r");
+      var buffer = nodeRequire("buffer").Buffer.alloc(512);
+      var read = fs.readSync(fd, buffer, 0, 512, 0);
+      fs.closeSync(fd);
+      var head = buffer.slice(0, read).toString("utf8");
+      // "#!/path/python", or pip's form for paths with spaces: "#!/bin/sh" then exec '/path with space/python'.
+      var named = /^#!\s*(\S*python[\w.]*)\s*$/m.exec(head) || /exec'?\s+['"]([^'"]*python[\w.]*)['"]/.exec(head);
+      if (named && fs.existsSync(named[1])) {
+        return named[1];
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  // PR FX's transcription script (client/prai/scripts/prfx_transcribe.py), or "" if it's missing.
+  function prfxTranscribeScriptPath(nodeRequire) {
+    var file = nodeRequire("path").join(extensionRootPath(nodeRequire), "scripts", "prfx_transcribe.py");
+    return nodeRequire("fs").existsSync(file) ? file : "";
+  }
+
+  /* Languages whose default WhisperX alignment model gives noise. Vietnamese's (nguyenvulebinh/wav2vec2-base-vi-vlsp2020)
+     needs model code WhisperX doesn't load: the user's sentence of 9 s came back squeezed into 2 s (2026-11-22). Only
+     used when WhisperX runs on its own (its Python not found); then Whisper's segment times are kept instead. */
+  var whisperxBrokenAlignLanguages = { vi: true };
+
   function buildWhisperAlignCommand(audioPath, textPath, outputPath) {
     var settings = getWhisperSettings();
     if (!settings.command) {
       throw new Error("Whisper align command is not configured.");
     }
     if (isWhisperxCommand(settings.command)) {
+      var nodeRequire = getNodeRequire();
+      var python = nodeRequire ? whisperxPythonPath(settings.command, nodeRequire) : "";
+      var script = nodeRequire ? prfxTranscribeScriptPath(nodeRequire) : "";
+      if (python && script) {
+        // Whisper over the whole file, no voice gate, its own word times (see the script for why).
+        return [
+          shellQuote(python),
+          shellQuote(script),
+          "--audio " + shellQuote(audioPath),
+          "--output_dir " + shellQuote(outputPath),
+          "--model " + shellQuote(settings.model),
+          "--language " + shellQuote(String(settings.language || "auto").replace(/[^a-z-]/gi, "") || "auto"),
+          "--device " + shellQuote(whisperDeviceForCli(settings.device)),
+          "--compute_type " + shellQuote(whisperComputeTypeForCli(settings.device))
+        ].join(" ");
+      }
+      var language = String(settings.language || "").toLowerCase();
       return [
         settings.command,
         "--model " + shellQuote(settings.model) + whisperLanguageArg(settings),
         "--device " + shellQuote(whisperDeviceForCli(settings.device)),
         "--compute_type " + shellQuote(whisperComputeTypeForCli(settings.device)),
         "--vad_method silero",
+        whisperxBrokenAlignLanguages[language] ? "--no_align" : "",
         "--output_dir " + shellQuote(outputPath),
         "--output_format all",
         shellQuote(audioPath)
-      ].join(" ");
+      ].filter(Boolean).join(" ");
     }
     return [
       settings.command,
@@ -5526,13 +5601,13 @@
     return candidates[0].path;
   }
 
-  function findGeneratedJson(nodeRequire, outputDir) {
+  function findGeneratedJson(nodeRequire, outputDir, skipName) {
     var fs = nodeRequire("fs");
     var path = nodeRequire("path");
     var entries = fs.readdirSync(outputDir);
     var candidates = [];
     for (var i = 0; i < entries.length; i++) {
-      if (/\.json$/i.test(entries[i])) {
+      if (/\.json$/i.test(entries[i]) && entries[i] !== skipName) {
         var filePath = path.join(outputDir, entries[i]);
         var stat = fs.statSync(filePath);
         candidates.push({ path: filePath, mtime: stat.mtime.getTime() });
@@ -5542,6 +5617,54 @@
       return b.mtime - a.mtime;
     });
     return candidates.length ? candidates[0].path : "";
+  }
+
+  /* Whisper's JSON minus the lines it made up and any noise word timing (js/whisper-clean.js), written beside it as
+     cleaned.json and cleaned.srt, which every caption step reads from then on. Returns their paths, the SRT text and
+     what was dropped, or null when there is no JSON to clean (a custom align command). */
+  function cleanWhisperOutputFiles(nodeRequire, outputDir, log) {
+    var cleaner = window.prfxWhisperClean;
+    var jsonPath = findGeneratedJson(nodeRequire, outputDir, "cleaned.json");
+    if (!cleaner || !jsonPath) {
+      return null;
+    }
+    var fs = nodeRequire("fs");
+    var path = nodeRequire("path");
+    var payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    } catch (_) {
+      return null;
+    }
+    var cleaned = cleaner.cleanTranscript(payload);
+    var result = {
+      jsonPath: path.join(outputDir, "cleaned.json"),
+      srtPath: path.join(outputDir, "cleaned.srt"),
+      contents: buildSrtFromBlocks(cleaned.segments),
+      kept: cleaned.segments.length,
+      dropped: cleaned.dropped,
+      wordTiming: cleaned.wordTiming
+    };
+    fs.writeFileSync(result.jsonPath, JSON.stringify({
+      segments: cleaned.segments,
+      language: payload.language,
+      engine: payload.engine || "whisperx",
+      wordTiming: cleaned.wordTiming,
+      dropped: cleaned.dropped
+    }), "utf8");
+    fs.writeFileSync(result.srtPath, result.contents, "utf8");
+    if (log) {
+      var lines = ["Kept " + result.kept + " line(s) Whisper heard; dropped " + cleaned.dropped.length + " it made up."];
+      for (var d = 0; d < cleaned.dropped.length; d++) {
+        var item = cleaned.dropped[d];
+        lines.push("  dropped " + (isFinite(item.start) ? item.start.toFixed(2) + "s" : "?") + " \"" + item.text + "\" (" + item.reason + ")");
+      }
+      if (cleaned.wordTiming === "broken-alignment") {
+        lines.push("WhisperX's word alignment was noise; captions use Whisper's line times.");
+      }
+      log(lines.join("\n") + "\n");
+    }
+    return result;
   }
 
   function whisperWordsFromJsonText(jsonText) {
@@ -5969,14 +6092,25 @@
           appendInstallStageLog("model", text);
         }
       }).then(function () {
-        srtPath = isWhisperxCommand(settings.command) ? findGeneratedSrt(nodeRequire, outputDir) : customOut;
+        var cleaned = isWhisperxCommand(settings.command) ? cleanWhisperOutputFiles(nodeRequire, outputDir, function (text) {
+          appendInstallStageLog("model", text);
+        }) : null;
+        if (cleaned) {
+          jsonPath = cleaned.jsonPath;
+          if (!cleaned.kept) {
+            throw new Error(cleaned.dropped.length
+              ? "Whisper heard no speech: the " + cleaned.dropped.length + " line(s) it wrote were made up (e.g. \"" + cleaned.dropped[0].text + "\")."
+              : "Whisper heard no speech in this audio.");
+          }
+        }
+        srtPath = cleaned ? cleaned.srtPath : isWhisperxCommand(settings.command) ? findGeneratedSrt(nodeRequire, outputDir) : customOut;
         var contents = fs.readFileSync(srtPath, "utf8");
         var whisperContents = contents;
         var timingSource = "whisperSrtChunks";
         var alignmentWords = [];
         var originalScriptBlocks = [];
         if ((action.useProvidedText === true || action.type === "cutAudioAndTimeSubtitles") && providedText.replace(/\s+/g, "")) {
-          jsonPath = isWhisperxCommand(settings.command) ? findGeneratedJson(nodeRequire, outputDir) : "";
+          jsonPath = jsonPath || (isWhisperxCommand(settings.command) ? findGeneratedJson(nodeRequire, outputDir) : "");
           if (jsonPath) {
             alignmentWords = whisperWordsFromJsonText(fs.readFileSync(jsonPath, "utf8"));
             originalScriptBlocks = lineBlocksFromWhisperWords(alignmentWords, providedText);
@@ -6539,9 +6673,12 @@
           appendInstallStageLog("model", text);
         }
       }).then(function () {
-        jsonPath = isWhisperxCommand(settings.command) ? findGeneratedJson(nodeRequire, outputDir) : "";
+        var cleaned = isWhisperxCommand(settings.command) ? cleanWhisperOutputFiles(nodeRequire, outputDir, function (text) {
+          appendInstallStageLog("model", text);
+        }) : null;
+        jsonPath = cleaned ? cleaned.jsonPath : isWhisperxCommand(settings.command) ? findGeneratedJson(nodeRequire, outputDir) : "";
         var words = jsonPath ? whisperWordsFromJsonText(fs.readFileSync(jsonPath, "utf8")) : [];
-        var detectedSrt = fs.readFileSync(isWhisperxCommand(settings.command) ? findGeneratedSrt(nodeRequire, outputDir) : customOut, "utf8");
+        var detectedSrt = fs.readFileSync(cleaned ? cleaned.srtPath : isWhisperxCommand(settings.command) ? findGeneratedSrt(nodeRequire, outputDir) : customOut, "utf8");
         var audioBlocks = words.length ? lineBlocksFromWhisperWords(words, transcript) : parseSrtBlocks(retimeProvidedTextToDetectedSrt(detectedSrt, transcript));
         if (!audioBlocks.length) {
           throw new Error("Full Process could not align script rows to audio.");

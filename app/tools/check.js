@@ -224,5 +224,61 @@ check(brewTotal.kind === 'brew-total' && brewTotal.count === 4 && brewPour.kind 
 check(err.kind === 'error', 'media setup: an error line is kept for the message');
 check(media.f0 === 0 && Math.abs(media.f2half - 0.55) < 1e-9 && media.fover === 1, 'media setup: the overall bar adds whole steps and the current share, never past 100%');
 
+// Whisper captions (2026-11-22, the user's first Windows run: "the timing failed miserably… it made shih up"). The
+// fixtures are lines from that run: WhisperX's Vietnamese alignment squeezed a 9 s sentence into 2 s, and Whisper wrote
+// a channel's closing line over silence. js/whisper-clean.js drops what was made up and ignores noise word timing.
+{
+  const clean = require(path.join(repoRoot, 'client/prai/js/whisper-clean.js'));
+  const w = (word, start, end, extra) => Object.assign({ word, start, end }, extra);
+  const p = probability => ({ probability });
+  const real = { start: 23.32, end: 25.06, text: 'Ê, người chồng ơi', avg_logprob: -0.51, compression_ratio: 1.03, no_speech_prob: 0,
+    words: [w('Ê,', 23.32, 24.12, p(0.74)), w('người', 24.24, 24.54, p(0.92)), w('chồng', 24.54, 24.78, p(0.99)), w('ơi', 24.78, 25.06, p(0.99))] };
+  const ghien = { start: 432.26, end: 433.24, text: 'Hãy subscribe cho kênh Ghiền Mì Gõ Để không bỏ lỡ', avg_logprob: -0.40 };
+  const lala = { start: 200.14, end: 201.54, text: 'Các bạn hãy subscribe cho kênh La La School Để không bỏ lỡ những video hấp dẫn' };
+  const tail = { start: 236.84, end: 242.02, text: 'Để không bỏ lỡ những video hấp dẫn' };
+  const english = { start: 10, end: 12, text: 'Thank you for watching!' };
+  const meant = { start: 5, end: 9, text: 'Mình nói thật là các bạn nên subscribe kênh của chị ấy vì video rất hay' };
+  const digits = { start: 118.9, end: 119, text: ' 11', words: [w('11', 118.9, 119, p(0.49))] };
+  const collapsed = { start: 152.42, end: 156.66, text: 'Mình sẽ làm một cái video mới nhất cho mọi người xem',
+    words: ['Mình', 'sẽ', 'làm', 'một', 'cái', 'video', 'mới', 'nhất', 'cho', 'mọi', 'người', 'xem'].map((t, i) => i < 2 ? w(t, 152.42 + i, 153.4 + i, p(0.9)) : w(t, 153.84, 153.84, p(0.95))) };
+  const unsure = { start: 327.12, end: 327.52, text: 'ok', words: [w('ok', 327.12, 327.52, p(0.2))] };
+  // WhisperX's wav2vec2 alignment for Vietnamese: ~0.01 a word, 0.02 s a letter.
+  const squeezed = { start: 23.938, end: 26.062, text: 'Ê, người chồng ơi, camera nó hiện là', avg_logprob: -0.27,
+    words: [w('Ê,', 23.938, 23.978, { score: 0.015 }), w('người', 23.998, 24.098, { score: 0.01 }), w('chồng', 24.118, 24.218, { score: 0.01 }),
+      w('ơi,', 24.239, 24.299, { score: 0.017 }), w('camera', 24.319, 24.439, { score: 0.009 })] };
+  const aligned = { start: 1, end: 2, text: 'hello there friend', words: [w('hello', 1, 1.3, { score: 0.8 }), w('there', 1.35, 1.6, { score: 0.7 }), w('friend', 1.6, 2, { score: 0.9 })] };
+  check(clean.madeUpReason(real) === '', 'whisper captions: a real line is kept');
+  check(/closing line/.test(clean.madeUpReason(ghien)) && /closing line/.test(clean.madeUpReason(lala)) && /closing line/.test(clean.madeUpReason(tail)),
+    'whisper captions: "Hãy subscribe cho kênh Ghiền Mì Gõ…" and its kin, never said, are dropped');
+  check(/closing line/.test(clean.madeUpReason(english)), 'whisper captions: "Thank you for watching" over silence is dropped');
+  check(clean.madeUpReason(meant) === '', 'whisper captions: a real sentence that mentions subscribing is kept');
+  check(/numbers/.test(clean.madeUpReason(digits)), 'whisper captions: a line of bare numbers over noise is dropped');
+  check(/collapsed/.test(clean.madeUpReason(collapsed)), 'whisper captions: a line whose words got no time in the audio is dropped');
+  check(/unsure/.test(clean.madeUpReason(unsure)), "whisper captions: a word Whisper itself doubts (p 0.2) is dropped");
+  check(/unsure/.test(clean.madeUpReason({ start: 0, end: 1, text: 'xin chào', avg_logprob: -1.3 })) && /repeats/.test(clean.madeUpReason({ start: 0, end: 1, text: 'a a a', compression_ratio: 2.8 })),
+    "whisper captions: Whisper's own failed-decode marks (log-prob, compression ratio) drop a line");
+  check(clean.alignmentLooksBroken(squeezed) && !clean.alignmentLooksBroken(aligned) && !clean.alignmentLooksBroken(real), 'whisper captions: noise wav2vec2 alignment is told from real alignment and from Whisper word times');
+  const result = clean.cleanTranscript({ segments: [real, squeezed, ghien, aligned] });
+  const keptReal = result.segments[0], keptSqueezed = result.segments[1];
+  check(result.segments.length === 3 && result.dropped.length === 1 && result.dropped[0].start === 432.26, 'whisper captions: the transcript keeps 3 lines and drops the made-up one');
+  check(keptSqueezed.words.length === 0 && keptSqueezed.start === 23.938 && keptSqueezed.end === 26.062 && result.wordTiming === 'broken-alignment',
+    'whisper captions: noise word timing is thrown away, the line keeps its own times');
+  check(Math.abs(keptReal.start - 23.72) < 1e-9 && keptReal.end === 25.06 && keptReal.words[0].end === 24.12,
+    "whisper captions: a first word stretched over the silence before it is held to what its letters fill (23.32 s -> 23.72 s)");
+  check(result.segments.every(s => s.text && s.end > s.start) && result.segments.map(s => s.text).join('|') === [real, squeezed, aligned].map(s => s.text).join('|'),
+    'whisper captions: kept text is exactly what Whisper wrote');
+
+  const main = readRepo('client/prai/js/main.js');
+  const script = readRepo('client/prai/scripts/prfx_transcribe.py');
+  check(/function whisperxPythonPath/.test(main) && /"python\.exe"\] : \["python3", "python"\]/.test(main) && /prfx_transcribe\.py/.test(main),
+    "whisper captions: the panel runs PR FX's transcription with WhisperX's own Python on both OSes");
+  check(/whisperxBrokenAlignLanguages = \{ vi: true \}/.test(main) && /"--no_align"/.test(main), 'whisper captions: WhisperX on its own skips its broken Vietnamese alignment');
+  check((main.match(/\? cleanWhisperOutputFiles\(nodeRequire, outputDir/g) || []).length === 2, 'whisper captions: both Whisper caption paths (Subtitles and Full Process) read the cleaned transcript');
+  check(/vad_filter=False/.test(script) && /word_timestamps=True/.test(script) && /condition_on_previous_text=False/.test(script) && !/align/.test(script.replace(/#.*|"""[\s\S]*?"""/g, '')),
+    'whisper captions: the script listens to the whole file, with Whisper word times and no alignment model');
+  const praiPage = readRepo('client/prai/index.html');
+  check(praiPage.indexOf('js/whisper-clean.js') > 0 && praiPage.indexOf('js/whisper-clean.js') < praiPage.indexOf('js/main.js'), 'whisper captions: the cleaner loads before main.js');
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll app checks passed');
 process.exit(failures ? 1 : 0);
