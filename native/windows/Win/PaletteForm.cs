@@ -115,11 +115,18 @@ namespace PrFxShortcutListener
             Controls.Add(searchHost);
             Controls.Add(header);
 
+            // Closing when the palette loses the front, but not on a blip (2026-11-22, the user: "when i ctrl space it
+            // appear for 1 frame and closes"). Taking the front attaches to Premiere's input for a moment, and Windows
+            // reported Premiere in front during Open itself, so the palette closed as it opened, on every press. Now:
+            // nothing closes while opening; a loss is checked again 120 ms later; and if Premiere takes the front back
+            // in the first 600 ms after opening, the palette takes it back (twice at most) instead of closing.
+            deactivateCheck.Interval = 120;
+            deactivateCheck.Tick += (_, __) => { deactivateCheck.Stop(); CheckLostFront(); };
             Deactivate += (_, __) =>
             {
-                if (!Visible) return;
-                Log?.Invoke("Palette closed: " + WindowName(Native.GetForegroundWindow()) + " took the front");
-                ClosePalette(false);
+                if (!Visible || opening) return;
+                deactivateCheck.Stop();
+                deactivateCheck.Start();
             };
             ResetApplyMenu();
         }
@@ -164,8 +171,42 @@ namespace PrFxShortcutListener
             return System.IO.Path.GetFileName(Native.ProcessImagePath(pid)) + " '" + title + "'";
         }
 
+        private readonly System.Windows.Forms.Timer deactivateCheck = new System.Windows.Forms.Timer();
+        private bool opening;
+        private DateTime openedAt;
+        private int reclaims;
+
+        private bool OursInFront()
+        {
+            var front = Native.GetForegroundWindow();
+            if (front == Handle) return true;
+            Native.GetWindowThreadProcessId(front, out var pid);
+            return pid == (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        }
+
+        private void CheckLostFront()
+        {
+            if (!Visible || OursInFront()) return;
+            var front = Native.GetForegroundWindow();
+            var premiereTookIt = front == returnWindow || (returnWindow != IntPtr.Zero && Native.GetAncestor(front, Native.GA_ROOTOWNER) == Native.GetAncestor(returnWindow, Native.GA_ROOTOWNER));
+            if (premiereTookIt && reclaims < 2 && (DateTime.UtcNow - openedAt).TotalMilliseconds < 600)
+            {
+                reclaims++;
+                Log?.Invoke("Palette took the front back from " + WindowName(front) + " (just opened)");
+                Native.ForceForeground(Handle);
+                Activate();
+                search.Focus();
+                return;
+            }
+            Log?.Invoke("Palette closed: " + WindowName(front) + " took the front");
+            ClosePalette(false);
+        }
+
         public void Open(IntPtr premiereWindow)
         {
+            deactivateCheck.Stop();
+            opening = true;
+            reclaims = 0;
             returnWindow = premiereWindow;
             if (pendingTransition != null || pendingMove != null || pendingStagger != null) ResetApplyMenu();
             catalogQuery = "";
@@ -177,11 +218,16 @@ namespace PrFxShortcutListener
             Native.ForceForeground(Handle);
             Activate();
             search.Focus();
+            opening = false;
+            openedAt = DateTime.UtcNow;
             Log?.Invoke("Palette opened" + (Native.GetForegroundWindow() == Handle ? "" : "; Windows kept " + WindowName(Native.GetForegroundWindow()) + " in front"));
+            // If Windows kept another window in front, the same check decides: take it back (Premiere) or close.
+            if (!OursInFront()) deactivateCheck.Start();
         }
 
         public void ClosePalette(bool returnToPremiere)
         {
+            deactivateCheck.Stop();
             SaveFrame();
             Hide();
             if (returnToPremiere && returnWindow != IntPtr.Zero && Native.IsWindow(returnWindow)) Native.ForceForeground(returnWindow);

@@ -110,6 +110,7 @@ namespace PrFxShortcutListener
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr hWnd);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
         public const uint GA_ROOT = 2;
+        public const uint GA_ROOTOWNER = 3;
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
         [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
