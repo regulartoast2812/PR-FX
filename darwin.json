@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T09:17:05.204Z",
+  "checkedAt": "2026-11-23T09:20:29.244Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -29,7 +29,7 @@
     },
     "tool:prfx": {
       "tone": "wait",
-      "state": "Listener offline · Accessibility: not granted"
+      "state": "Chords only — Timeline panel could not be located"
     },
     "premiere": {
       "tone": "good",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "bad",
-      "state": "Not running"
+      "tone": "wait",
+      "state": "Chords only — Timeline panel could not be located"
     },
     "ai": {
       "tone": "good",
