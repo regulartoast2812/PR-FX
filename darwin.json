@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T10:01:25.869Z",
+  "checkedAt": "2026-11-23T10:14:38.051Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -28,8 +28,8 @@
       "state": "Thinks with Claude"
     },
     "tool:prfx": {
-      "tone": "good",
-      "state": "Timeline armed"
+      "tone": "wait",
+      "state": "Listener offline · Accessibility: not granted"
     },
     "premiere": {
       "tone": "good",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "good",
-      "state": "Timeline armed"
+      "tone": "bad",
+      "state": "Not running"
     },
     "ai": {
       "tone": "good",
