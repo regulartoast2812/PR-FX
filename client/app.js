@@ -6,7 +6,7 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20261119-edie-name-1';
+  var PRFX_HOST_BUILD = '20261123-media-search-2';
   // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
   // host and bridge protocol are shared. Keep platform branches to setup only.
   var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';
@@ -95,7 +95,6 @@
   var palette = document.getElementById('palette');
   var search = document.getElementById('command-search');
   var list = document.getElementById('command-list');
-  var paletteTitle = document.getElementById('palette-title');
   var paletteCharacter = document.getElementById('palette-character');
   var brandFace = document.querySelector('.brand-face');
   // The palette has its own Edie, flipped to face right toward the commands (2026-11-21); the
@@ -104,6 +103,37 @@
     paletteCharacter.appendChild(brandFace.cloneNode(true));
   }
   var shortcutBadge = document.getElementById('shortcut-badge');
+  // The palette, laid out like Sage's search (2026-11-23): Commands and Media, Tab between them. palette-search.js
+  // builds the rows exactly as the native palette does (native/PRFXPaletteSearch.swift).
+  var PS = window.PRFXPaletteSearch;
+  var paletteTabs = document.getElementById('palette-tabs');
+  var paletteFooter = document.getElementById('palette-footer');
+  var PALETTE_RECENT_KEY = 'prfx.palette.recent.v1';
+  // Small glyphs standing in for the native palette's SF Symbols.
+  var PALETTE_ICONS = {
+    'custom': '<path d="M9.5 1L3 9.2h4.2L6.3 15 13 6.8H8.8z"/>',
+    'ai-function': '<path d="M6 1l1.3 3.7L11 6 7.3 7.3 6 11 4.7 7.3 1 6l3.7-1.3zM12 9l.8 2.2L15 12l-2.2.8L12 15l-.8-2.2L9 12l2.2-.8z"/>',
+    'effect': '<path d="M2 13.3l8-8 1.2 1.2-8 8zM11 1l.6 1.4L13 3l-1.4.6L11 5l-.6-1.4L9 3l1.4-.6zM14 6.5l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4z"/>',
+    'audio-effect': '<path d="M1.5 6H4l4-3.2v10.4L4 10H1.5zM10.5 4.6a4.6 4.6 0 010 6.8l-.9-.9a3.3 3.3 0 000-5z"/>',
+    'transition': '<path fill-rule="evenodd" d="M1.5 3h13v10h-13zM2.8 4.3v7.4H8V4.3z"/>',
+    'audio-transition': '<path d="M1 7h2v2H1zM4 5h2v6H4zM7 2h2v12H7zM10 4h2v8h-2zM13 6h2v4h-2z"/>',
+    'preset': '<path d="M8 1l2.2 4.5 4.8.7-3.5 3.4.8 4.9L8 12.2l-4.3 2.3.8-4.9L1 6.2l4.8-.7z"/>',
+    'transition-placement': '<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>',
+    'move-mode': '<path d="M5 1l4 4H6v6H4V5H1zM11 15l-4-4h3V5h2v6h3z"/>',
+    'stagger-frames': '<path d="M1 14v-3h4V7.5h4V4h6v2.2h-3.8v3.5H7.2v3.5H3.2V14z"/>',
+    'video': '<path fill-rule="evenodd" d="M2 2h12v12H2zM3.6 3.8v2h1.6v-2zm0 3.2v2h1.6V7zm0 3.2v2h1.6v-2zm7.2-6.4v2h1.6v-2zm0 3.2v2h1.6V7zm0 3.2v2h1.6v-2z"/>',
+    'audio': '<path d="M1 7h2v2H1zM4 5h2v6H4zM7 2h2v12H7zM10 4h2v8h-2zM13 6h2v4h-2z"/>',
+    'image': '<path fill-rule="evenodd" d="M1 2.5h14v11H1zm1.4 1.4v6.8l3.6-3.6 3 3 2-2 2.6 2.6V3.9zM11 5.3a1.1 1.1 0 110 2.2 1.1 1.1 0 010-2.2z"/>',
+    'bgm': '<path d="M7 1.5h1.5c.3 1.6 1.6 2.6 3.5 3v1.8c-1.4-.2-2.6-.7-3.5-1.5V12a2.5 2.5 0 11-1.5-2.3z"/>',
+    'other': '<path d="M8 1l7 3.5L8 8 1 4.5zM2.6 7.2L8 9.9l5.4-2.7L15 8l-7 3.5L1 8zm0 3.5L8 13.4l5.4-2.7 1.6.8L8 15l-7-3.5z"/>',
+    'dot': '<circle cx="8" cy="8" r="4"/>'
+  };
+  var managerType = 'all';
+  var paletteCategory = 'commands';
+  var paletteRows = [];
+  var paletteVisible = [];
+  var paletteMedia = [];
+  var mediaLoading = false, mediaError = '', mediaLoadedAt = 0, mediaRequestId = 0;
   var pendingTransitionCommand = null;
   var pendingMoveCommand = null;
   var pendingStaggerCommand = null;
@@ -132,7 +162,7 @@
   var syntheticDurationInput = document.getElementById('synthetic-duration');
   var shortcutFeedbackInput = document.getElementById('shortcut-feedback');
   var managerSearch = document.getElementById('command-manager-search');
-  var managerTypeFilter = document.getElementById('command-type-filter');
+  var managerTypeTabs = document.getElementById('manager-type-tabs');
   var managerList = document.getElementById('command-manager-list');
   var managerShortcut = document.getElementById('manager-shortcut');
   var failureLogButton = document.getElementById('open-failure-log');
@@ -299,7 +329,7 @@
   }
   function updateShortcutUI() {
     shortcutInput.value = displayShortcut(settings.shortcut);
-    shortcutBadge.textContent = displayShortcut(settings.shortcut);
+    if (shortcutBadge) shortcutBadge.textContent = displayShortcut(settings.shortcut);
     durationInput.value = settings.transitionFrames;
     staggerFramesInput.value = settings.staggerFrames;
     staggerGroupInput.value = settings.staggerGroup;
@@ -323,26 +353,52 @@
     return Math.max(minimum, Math.min(maximum, value));
   }
   function bindingFor(command) { return (settings.bindings || []).filter(function (binding) { return commandKey(binding.command) === commandKey(command); })[0]; }
+  // The Commands list, laid out like the palette and Sage's search (2026-11-23): type tabs with counts, then each
+  // kind's commands under its coloured name, the matched part of each name picked out, and its shortcut.
   function renderManager() {
-    var query = (managerSearch.value || '').toLowerCase().trim();
-    var typeFilter = managerTypeFilter.value;
-    var available = commands.filter(function (command) {
-      var binding = bindingFor(command);
+    var query = managerSearch.value || '';
+    var base = commands.filter(function (command) {
       if (!commandIsVisible(command)) return false;
-      if (query && (command.name + ' ' + command.type).toLowerCase().indexOf(query) === -1) return false;
-      if (typeFilter !== 'all' && command.type !== typeFilter) return false;
+      var binding = bindingFor(command);
       if (managerAssignmentFilter === 'assigned' && !binding) return false;
       if (managerAssignmentFilter === 'unassigned' && binding) return false;
       return true;
     });
+    var entries = base.map(function (command, i) { return { type: command.type, name: command.name, index: i }; });
+    var allRows = PS.commandRows(entries, query);
+    var typeCounts = {}, total = 0;
+    allRows.forEach(function (row) { if (row.kind === 'command') { typeCounts[base[row.index].type] = (typeCounts[base[row.index].type] || 0) + 1; total++; } });
+    var types = PS.kinds.map(function (k) { return k[0]; });
+    base.forEach(function (command) { if (types.indexOf(command.type) === -1) types.push(command.type); });
+    types = types.filter(function (type) { return base.some(function (command) { return command.type === type; }); });
+    if (managerType !== 'all' && types.indexOf(managerType) === -1) managerType = 'all';
+    function typeTab(type, label, count) {
+      var active = managerType === type;
+      return '<button type="button" class="palette-tab' + (active ? ' is-active' : '') + (count ? '' : ' is-empty') + '" role="tab" aria-selected="' + active + '" data-manager-type="' + escapeHtml(type) + '">' +
+        (type === 'all' ? '' : '<span style="display:inline-flex;color:' + paletteColour(type) + '">' + paletteIcon(type) + '</span>') + '<span>' + escapeHtml(label) + '</span><span class="count">' + count + '</span></button>';
+    }
+    managerTypeTabs.innerHTML = typeTab('all', 'All', total) + types.map(function (type) { return typeTab(type, PS.title(type), typeCounts[type] || 0); }).join('');
+    var rows = managerType === 'all' ? allRows : allRows.filter(function (row, i) {
+      if (row.kind === 'command') return base[row.index].type === managerType;
+      if (row.kind === 'section') { var next = allRows[i + 1]; return next && next.kind === 'command' && base[next.index].type === managerType; }
+      return false;
+    });
+    var available = rows.filter(function (row) { return row.kind === 'command'; }).map(function (row) { return base[row.index]; });
     if (!available.length) selectedManagerCommand = null;
     else if (!selectedManagerCommand || !available.some(function (command) { return commandKey(command) === commandKey(selectedManagerCommand); })) selectedManagerCommand = available[0];
     document.getElementById('command-count').textContent = available.length + ' command' + (available.length === 1 ? '' : 's');
-    managerList.innerHTML = available.map(function (command) {
+    managerList.innerHTML = available.length ? rows.map(function (row) {
+      if (row.kind === 'section') return '<div class="palette-section" style="color:' + paletteColour(row.colour) + '">' + escapeHtml(row.title) + '<span class="count">' + row.count + '</span></div>';
+      if (row.kind !== 'command') return '';
+      var command = base[row.index];
       var binding = bindingFor(command);
-      var type = command.type === 'ai-function' ? 'AI function' : command.type === 'custom' ? 'function' : command.type;
-      return '<div class="manager-row' + (selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand) ? ' is-active' : '') + '" data-command="' + escapeHtml(commandKey(command)) + '"><span class="manager-name" title="' + escapeHtml(command.name) + '">' + escapeHtml(command.name) + '</span><span class="manager-kind ' + escapeHtml(command.type) + '">' + escapeHtml(type) + '</span><span class="manager-shortcut">' + (binding ? '<kbd>' + escapeHtml(displayShortcut(binding.shortcut)) + '</kbd>' : '—') + '</span></div>';
-    }).join('');
+      var colour = paletteColour(command.type);
+      var active = selectedManagerCommand && commandKey(command) === commandKey(selectedManagerCommand);
+      return '<div class="manager-row' + (active ? ' is-active' : '') + '" role="option" aria-selected="' + !!active + '" data-command="' + escapeHtml(commandKey(command)) + '">' +
+        '<span class="icon" style="color:' + colour + '">' + paletteIcon(command.type) + '</span>' +
+        '<span class="manager-name" title="' + escapeHtml(command.name) + '">' + highlightName(command.name, row.at, colour) + '</span>' +
+        (binding ? '<span class="tag key">' + escapeHtml(displayShortcut(binding.shortcut)) + '</span>' : '') + '</div>';
+    }).join('') : '<p class="palette-note">' + (String(query).trim() ? 'No command is called that.' : managerAssignmentFilter === 'assigned' ? 'No command has a shortcut yet.' : 'No commands here.') + '</p>';
     var binding = selectedManagerCommand && bindingFor(selectedManagerCommand);
     document.getElementById('manager-command-name').textContent = selectedManagerCommand ? selectedManagerCommand.name : 'Select a command';
     var selectedType = selectedManagerCommand && (selectedManagerCommand.type === 'custom' ? 'Function' : selectedManagerCommand.type.replace(/-/g, ' '));
@@ -1071,6 +1127,7 @@
         try {
           var command = JSON.parse(request.responseText);
           if (!command) return;
+          if (command.type === 'media-list') { sendMediaListToListener(); return; }
           window.__prfxApplying = true;
           var completed = false;
           var startedAt = Date.now();
@@ -1082,7 +1139,7 @@
             setStatus(late, true);
             postCommandResult(command, false, late, startedAt);
           }, (LONG_RUNNING_COMMANDS[command && command.id] || (command && (command.type === 'preset' || command.type === 'ai-function'))) ? 600000 : 12000);
-          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
+          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
           dispatchCommand(command, payload, function (result) {
             if (completed) return;
             completed = true;
@@ -1103,6 +1160,24 @@
       request.ontimeout = request.onerror = finishPoll;
       try { request.send(); } catch (error) { finishPoll(); rememberPanelError('command polling send', error); }
     }, 250);
+  }
+  // The palette's Media search, when the engine isn't running: same as engine.js sendMediaList.
+  function sendMediaListToListener() {
+    window.__prfxApplying = true;
+    evalPremiere('prfx.listProjectMedia()', function (result) {
+      window.__prfxApplying = false;
+      var text = String(result || '');
+      if (text === 'EvalScript error.' || text.indexOf('ERROR:') === 0 || text.charAt(0) !== '{') {
+        text = JSON.stringify({ error: text === 'EvalScript error.' || !text ? 'Premiere did not answer.' : text.replace(/^ERROR:\s*/, ''), items: [], total: 0 });
+      }
+      try {
+        var request = new XMLHttpRequest();
+        request.open('POST', 'http://127.0.0.1:27389/media', true);
+        request.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+        request.timeout = 5000;
+        request.send(text);
+      } catch (_) {}
+    });
   }
   function syncPremiereCatalog(complete) {
     var extensionRoot = extensionFilesystemPath() || '';
@@ -1412,20 +1487,207 @@
     var query = search.value.toLowerCase().trim();
     return visibleCommands().filter(function (command) { return !query || (command.name + ' ' + command.type).toLowerCase().indexOf(query) !== -1; });
   }
-  function renderCommands() {
-    var available = filteredCommands();
-    activeIndex = Math.max(0, Math.min(activeIndex, available.length - 1));
-    list.innerHTML = available.length ? available.map(function (command, i) {
-      var kind = command.type === 'ai-function' ? 'AI function' : command.type === 'custom' || command.type === 'move-mode' || command.type === 'stagger-frames' ? 'function' : command.type === 'transition-placement' ? 'transition' : command.type;
-      var kindClass = command.type === 'ai-function' ? 'ai-function' : kind;
-      return '<button class="command' + (i === activeIndex ? ' is-active' : '') + '" role="option" aria-selected="' + (i === activeIndex) + '" data-name="' + escapeHtml(command.name) + '" data-id="' + escapeHtml(command.id || '') + '" data-move-mode="' + escapeHtml(command.moveMode || '') + '" data-type="' + command.type + '"><span class="command-name">' + escapeHtml(command.name) + '</span><span class="command-kind ' + escapeHtml(kindClass) + '">' + kind + '</span></button>';
-    }).join('') : '<p class="muted">No matching command.</p>';
+  function inApplyMenu() { return !!(pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand); }
+  function paletteColour(type) {
+    if (type === 'transition' || type === 'transition-placement') return 'var(--hue-blue)';
+    if (type === 'audio-transition') return 'var(--hue-cyan)';
+    if (type === 'custom' || type === 'move-mode' || type === 'stagger-frames') return 'var(--accent)';
+    if (type === 'preset' || type === 'ai-function') return 'var(--hue-purple)';
+    if (type === 'recent') return 'var(--muted)';
+    if (type === 'media') return 'var(--hue-pink)';
+    return 'var(--hue-orange)';
+  }
+  function paletteIcon(name) { return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' + (PALETTE_ICONS[name] || PALETTE_ICONS.dot) + '</svg>'; }
+  function highlightName(name, at, colour) {
+    name = String(name || '');
+    if (!at) return escapeHtml(name);
+    return escapeHtml(name.slice(0, at[0])) + '<mark style="color:' + colour + '">' + escapeHtml(name.slice(at[0], at[1])) + '</mark>' + escapeHtml(name.slice(at[1]));
+  }
+  function loadPaletteRecent() {
+    try { var saved = JSON.parse(localStorage.getItem(PALETTE_RECENT_KEY) || '{}'); return { commands: Array.isArray(saved.commands) ? saved.commands : [], media: Array.isArray(saved.media) ? saved.media : [] }; }
+    catch (_) { return { commands: [], media: [] }; }
+  }
+  function rememberPalette(commandKeyValue, mediaId) {
+    var recent = loadPaletteRecent();
+    function bump(list, key) { if (!key) return list; return [key].concat(list.filter(function (k) { return k !== key; })).slice(0, 5); }
+    recent.commands = bump(recent.commands, commandKeyValue);
+    recent.media = bump(recent.media, mediaId);
+    try { localStorage.setItem(PALETTE_RECENT_KEY, JSON.stringify(recent)); } catch (_) {}
+  }
+  function paletteRowKey(row) {
+    if (!row) return '';
+    if (row.kind === 'media') return paletteMedia[row.index] ? 'm:' + paletteMedia[row.index].id : '';
+    if (row.kind === 'command') return paletteVisible[row.index] ? (inApplyMenu() ? 'a:' : 'c:') + commandKey(paletteVisible[row.index]) : '';
+    return '';
+  }
+  function buildPaletteRows() {
+    var query = search.value;
+    if (inApplyMenu()) {
+      paletteVisible = filteredCommands();
+      paletteRows = paletteVisible.length ? paletteVisible.map(function (command, i) { return { kind: 'command', index: i, at: null }; }) : [{ kind: 'note', text: 'Nothing to choose.' }];
+      return;
+    }
+    paletteVisible = visibleCommands();
+    var recent = loadPaletteRecent();
+    if (PS.isMediaCategory(paletteCategory)) { paletteRows = PS.mediaRows(paletteMedia, query, mediaLoading, mediaError, recent.media, paletteCategory); return; }
+    var keys = {};
+    var entries = paletteVisible.map(function (command, i) { keys[commandKey(command)] = i; return { type: command.type, name: command.name, index: i }; });
+    var recentIndexes = recent.commands.map(function (key) { return keys[key]; }).filter(function (i) { return i !== undefined; });
+    paletteRows = PS.commandRows(entries, query, recentIndexes);
+  }
+  // reset: pick the first row (the query changed); otherwise keep the chosen one where it can be found.
+  function renderCommands(reset) {
+    var keep = reset ? '' : paletteRowKey(paletteRows[activeIndex]);
+    buildPaletteRows();
+    var found = -1;
+    if (keep) for (var k = 0; k < paletteRows.length; k++) if (paletteRowKey(paletteRows[k]) === keep) { found = k; break; }
+    activeIndex = found !== -1 ? found : PS.firstSelectable(paletteRows, 0, 1);
+    var menu = inApplyMenu();
+    list.innerHTML = paletteRows.map(function (row, i) {
+      if (row.kind === 'section') {
+        var c = paletteColour(row.colour);
+        return '<div class="palette-section" style="color:' + c + '">' + escapeHtml(row.title) + '<span class="count">' + row.count + '</span></div>';
+      }
+      if (row.kind === 'note') return '<p class="palette-note">' + escapeHtml(row.text) + '</p>';
+      var active = i === activeIndex;
+      var head = '<button type="button" class="palette-row' + (row.kind === 'media' ? ' media' : '') + (active ? ' is-active' : '') + '" role="option" id="palette-row-' + i + '" aria-selected="' + active + '" data-row="' + i + '">';
+      if (row.kind === 'media') {
+        var m = paletteMedia[row.index];
+        return head + '<span class="icon" style="color:var(--hue-pink)">' + paletteIcon(PS.categoryOf(m) === 'bgm' ? 'bgm' : m.kind === 'video' || m.kind === 'audio' || m.kind === 'image' ? m.kind : 'other') + '</span>' +
+          '<span class="text"><span class="name" title="' + escapeHtml(m.name) + '">' + highlightName(m.name, row.at, 'var(--hue-pink)') + '</span><span class="where">' + escapeHtml(PS.whereText(m)) + '</span></span>' +
+          (m.ext ? '<span class="tag ext">' + escapeHtml(String(m.ext).toLowerCase()) + '</span>' : '') + '</button>';
+      }
+      var command = paletteVisible[row.index];
+      var colour = paletteColour(command.type);
+      var binding = menu ? null : bindingFor(command);
+      return head + '<span class="icon" style="color:' + colour + '">' + paletteIcon(command.type) + '</span>' +
+        '<span class="text"><span class="name" title="' + escapeHtml(command.name) + '">' + highlightName(command.name, row.at, colour) + '</span></span>' +
+        (binding ? '<span class="tag key">' + escapeHtml(displayShortcut(binding.shortcut)) + '</span>' : '') + '</button>';
+    }).join('');
+    list.setAttribute('aria-activedescendant', activeIndex >= 0 ? 'palette-row-' + activeIndex : '');
+    renderPaletteChrome();
+    scrollActiveRowIntoView();
+  }
+  function scrollActiveRowIntoView() {
+    var row = activeIndex >= 0 && document.getElementById('palette-row-' + activeIndex);
+    if (!row) { if (PS.firstSelectable(paletteRows, 0, 1) === activeIndex) list.scrollTop = 0; return; }
+    // The first item also shows the section name above it.
+    if (activeIndex === PS.firstSelectable(paletteRows, 0, 1)) { list.scrollTop = 0; return; }
+    var top = row.offsetTop, bottom = top + row.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top - 4;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight + 4;
+  }
+  function setActivePaletteRow(index) {
+    if (index < 0 || index === activeIndex || !PS.selectable(paletteRows[index])) return;
+    var old = document.getElementById('palette-row-' + activeIndex);
+    if (old) { old.classList.remove('is-active'); old.setAttribute('aria-selected', 'false'); }
+    activeIndex = index;
+    var now = document.getElementById('palette-row-' + index);
+    if (now) { now.classList.add('is-active'); now.setAttribute('aria-selected', 'true'); }
+    list.setAttribute('aria-activedescendant', 'palette-row-' + index);
+  }
+  function renderPaletteChrome() {
+    var menu = pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand;
+    if (menu) {
+      paletteTabs.innerHTML = '<span class="palette-menu-title" style="color:' + paletteColour(menu.type) + '">' + paletteIcon(menu.type) + '<span style="color:var(--text)">' + escapeHtml(menu.name) + '</span></span>' +
+        '<span class="palette-tabs-hint">' + (pendingTransitionCommand ? 'Where it goes' : pendingMoveCommand ? 'How they move' : 'Frames per step') + '</span>';
+      paletteFooter.textContent = '↑↓ choose · ↵ apply · ⇧↵ apply, keep open · esc back';
+      return;
+    }
+    var query = search.value;
+    var entries = paletteVisible.map(function (command, i) { return { type: command.type, name: command.name, index: i }; });
+    var commandCount = PS.count(PS.commandRows(entries, query));
+    var typed = !!query.replace(/^\s+|\s+$/g, '');
+    function mediaCount(category) {
+      if (mediaLoading && !paletteMedia.length) return '…';
+      if (!mediaLoadedAt && !paletteMedia.length) return '';
+      return String(typed ? PS.mediaHits(paletteMedia, query, category).length : PS.mediaCount(paletteMedia, category));
+    }
+    var TAB_ICONS = { commands: 'custom', media: 'image', video: 'video', sfx: 'audio', bgm: 'bgm' };
+    function tab(category, label, icon, count) {
+      var active = paletteCategory === category;
+      return '<button type="button" class="palette-tab ' + category + (category !== 'commands' ? ' media' : '') + (active ? ' is-active' : '') + (count === '0' || count === 0 ? ' is-empty' : '') + '" role="tab" aria-selected="' + active + '" data-category="' + category + '">' +
+        paletteIcon(icon) + '<span>' + label + '</span>' + (count === '' ? '' : '<span class="count">' + count + '</span>') + '</button>';
+    }
+    paletteTabs.innerHTML = PS.categories.map(function (category) {
+      return tab(category, PS.labels[category], TAB_ICONS[category], category === 'commands' ? commandCount : mediaCount(category));
+    }).join('');
+    var activeTab = paletteTabs.querySelector('.palette-tab.is-active');
+    if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    paletteFooter.textContent = PS.isMediaCategory(paletteCategory)
+      ? '↑↓ choose · ↵ place at playhead · ⇧↵ place, keep open · Tab next · esc close'
+      : '↑↓ choose · ↵ apply · ⇧↵ apply, keep open · Tab media · esc close';
+    search.placeholder = palettePlaceholder();
+    search.setAttribute('aria-label', search.placeholder.replace('…', ''));
+  }
+  function palettePlaceholder() {
+    return { commands: 'Search commands…', media: 'Search media by name…', video: 'Search video…', sfx: 'Search sound effects, under 45 s…', bgm: 'Search ambience and music, 45 s or longer…' }[paletteCategory] || 'Search commands…';
+  }
+  // Tab goes to the next tab, Shift+Tab (back) to the one before; a click names the tab.
+  function switchPaletteCategory(category, back) {
+    if (inApplyMenu()) return;
+    paletteCategory = category || (back ? PS.previous(paletteCategory) : PS.next(paletteCategory));
+    if (PS.isMediaCategory(paletteCategory)) refreshMediaIfStale();
+    renderCommands(true);
+    search.focus();
+  }
+  // Same list the native palette gets through the engine (prfx.listProjectMedia), read straight from the host.
+  function refreshMediaIfStale() {
+    if (mediaLoading) return;
+    if (mediaLoadedAt && Date.now() - mediaLoadedAt < 10000) return;
+    mediaLoading = true;
+    var requestId = ++mediaRequestId;
+    var timer = window.setTimeout(function () {
+      if (requestId !== mediaRequestId || !mediaLoading) return;
+      mediaLoading = false; mediaRequestId++; window.__prfxApplying = false;
+      paletteMedia = []; mediaLoadedAt = 0;
+      mediaError = 'Premiere hasn’t answered. Close and reopen the Edie panel, then Tab here again.';
+      if (!palette.classList.contains('is-hidden')) renderCommands();
+    }, 15000);
+    window.__prfxApplying = true;
+    evalPremiere('prfx.listProjectMedia()', function (result) {
+      if (requestId !== mediaRequestId) return;
+      window.clearTimeout(timer);
+      window.__prfxApplying = false;
+      mediaLoading = false;
+      var text = String(result || '');
+      var data = null;
+      if (text && text !== 'EvalScript error.' && text.indexOf('ERROR:') !== 0) { try { data = JSON.parse(text); } catch (_) { data = null; } }
+      if (data && Array.isArray(data.items)) {
+        paletteMedia = data.items;
+        mediaError = data.error ? String(data.error).replace(/^ERROR:\s*/, '') : '';
+        mediaLoadedAt = Date.now();
+      } else {
+        paletteMedia = [];
+        mediaLoadedAt = 0;
+        mediaError = text.indexOf('ERROR:') === 0 ? text.replace(/^ERROR:\s*/, '')
+          : text === 'EvalScript error.' || !text ? 'Premiere did not answer. Close and reopen the Edie panel to reload it.'
+          : 'Premiere sent a media list Edie couldn’t read.';
+      }
+      if (!palette.classList.contains('is-hidden')) renderCommands();
+    });
+  }
+  function placeMedia(media, keepOpen) {
+    if (!media) return;
+    rememberPalette(null, media.id);
+    apply({ type: 'custom', id: 'place-project-item', name: 'Place “' + media.name + '”', mediaId: media.id }, keepOpen);
+  }
+  // Enter, Shift+Enter or a click on row `index`.
+  function choosePaletteRow(index, keepOpen) {
+    var row = paletteRows[index];
+    if (!PS.selectable(row)) return;
+    if (row.kind === 'media') { placeMedia(paletteMedia[row.index], keepOpen); return; }
+    var chosen = paletteVisible[row.index];
+    if (pendingTransitionCommand) apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: chosen.id || 'both', transitionFrames: transitionFramesValue() }), keepOpen);
+    else if (pendingMoveCommand) apply(Object.assign({}, pendingMoveCommand, { moveMode: chosen.id || 'group' }), keepOpen);
+    else if (pendingStaggerCommand) apply(Object.assign({}, pendingStaggerCommand, { staggerFrames: Number(chosen.id) }), keepOpen);
+    else { rememberPalette(commandKey(chosen), null); apply(chosen, keepOpen); }
   }
   function escapeHtml(value) {
     value = value === undefined || value === null ? '' : String(value);
     return value.replace(/[&<>'"]/g, function (char) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]; });
   }
-  function openPalette() { palette.classList.remove('is-hidden'); hideApplyMenu(); search.value = ''; activeIndex = 0; renderCommands(); window.setTimeout(function () { search.focus(); }, 0); }
+  function openPalette() { palette.classList.remove('is-hidden'); hideApplyMenu(); paletteCategory = 'commands'; search.value = ''; activeIndex = -1; renderCommands(true); window.setTimeout(function () { search.focus(); }, 0); }
   function closePalette() { hideApplyMenu(); palette.classList.add('is-hidden'); }
   function isTransition(command) { return command && (command.type === 'transition' || command.type === 'audio-transition'); }
   function isMoveCommand(command) { return command && command.type === 'custom' && (command.id === 'move-selected-clips-up' || command.id === 'move-selected-clips-down'); }
@@ -1433,44 +1695,36 @@
   function openTransitionMenu(command) {
     pendingTransitionCommand = command;
     catalogSearchValue = search.value;
-    paletteTitle.textContent = command.name.toUpperCase();
-    shortcutBadge.textContent = 'TRANSITION';
     search.value = '';
     search.placeholder = 'Length in frames • CEP default ' + (Number(settings.transitionFrames) || 30);
-    activeIndex = 0;
-    renderCommands();
+    activeIndex = -1;
+    renderCommands(true);
     window.setTimeout(function () { search.focus(); }, 0);
   }
   function openMoveMenu(command) {
     pendingMoveCommand = command;
     catalogSearchValue = search.value;
-    paletteTitle.textContent = command.name.toUpperCase();
-    shortcutBadge.textContent = 'FUNCTION';
     search.value = '';
     search.placeholder = 'Choose move behavior';
-    activeIndex = 0;
-    renderCommands();
+    activeIndex = -1;
+    renderCommands(true);
     window.setTimeout(function () { search.focus(); }, 0);
   }
   function openStaggerMenu(command) {
     pendingStaggerCommand = command;
     catalogSearchValue = search.value;
-    paletteTitle.textContent = command.name.toUpperCase();
-    shortcutBadge.textContent = 'FUNCTION';
     search.value = '';
     search.placeholder = 'Frames per step • default ' + (Number(settings.staggerFrames) || 5);
-    activeIndex = 0;
-    renderCommands();
+    activeIndex = -1;
+    renderCommands(true);
     window.setTimeout(function () { search.focus(); }, 0);
   }
   function hideApplyMenu() {
     pendingTransitionCommand = null;
     pendingMoveCommand = null;
     pendingStaggerCommand = null;
-    paletteTitle.textContent = 'EDIE';
-    shortcutBadge.textContent = displayShortcut(settings.shortcut);
     search.value = catalogSearchValue;
-    search.placeholder = 'Search effects and transitions…';
+    search.placeholder = palettePlaceholder();
   }
   function transitionFramesValue() {
     var value = Number(search.value);
@@ -1491,12 +1745,12 @@
       if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); refreshFailureLogStatus(); return; }
       setStatus(result || 'Applied ' + command.name + '.');
       if (keepPaletteOpen) {
-        if (pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand) { hideApplyMenu(); renderCommands(); }
+        if (inApplyMenu()) { hideApplyMenu(); renderCommands(true); }
         window.setTimeout(function () { search.focus(); }, 0);
       } else closePalette();
     }
     setStatus('Applying ' + command.name + '…');
-    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
+    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
     // Bulk replace and the place functions work clip by clip and legitimately
     // run for minutes. Timing them out at 12s reports failure for work that is
     // still running and will complete.
@@ -1520,7 +1774,7 @@
   forceReconnectButton.addEventListener('click', forceReconnectHost);
   document.getElementById('reset-shortcut').addEventListener('click', function () { settings.shortcut = Object.assign({}, DEFAULTS.shortcut); saveSettings(); });
   managerSearch.addEventListener('input', renderManager);
-  managerTypeFilter.addEventListener('change', renderManager);
+  managerTypeTabs.addEventListener('click', function (event) { var tab = event.target.closest('[data-manager-type]'); if (!tab) return; managerType = tab.dataset.managerType; renderManager(); });
   document.querySelectorAll('[data-assignment-filter]').forEach(function (button) {
     button.addEventListener('click', function () {
       managerAssignmentFilter = button.dataset.assignmentFilter;
@@ -1626,38 +1880,22 @@
     exportNameInput.value = settings.exportNamePattern;
     saveSettings();
   });
-  search.addEventListener('input', function () { if (!pendingTransitionCommand && !pendingMoveCommand) activeIndex = 0; renderCommands(); });
+  search.addEventListener('input', function () { renderCommands(!inApplyMenu()); });
+  paletteTabs.addEventListener('mousedown', function (event) { var tab = event.target.closest('[data-category]'); if (!tab) return; event.preventDefault(); switchPaletteCategory(tab.dataset.category); });
+  list.addEventListener('mousemove', function (event) { var row = event.target.closest('[data-row]'); if (row) setActivePaletteRow(Number(row.dataset.row)); });
   list.addEventListener('click', function (event) {
-    var target = event.target.closest('.command'); if (!target) return;
-    if (pendingTransitionCommand && target.dataset.type === 'transition-placement') {
-      apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: target.dataset.id || 'both', transitionFrames: transitionFramesValue() }));
-      return;
-    }
-    if (pendingStaggerCommand && target.dataset.type === 'stagger-frames') {
-      apply(Object.assign({}, pendingStaggerCommand, { staggerFrames: Number(target.dataset.id) }));
-      return;
-    }
-    if (pendingMoveCommand && target.dataset.type === 'move-mode') {
-      apply(Object.assign({}, pendingMoveCommand, { moveMode: target.dataset.id || 'group' }));
-      return;
-    }
-    apply({ type: target.dataset.type, id: target.dataset.id || undefined, name: target.dataset.name, moveMode: target.dataset.moveMode || undefined });
+    var target = event.target.closest('[data-row]'); if (!target) return;
+    choosePaletteRow(Number(target.dataset.row), event.shiftKey);
   });
   document.addEventListener('click', function (event) { if (event.target.hasAttribute('data-close-palette')) closePalette(); });
   document.addEventListener('keydown', function (event) {
     if (matchesShortcut(event) && document.activeElement !== shortcutInput) { event.preventDefault(); openPalette(); return; }
     if (palette.classList.contains('is-hidden')) return;
-    if (event.key === 'Escape') { if (pendingTransitionCommand || pendingMoveCommand || pendingStaggerCommand) { hideApplyMenu(); renderCommands(); search.focus(); } else closePalette(); return; }
-    var available = filteredCommands();
-    if (event.key === 'ArrowDown') { event.preventDefault(); activeIndex = Math.min(activeIndex + 1, available.length - 1); renderCommands(); }
-    if (event.key === 'ArrowUp') { event.preventDefault(); activeIndex = Math.max(activeIndex - 1, 0); renderCommands(); }
-    if (event.key === 'Enter' && document.activeElement === search) {
-      event.preventDefault();
-      if (pendingTransitionCommand) apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: available[activeIndex] && available[activeIndex].id || 'both', transitionFrames: transitionFramesValue() }), event.shiftKey);
-      else if (pendingMoveCommand) apply(Object.assign({}, pendingMoveCommand, { moveMode: available[activeIndex] && available[activeIndex].id || 'group' }), event.shiftKey);
-      else if (pendingStaggerCommand) apply(Object.assign({}, pendingStaggerCommand, { staggerFrames: Number(available[activeIndex] && available[activeIndex].id) }), event.shiftKey);
-      else apply(available[activeIndex], event.shiftKey);
-    }
+    if (event.key === 'Escape') { event.preventDefault(); if (inApplyMenu()) { hideApplyMenu(); renderCommands(true); search.focus(); } else closePalette(); return; }
+    if (event.key === 'Tab') { event.preventDefault(); switchPaletteCategory(null, event.shiftKey); return; }
+    var step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : event.key === 'PageDown' ? 8 : event.key === 'PageUp' ? -8 : 0;
+    if (step) { event.preventDefault(); var next = PS.move(paletteRows, activeIndex, step); if (next >= 0) { setActivePaletteRow(next); scrollActiveRowIntoView(); } return; }
+    if (event.key === 'Enter' && document.activeElement === search) { event.preventDefault(); choosePaletteRow(activeIndex, event.shiftKey); }
   });
 
   safeRun('initial UI render', updateShortcutUI);

@@ -18,6 +18,7 @@ namespace PrFxShortcutListener
     //   POST /result                    -> CEP reports how a command went
     //   POST /runtime                   -> UXP advertises the IDs it implements
     //   POST /reload-settings           -> settings.json changed
+    //   POST /media                     -> CEP answers a media-list request with the project's media
     //
     // Raw TCP rather than HttpListener: http.sys refuses a non-admin user a
     // 127.0.0.1 prefix, and rejects requests whose Host header does not match
@@ -52,6 +53,15 @@ namespace PrFxShortcutListener
         public string ControlToken = "";
         public Action<string, byte[]>? Control;
         public Func<byte[], string>? Undo;
+        // The palette's Media tab: RequestMedia() makes the next engine/panel poll with nothing pending answer
+        // {type:"media-list"}, and CEP POSTs prfx.listProjectMedia() to /media. Never queued or journaled.
+        private bool mediaWanted;
+        public Action<byte[]>? MediaReceived;
+
+        public void RequestMedia()
+        {
+            lock (gate) mediaWanted = true;
+        }
 
         // <project folder>\PR FX Exports, created if missing, for the UXP Queue
         // cuts to Media Encoder (UXP may not create folders itself).
@@ -260,6 +270,7 @@ namespace PrFxShortcutListener
             {
                 var client = query.Contains("client=engine") ? "engine" : query.Contains("client=panel") ? "panel" : query.Contains("client=uxp") ? "uxp" : "legacy";
                 Dictionary<string, object?>? command = null;
+                var askForMedia = false;
                 List<Dictionary<string, object?>> dropped;
                 lock (gate)
                 {
@@ -282,9 +293,19 @@ namespace PrFxShortcutListener
                         if (pending.TryTake(now, item => !SupportsUxp(item), out var taken)) command = taken;
                     }
                     else if (pending.TryTake(now, out var taken)) command = taken;
+                    if (command == null && client != "uxp" && mediaWanted)
+                    {
+                        mediaWanted = false;
+                        askForMedia = true;
+                    }
                     dropped = pending.DrainDiscarded();
                 }
                 Report(dropped);
+                if (askForMedia)
+                {
+                    Respond(stream, "200 OK", "{\"type\":\"media-list\",\"name\":\"List project media\"}");
+                    return;
+                }
                 if (command != null)
                 {
                     Log?.Invoke("Runtime (" + client + ") collected command: " + Json.Str(command, "name"));
@@ -318,6 +339,12 @@ namespace PrFxShortcutListener
                     Respond(stream, "200 OK", "{\"ok\":true,\"catalogFingerprint\":" + Json.Quote(fingerprint) + ",\"catalogCount\":" + catalog.Count + "}");
                 }
                 else Respond(stream, "400 Bad Request", "{\"error\":\"invalid catalog\"}");
+                return;
+            }
+            if (method == "POST" && path == "/media")
+            {
+                MediaReceived?.Invoke(body);
+                Respond(stream, "200 OK", "{\"ok\":true}");
                 return;
             }
             if (method == "POST" && path == "/runtime")

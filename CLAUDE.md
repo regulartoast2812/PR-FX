@@ -149,8 +149,27 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   timer wakes him only when his pose changes; Reduce motion (macOS) or Animation effects off (Windows) holds him still. He has
   tiny arms with round hands (a 4-fine-pixel circle in his legs' colour) on both sides in every pose. Checked in
   `tools/check-windows-bridge` (pace) and `tools/check-windows-listener` (frames, against Creative Assist's).
-- **Colours:** PR FX's accent is orange (`#ff9a3d`, the stroke's), never Sage's mint. `client/styles.css` `:root` and the
-  native palette's `PaletteStyle` (`PRFXShortcutListener.swift`) carry the same tokens; change both together.
+- **Colours:** PR FX's accent is orange (`#ff9a3d`, the stroke's), never Sage's mint. Three copies carry the same tokens and
+  change together: `client/styles.css` `:root`, the Mac palette's `PaletteStyle` (`PRFXShortcutListener.swift`) and Windows
+  `PaletteForm.cs`. Windows had its own cool greys and blue selection until 2026-11-23 because the old note named only the
+  first two, so every restyle missed it (the user: "edie's ctrl space doesn't share the same UI with windows version").
+- **The palette is laid out like Sage's search** (Creative Assist `app/ui/search.ts`, 2026-11-23) in all three places: the Mac
+  palette, Windows `PaletteForm` and the panel's own `#palette`. 640×440 (wide enough for five tabs): a 52px search row (Edie, a borderless 15pt field,
+  an `esc` key cap), tabs with counts (Commands, Media, Video, SFX, BGM; Tab goes to the next, Shift+Tab back), each kind's commands under its coloured name
+  with a count (Recent first when nothing is typed), rows with an icon, the matched part picked out and the shortcut, and a
+  footer of keys. The search itself is pure and ported three times, line for line: `native/PRFXPaletteSearch.swift` (checked by
+  `tools/check-palette-search.swift`), `client/palette-search.js` (the panel's palette and its Commands list) and
+  `native/windows/Core/PaletteSearch.cs`.
+- **Media** lists every placeable project item by name with the bins it sits in (`prfx.listProjectMedia()`); Enter places it at
+  the playhead (`place-project-item` with `mediaId`), Shift+Enter keeps the palette open. The native palettes ask for the list
+  through the bridge: `/next` hands the engine (or the panel) a `media-list` job, which answers with `POST /media`; asked again
+  only when the last list is over 10 s old; if Premiere doesn't answer (6 s native, 15 s panel) the old list is dropped,
+  never shown as the project's. The panel's palette calls the host directly.
+- **Video, SFX, BGM** are parts of Media (the user, 2026-11-23: "video, sfx for audio under 45s, anything over 45s should be
+  ambient or bgm"): video by file type; sound by its length, which the host sends as `seconds` (out minus in point) for audio
+  only: under 45 s is SFX, 45 s or longer is ambient/BGM, unknown length shows only under Media. Sound rows show the length
+  ("0.4 s", "44 s", "2:32") before the bins. Recents (5 commands, 5 media) live in
+  `palette-recent.json` beside the settings (native) and `prfx.palette.recent.v1` in localStorage (panel).
 - The panel extends 44pt above the window so Edie still fits when the Timeline is docked at the top.
 - **The palette keeps it** (2026-11-20, the user asked). Opening the palette makes the listener the active app, which used to hide
   the rectangle (Premiere not frontmost). `refreshHighlight()` now leaves it exactly as it was while the palette is visible, and the
@@ -309,7 +328,7 @@ The standalone Electron app (`PR FX.app`) was retired on 2026-11-19. Creative As
   click-through window over Premiere. It shows the detected Timeline rectangle (green when armed, amber otherwise), the remembered box and the last click.
 - **Settings writes:** read-merge-write into the current file, back it up when bindings shrink, write atomically, then
   `POST /reload-settings`. The CEP panel polls the file's mtime every 1.5s (`watchSettingsFile`), so edits made in the page show up there too.
-- **Bridge routes:** `POST /run` and `POST /open-palette` need an `X-PRFX-Token` header that matches `bridge-token`
+- **Bridge routes:** `POST /run` and `POST /open-palette` (`POST /media` is the engine's answer, like `/result`) need an `X-PRFX-Token` header that matches `bridge-token`
   in the support dir (mode 0600, rewritten on every listener start). Anything else gets 403.
 - **Success banners:** `shortcutFeedback:"all"` turns them on. `announceScope:"on"` shows an arming or paused banner when the
   scope changes. Health reports both, along with `geometry {live, saved, window, click, panelsHidden, premiereFrontmost}`.
@@ -425,6 +444,7 @@ nor prove focus detection in every Premiere workspace.
 
 Regression checks:
 ```sh
+swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXPaletteSearch.swift tools/check-palette-search.swift -o /tmp/prfx-check-palette-search && /tmp/prfx-check-palette-search
 swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXTimelineRegionCache.swift tools/check-shortcut-detection.swift -o /tmp/prfx-check-shortcut-detection && /tmp/prfx-check-shortcut-detection
 swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXPendingCommands.swift tools/check-shortcut-queue.swift -o /tmp/prfx-check-shortcut-queue && /tmp/prfx-check-shortcut-queue
 swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXKeyTap.swift native/PRFXKeyFeedback.swift native/PRFXPendingCommands.swift tools/check-key-chords.swift -o /tmp/prfx-check-key-chords && /tmp/prfx-check-key-chords

@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20261119-edie-name-1';
+prfx.HOST_BUILD = '20261123-media-search-2';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -389,6 +389,9 @@ prfx.functions = {
     } },
     'place-bin-clips': { run: function (publicSequence, qeSequence) {
         return prfx.placeSelectedProjectItems(publicSequence, qeSequence);
+    } },
+    'place-project-item': { run: function (publicSequence, qeSequence, command) {
+        return prfx.placeProjectItemById(publicSequence, qeSequence, command && command.mediaId);
     } },
     'queue-cuts-to-ame': { run: function (publicSequence, qeSequence, command) {
         return prfx.queueCutsToEncoder(publicSequence, qeSequence, '', command && command.exportNamePattern,
@@ -5374,12 +5377,79 @@ prfx.freeDestinationTrack = function (snapshot, kind, spans) {
 };
 
 prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
-    var items = prfx.selectedProjectItems(), placeable = [], i, skipped = 0;
+    var items = prfx.selectedProjectItems();
+    if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
+    return prfx.placeProjectItems(publicSequence, qeSequence, items, 'from the Project panel');
+};
+
+// The palette's Media search (Tab, 2026-11-23): one item found by its node id,
+// placed at the playhead exactly as Place Bin Clips places a selection.
+prfx.placeProjectItemById = function (publicSequence, qeSequence, nodeId) {
+    var item;
+    if (!nodeId) return 'ERROR: No media was chosen.';
+    item = prfx.findProjectItemByNodeId(app.project.rootItem, String(nodeId), 0);
+    if (!item) return 'ERROR: That media is no longer in the project. Search again.';
+    return prfx.placeProjectItems(publicSequence, qeSequence, [item], 'from the project');
+};
+
+prfx.findProjectItemByNodeId = function (bin, nodeId, depth) {
+    var children, count, i, child, found;
+    if (!bin || depth > 16) return null;
+    try { children = bin.children; count = Number(children.numItems || 0); } catch (error) { return null; }
+    for (i = 0; i < count; i++) {
+        try { child = children[i]; } catch (childError) { child = null; }
+        if (!child) continue;
+        try { if (String(child.nodeId) === nodeId) return child; } catch (idError) {}
+        if (prfx.projectItemIsBin(child)) {
+            found = prfx.findProjectItemByNodeId(child, nodeId, depth + 1);
+            if (found) return found;
+        }
+    }
+    return null;
+};
+
+// Every placeable item in the project, for the palette's Media search: name,
+// the bins it sits in, and its kind. JSON text; at most 5000 items.
+prfx.listProjectMedia = function () {
+    var out = [], total = { count: 0 }, project = '';
+    try { project = String(app.project.name || ''); } catch (nameError) { project = ''; }
+    try { prfx.collectPaletteMedia(app.project.rootItem, [], out, total, 0); }
+    catch (error) { return 'ERROR: Premiere could not read the project - ' + error.toString(); }
+    return JSON.stringify({ project: project, total: total.count, items: out });
+};
+
+prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
+    var children, count, i, child, name, ext, kind, id, entry, seconds;
+    if (!bin || depth > 16) return;
+    try { children = bin.children; count = Number(children.numItems || 0); } catch (error) { return; }
+    for (i = 0; i < count; i++) {
+        try { child = children[i]; } catch (childError) { child = null; }
+        if (!child) continue;
+        try { name = String(child.name || ''); } catch (readError) { name = ''; }
+        if (prfx.projectItemIsBin(child)) { prfx.collectPaletteMedia(child, path.concat([name]), out, total, depth + 1); continue; }
+        if (!prfx.projectItemIsPlaceable(child)) continue;
+        total.count++;
+        if (out.length >= 5000) continue;
+        try { id = String(child.nodeId || ''); } catch (idError) { id = ''; }
+        if (!id) continue;
+        ext = prfx.projectItemExtension(child);
+        kind = prfx.mediaCategoryOf(ext) || 'other';
+        entry = { id: id, name: name, bin: path.join(' / '), kind: kind, ext: ext };
+        // Sound is sorted by length in the palette: under 45 s is SFX, longer is ambient or BGM (2026-11-23).
+        if (kind === 'audio') {
+            try { seconds = prfx.timeInSeconds(child.getOutPoint()) - prfx.timeInSeconds(child.getInPoint()); } catch (lengthError) { seconds = NaN; }
+            if (seconds > 0) entry.seconds = Math.round(seconds * 100) / 100;
+        }
+        out.push(entry);
+    }
+};
+
+prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere) {
+    var placeable = [], i, skipped = 0;
     var checkpoint, staging, live, playhead, cursor, clip;
     var videoTarget = null, audioTarget = null, failure = null, snapshot, created = [];
     var staged, kind, fromIndex, target, span, placedAudio, j, syntheticSaved;
 
-    if (!items.length) return 'ERROR: Select one or more clips in the Project panel first.';
     for (i = 0; i < items.length; i++) {
         if (prfx.projectItemIsPlaceable(items[i])) placeable.push(items[i]);
         else skipped++;
@@ -5465,7 +5535,7 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
     if (audioTarget > staging.tracks.audioIndex) audioTarget--;
     prfx.selectClipRanges(app.project.activeSequence, created);
 
-    return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' (video plus any linked audio) from the Project panel, back to back from the playhead' +
+    return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' (video plus any linked audio) ' + fromWhere + ', back to back from the playhead' +
         (videoTarget !== null && videoTarget !== undefined ? ' on V' + (videoTarget + 1) : '') +
         (audioTarget !== null && audioTarget !== undefined ? (videoTarget !== null && videoTarget !== undefined ? ' and' : ' on') + ' A' + (audioTarget + 1) : '') + '.' +
         prfx.appendedTrackNote(staging) +

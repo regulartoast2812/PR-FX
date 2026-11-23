@@ -176,7 +176,7 @@
       schedule(IDLE_POLL_MS);
     }, (LONG_RUNNING[command.id] || command.type === 'preset' || command.type === 'ai-function') ? 600000 : 120000);
     var payload = JSON.stringify({
-      type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '',
+      type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '',
       transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30,
       transitionPlacement: command.transitionPlacement || 'both',
       moveMode: command.moveMode || 'group',
@@ -205,6 +205,30 @@
     });
   }
 
+  // The palette's Media search (Tab) asks for the project's media through the
+  // queue; the list goes back with POST /media, not as a command result.
+  function sendMediaList(done) {
+    busy = true;
+    evalPremiere('prfx.listProjectMedia()', function (result) {
+      busy = false;
+      postMedia(result);
+      done();
+    });
+  }
+  function postMedia(result) {
+    var text = String(result || '');
+    if (text === 'EvalScript error.' || text.indexOf('ERROR:') === 0 || text.charAt(0) !== '{') {
+      text = JSON.stringify({ error: text === 'EvalScript error.' || !text ? 'Premiere did not answer.' : text.replace(/^ERROR:\s*/, ''), items: [], total: 0 });
+    }
+    try {
+      var request = new XMLHttpRequest();
+      request.open('POST', BRIDGE + '/media', true);
+      request.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+      request.timeout = 5000;
+      request.send(text);
+    } catch (_) {}
+  }
+
   var timer = null;
   function schedule(delay) {
     if (timer) window.clearTimeout(timer);
@@ -226,6 +250,7 @@
       try { command = JSON.parse(request.responseText); } catch (_) { command = null; }
       if (!command) { next(IDLE_POLL_MS); return; }
       done = true;
+      if (command.type === 'media-list') { sendMediaList(function () { schedule(0); }); return; }
       try { run(command); }
       catch (error) {
         busy = false;

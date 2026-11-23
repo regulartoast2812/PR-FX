@@ -86,6 +86,7 @@ namespace PrFxShortcutListener
             palette.Catalog = CatalogSnapshot;
             palette.CurrentSettings = () => armed.Settings;
             palette.Submit = SubmitFromPalette;
+            palette.RequestMedia = () => bridge?.RequestMedia();
 
             commands = FallbackCommands();
             LoadCatalog();
@@ -121,7 +122,8 @@ namespace PrFxShortcutListener
                     Undo = body => PressPremiereUndo(body),
                     CatalogPayload = () => Json.Serialize(CatalogSnapshot()),
                     SettingsPayload = () => { try { return File.Exists(Paths.Settings) ? File.ReadAllText(Paths.Settings) : "{}"; } catch (Exception) { return "{}"; } },
-                    SettingsWrite = WriteSettingsPatch
+                    SettingsWrite = WriteSettingsPatch,
+                    MediaReceived = body => OnUi(() => palette.ReceiveMedia(body))
                 };
                 Log.Write("Command bridge listening on 127.0.0.1:" + CommandBridge.Port);
             }

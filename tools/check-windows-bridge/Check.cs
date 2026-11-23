@@ -266,6 +266,30 @@ internal static class Check
         }
 
         try { Directory.Delete(support, true); } catch (Exception) { }
+        // ---- the palette's media tabs (PaletteSearch.cs, the port of PRFXPaletteSearch.swift; the same checks as
+        // tools/check-palette-search.swift): Video, SFX under 45 s, BGM 45 s or longer.
+        {
+            var sounds = new List<PaletteMedia>
+            {
+                new PaletteMedia { Id = "v", Name = "Shot.mov", Bin = "", Kind = "video", Ext = "mov" },
+                new PaletteMedia { Id = "s", Name = "Whoosh.wav", Bin = "SFX", Kind = "audio", Ext = "wav", Seconds = 44.6 },
+                new PaletteMedia { Id = "b", Name = "Bed.mp3", Bin = "", Kind = "audio", Ext = "mp3", Seconds = 45 },
+                new PaletteMedia { Id = "u", Name = "Unknown.wav", Bin = "", Kind = "audio", Ext = "wav" },
+            };
+            Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Media) == 4 && PaletteSearch.CategoryOf(sounds[3]) == null, "palette media: Media holds everything; sound with no length is only there");
+            Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Video) == 1, "palette media: Video holds video only");
+            Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Sfx) == 1 && PaletteSearch.CategoryOf(sounds[1]) == PaletteCategory.Sfx, "palette media: 44.6 s is SFX");
+            Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Bgm) == 1 && PaletteSearch.CategoryOf(sounds[2]) == PaletteCategory.Bgm, "palette media: 45 s is ambient or BGM");
+            Expect(PaletteSearch.MediaRows(sounds, "", false, null, null, PaletteCategory.Sfx).SequenceEqual(new[] { PaletteRow.Section("SFX · under 45 s", 1, "media"), PaletteRow.Media(1, null) }), "palette media: the SFX tab lists its sound");
+            Expect(PaletteSearch.MediaRows(sounds, "", false, null, new[] { "b", "s" }, PaletteCategory.Sfx).Take(2).SequenceEqual(new[] { PaletteRow.Section("Recently placed", 1, "recent"), PaletteRow.Media(1, null) }), "palette media: recents are kept to the tab");
+            Expect(PaletteSearch.MediaRows(sounds, "shot", false, null, null, PaletteCategory.Bgm).SequenceEqual(new[] { PaletteRow.Note("Nothing in the project is called that.") }), "palette media: a search stays in its tab");
+            Expect(PaletteSearch.MediaRows(new[] { sounds[0] }, "", false, null, null, PaletteCategory.Bgm).SequenceEqual(new[] { PaletteRow.Note("This project has no sound 45 seconds or longer.") }), "palette media: an empty tab says so");
+            Expect(PaletteSearch.WhereText(sounds[1]) == "44 s  ·  SFX" && PaletteSearch.Duration(0.46) == "0.4 s" && PaletteSearch.Duration(152.3) == "2:32" && PaletteSearch.Duration(3725) == "1:02:05", "palette media: a sound shows its length");
+            Expect(PaletteCategories.Next(PaletteCategory.Commands) == PaletteCategory.Media && PaletteCategories.Next(PaletteCategory.Bgm) == PaletteCategory.Commands && PaletteCategories.Previous(PaletteCategory.Commands) == PaletteCategory.Bgm, "palette media: Tab goes round the tabs, Shift+Tab back");
+            var decoded = PaletteMediaList.Parse("{\"items\":[{\"id\":\"1\",\"name\":\"a\",\"bin\":\"\",\"kind\":\"audio\",\"ext\":\"wav\",\"seconds\":3.5},{\"id\":\"2\",\"name\":\"b\",\"bin\":\"\",\"kind\":\"video\",\"ext\":\"mov\"}]}");
+            Expect(decoded != null && decoded.Items[0].Seconds == 3.5 && decoded.Items[1].Seconds == null, "palette media: seconds is read when sent and optional");
+        }
+
         Console.WriteLine(failures == 0 ? "\nAll Windows bridge checks passed." : "\n" + failures + " check(s) FAILED.");
         return failures == 0 ? 0 : 1;
     }

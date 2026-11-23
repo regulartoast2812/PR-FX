@@ -58,8 +58,10 @@ private struct Command: Codable {
     // Saved Effect Presets are identified by UID; the name is only a fallback
     // (two presets in different bins may share it).
     let presetUid: String?
+    // The project item the palette's Media search places (host place-project-item), by its nodeId.
+    let mediaId: String?
 
-    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil, seq: Int? = nil, key: String? = nil, presetUid: String? = nil) {
+    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil, seq: Int? = nil, key: String? = nil, presetUid: String? = nil, mediaId: String? = nil) {
         self.type = type
         self.name = name
         self.transitionFrames = transitionFrames
@@ -71,6 +73,7 @@ private struct Command: Codable {
         self.seq = seq
         self.key = key
         self.presetUid = presetUid
+        self.mediaId = mediaId
     }
 }
 
@@ -233,7 +236,9 @@ private let paletteFallbackScopeRank = -2
 // This accessory app has no main Edit menu. Route its standard equivalents to
 // the active field editor instead of letting NSApplication discard them.
 // The palette's colours: the settings panel's warm dark neutrals and its orange
-// accent (client/styles.css :root). Change both together.
+// accent. Three copies, change all of them together: client/styles.css :root,
+// native/PRFXShortcutListener.swift PaletteStyle (this one) and
+// native/windows/Win/PaletteForm.cs PaletteStyle.
 private enum PaletteStyle {
     static func hex(_ v: Int, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(srgbRed: CGFloat((v >> 16) & 255) / 255, green: CGFloat((v >> 8) & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: alpha)
@@ -247,6 +252,44 @@ private enum PaletteStyle {
     static let accent = hex(0xff9a3d)
     static let accentSoft = hex(0xff9a3d, 0.22)
     static let orange = hex(0xd4a26a), blue = hex(0x86a6d0), cyan = hex(0x7db5ae), purple = hex(0xa99cd4)
+    // Media, Sage's own colour for pictures, video and sound in Creative Assist's search.
+    static let pink = hex(0xe793bd)
+
+    static func colour(_ type: String) -> NSColor {
+        switch type {
+        case "transition", "transition-placement": return blue
+        case "audio-transition": return cyan
+        case "custom", "move-mode", "stagger-frames": return accent
+        case "preset", "ai-function": return purple
+        default: return orange
+        }
+    }
+
+    static func symbol(_ type: String) -> String {
+        switch type {
+        case "ai-function": return "sparkles"
+        case "custom": return "bolt.fill"
+        case "effect": return "wand.and.stars"
+        case "audio-effect": return "speaker.wave.2.fill"
+        case "transition": return "rectangle.righthalf.inset.filled"
+        case "audio-transition": return "waveform.path"
+        case "preset": return "star.fill"
+        case "transition-placement": return "arrow.left.and.right"
+        case "move-mode": return "arrow.up.arrow.down"
+        case "stagger-frames": return "stairs"
+        default: return "circle.fill"
+        }
+    }
+
+    static func mediaSymbol(_ media: PaletteMedia) -> String {
+        if PaletteSearch.category(of: media) == .bgm { return "music.note" }
+        switch media.kind {
+        case "video": return "film"
+        case "audio": return "waveform"
+        case "image": return "photo"
+        default: return "square.stack.3d.up"
+        }
+    }
 }
 
 private final class PalettePanel: NSPanel {
@@ -294,11 +337,23 @@ final class ShortcutListener: NSObject {
     private var lastHotKeyRetryAt = Date.distantPast
     private var eventHandler: EventHandlerRef?
     private var panel: NSPanel?
-    private var searchField: NSSearchField?
+    private var searchField: NSTextField?
     private var listView: NSTableView?
-    private var paletteTitle: NSTextField?
-    private var paletteHotkey: NSTextField?
     private var paletteFooter: NSTextField?
+    // Laid out like Sage's search in Creative Assist (PRFXPaletteSearch.swift): Commands and Media,
+    // Tab and Shift+Tab between them, each with its count; rows grouped under coloured section names.
+    private var tabsView: PaletteTabsView?
+    private var paletteCategory: PaletteCategory = .commands
+    private var paletteRows: [PaletteRow] = []
+    private var paletteMedia: [PaletteMedia] = []
+    private var mediaAskedAt: Date?
+    private var mediaLoadedAt: Date?
+    private var mediaError: String?
+    private var recentCommandKeys: [String] = []
+    private var recentMediaIDs: [String] = []
+    private var shortcutLabels: [String: String] = [:]
+    // 640 wide so the five tabs (Commands, Media, Video, SFX, BGM) fit on one line with their counts.
+    private let paletteSize = NSSize(width: 640, height: 440)
     private var pendingTransitionCommand: Command?
     private var pendingMoveCommand: Command?
     private var pendingStaggerCommand: Command?
@@ -457,7 +512,12 @@ final class ShortcutListener: NSObject {
             DispatchQueue.main.async { NSApp.terminate(nil) }
             return
         }
+        commandBridge?.mediaHandler = { [weak self] body in
+            let list = try? JSONDecoder().decode(PaletteMediaList.self, from: body)
+            DispatchQueue.main.async { self?.receiveMedia(list) }
+        }
         loadSettings()
+        loadPaletteRecent()
         promptForAccessibilityIfNeeded()
         observeClicks()
         startHighlightRefresh()
@@ -1513,6 +1573,7 @@ final class ShortcutListener: NSObject {
         unregisterHotKeys()
         if pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil { resetApplyMenu() }
         searchField?.stringValue = ""
+        paletteCategory = .commands
         filterCommands(resetSelection: true)
         restorePaletteFrame()
         panel?.makeKeyAndOrderFront(nil)
@@ -1558,10 +1619,13 @@ final class ShortcutListener: NSObject {
     }
 
     private func makePalette() {
-        let panel = PalettePanel(contentRect: NSRect(x: 0, y: 0, width: 350, height: 276), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView], backing: .buffered, defer: false)
+        let size = paletteSize
+        let panel = PalettePanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView], backing: .buffered, defer: false)
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
+        // Dark like the palette, so the caret and scroller are light.
+        panel.appearance = NSAppearance(named: .darkAqua)
         // Above the Timeline highlight (screen-saver level), which stays drawn
         // while the palette is open: its stroke and Edie never cross the palette.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
@@ -1569,67 +1633,64 @@ final class ShortcutListener: NSObject {
         panel.isMovableByWindowBackground = true
         panel.acceptsMouseMovedEvents = true
         panel.delegate = self
+        panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
-        let content = NSView(frame: panel.contentView!.bounds)
+        let content = NSView(frame: NSRect(origin: .zero, size: size))
         content.autoresizingMask = [.width, .height]
         content.wantsLayer = true
         content.layer?.backgroundColor = PaletteStyle.canvas.cgColor
         panel.contentView = content
+        let w = size.width, h = size.height
 
-        let character = EdiePaletteIconView(frame: NSRect(x: 14, y: 224, width: 32, height: 32))
+        // Search row, 52 tall: Edie where Sage has the magnifier, the query, and esc.
+        let character = EdiePaletteIconView(frame: NSRect(x: 12, y: h - 44, width: 32, height: 32))
         character.wantsLayer = true
         character.layer?.magnificationFilter = .nearest
         content.addSubview(character)
 
-        let title = NSTextField(labelWithString: "EDIE")
-        title.font = .systemFont(ofSize: 10, weight: .bold)
-        title.textColor = PaletteStyle.muted
-        title.lineBreakMode = .byTruncatingTail
-        title.frame = NSRect(x: 54, y: 234, width: 150, height: 16)
-        content.addSubview(title)
-        paletteTitle = title
-        let hotkey = NSTextField(labelWithString: display(settings.shortcut).uppercased())
-        hotkey.alignment = .right
-        hotkey.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
-        hotkey.textColor = PaletteStyle.accent
-        hotkey.frame = NSRect(x: 196, y: 234, width: 140, height: 16)
-        hotkey.autoresizingMask = [.minXMargin]
-        content.addSubview(hotkey)
-        paletteHotkey = hotkey
-
-        let search = NSSearchField(frame: NSRect(x: 14, y: 190, width: 322, height: 28))
-        search.placeholderString = "Search effects, transitions, presets…"
-        search.font = .systemFont(ofSize: 12, weight: .regular)
+        let search = NSTextField(frame: NSRect(x: 52, y: h - 38, width: w - 52 - 56, height: 22))
+        search.isBordered = false
+        search.drawsBackground = false
         search.focusRingType = .none
-        search.backgroundColor = PaletteStyle.card
+        search.font = .systemFont(ofSize: 15, weight: .regular)
         search.textColor = PaletteStyle.text
+        search.cell?.usesSingleLineMode = true
+        search.cell?.wraps = false
+        search.cell?.isScrollable = true
         search.delegate = self
-        search.sendsSearchStringImmediately = true
-        search.wantsLayer = true
-        search.layer?.cornerRadius = 8
-        search.layer?.borderWidth = 1
-        search.layer?.borderColor = PaletteStyle.accent.withAlphaComponent(0.6).cgColor
         content.addSubview(search)
         searchField = search
 
-        let listContainer = NSView(frame: NSRect(x: 14, y: 42, width: 322, height: 138))
-        listContainer.wantsLayer = true
-        listContainer.layer?.backgroundColor = PaletteStyle.card.cgColor
-        listContainer.layer?.cornerRadius = 10
-        content.addSubview(listContainer)
-        let scroll = NSScrollView(frame: listContainer.bounds.insetBy(dx: 1, dy: 1))
-        scroll.autoresizingMask = [.width, .height]
+        let esc = PaletteKeyCapView(frame: NSRect(x: w - 48, y: h - 36, width: 34, height: 18))
+        esc.text = "esc"
+        content.addSubview(esc)
+
+        // Category tabs, with the line under them.
+        let tabs = PaletteTabsView(frame: NSRect(x: 0, y: h - 52 - 38, width: w, height: 38))
+        tabs.onSelect = { [weak self] category in
+            guard let self, category != self.paletteCategory else { return }
+            self.switchPaletteCategory(to: category)
+        }
+        content.addSubview(tabs)
+        tabsView = tabs
+
+        let footerLine = NSView(frame: NSRect(x: 0, y: 30, width: w, height: 1))
+        footerLine.wantsLayer = true
+        footerLine.layer?.backgroundColor = PaletteStyle.line.cgColor
+        content.addSubview(footerLine)
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 31, width: w, height: h - 52 - 38 - 31))
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
-        scroll.verticalScroller?.controlSize = .mini
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        scroll.contentInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         let table = CommandTableView()
+        table.style = .plain
         table.headerView = nil
-        table.rowHeight = 28
         table.intercellSpacing = NSSize(width: 0, height: 0)
         table.selectionHighlightStyle = .regular
         table.backgroundColor = .clear
@@ -1637,26 +1698,27 @@ final class ShortcutListener: NSObject {
         table.target = self
         table.doubleAction = #selector(applySelection(_:))
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("command"))
-        column.width = 306
+        column.width = w
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         table.delegate = self
         table.dataSource = self
         scroll.documentView = table
-        listContainer.addSubview(scroll)
+        content.addSubview(scroll)
         listView = table
+
+        let footer = NSTextField(labelWithString: "")
+        footer.textColor = PaletteStyle.faint
+        footer.font = .systemFont(ofSize: 11, weight: .regular)
+        footer.lineBreakMode = .byTruncatingTail
+        footer.frame = NSRect(x: 16, y: 8, width: w - 32, height: 15)
+        content.addSubview(footer)
+        paletteFooter = footer
+
         self.panel = panel
         observePaletteFrameChanges(panel)
         restorePaletteFrame()
         filterCommands(resetSelection: true)
-
-        let footer = NSTextField(labelWithString: "↑ ↓  navigate     ↵  apply + close     ⇧↵  apply + keep open     esc  close")
-        footer.textColor = PaletteStyle.faint
-        footer.font = .systemFont(ofSize: 9, weight: .medium)
-        footer.alignment = .center
-        footer.frame = NSRect(x: 14, y: 12, width: 322, height: 14)
-        content.addSubview(footer)
-        paletteFooter = footer
     }
 
     private func observePaletteFrameChanges(_ panel: NSPanel) {
@@ -1674,8 +1736,11 @@ final class ShortcutListener: NSObject {
     private func restorePaletteFrame() {
         guard let panel else { return }
         if let savedFrame = loadSavedPaletteFrame(), isUsablePaletteFrame(savedFrame) {
-            panel.setFrame(savedFrame, display: false)
-            listenerLog("Palette frame restored: \(NSStringFromRect(savedFrame))")
+            // The palette isn't resizable: keep where it was put (its top-left corner) at today's size,
+            // so a frame saved by the older, smaller palette opens in the same place.
+            let frame = NSRect(x: savedFrame.minX, y: savedFrame.maxY - paletteSize.height, width: paletteSize.width, height: paletteSize.height)
+            panel.setFrame(isUsablePaletteFrame(frame) ? frame : savedFrame, display: false)
+            listenerLog("Palette frame restored: \(NSStringFromRect(panel.frame))")
         } else {
             panel.center()
             listenerLog("Palette frame centered: no usable saved frame")
@@ -1781,31 +1846,176 @@ final class ShortcutListener: NSObject {
         return [command.type, command.id ?? "", command.moveMode ?? "", command.name].joined(separator: "|")
     }
 
+    private var inApplyMenu: Bool { pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil }
+
+    private func rowKey(_ row: Int) -> String? {
+        guard paletteRows.indices.contains(row) else { return nil }
+        switch paletteRows[row] {
+        case let .command(index, _): return visibleCommands.indices.contains(index) ? "c:" + commandIdentity(visibleCommands[index]) : nil
+        case let .media(index, _): return paletteMedia.indices.contains(index) ? "m:" + paletteMedia[index].id : nil
+        default: return nil
+        }
+    }
+
     private func filterCommands(resetSelection: Bool = false) {
         let previousRow = listView?.selectedRow ?? -1
-        let previousKey = visibleCommands.indices.contains(previousRow) ? commandIdentity(visibleCommands[previousRow]) : nil
-        if pendingTransitionCommand != nil {
-            visibleCommands = transitionPlacementCommands()
-        } else if pendingMoveCommand != nil {
-            visibleCommands = moveModeCommands()
-        } else if pendingStaggerCommand != nil {
-            visibleCommands = staggerFrameCommands()
+        let previousKey = rowKey(previousRow)
+        let query = searchField?.stringValue ?? ""
+        if inApplyMenu {
+            if pendingTransitionCommand != nil { visibleCommands = transitionPlacementCommands() }
+            else if pendingMoveCommand != nil { visibleCommands = moveModeCommands() }
+            else { visibleCommands = staggerFrameCommands() }
+            paletteRows = visibleCommands.indices.map { .command(index: $0, at: nil) }
         } else {
-            let query = searchField?.stringValue.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            visibleCommands = commands.filter { query.isEmpty || ($0.name + " " + $0.type).lowercased().contains(query) }.map { Command(type: $0.type, name: $0.name, transitionFrames: settings.transitionFrames, id: $0.id, moveMode: $0.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1, presetUid: $0.presetUid) }
+            visibleCommands = commands.map { Command(type: $0.type, name: $0.name, transitionFrames: settings.transitionFrames, id: $0.id, moveMode: $0.moveMode, staggerFrames: settings.staggerFrames ?? 5, staggerGroup: settings.staggerGroup ?? 1, presetUid: $0.presetUid) }
+            shortcutLabels = [:]
+            for binding in settings.bindings ?? [] where shortcutLabels[shortcutKey(binding.command)] == nil {
+                shortcutLabels[shortcutKey(binding.command)] = compactDisplay(binding.shortcut)
+            }
+            let entries = visibleCommands.enumerated().map { PaletteEntry(type: $1.type, name: $1.name, index: $0) }
+            let recent = recentCommandKeys.compactMap { key in visibleCommands.firstIndex { commandIdentity($0) == key } }
+            let typed = !query.trimmingCharacters(in: .whitespaces).isEmpty
+            let commandRows = PaletteSearch.commandRows(entries, query: query, recent: recent)
+            var counts: [PaletteCategory: Int] = [.commands: typed ? PaletteSearch.count(commandRows) : entries.count]
+            paletteRows = commandRows
+            for category in PaletteCategory.allCases where category.isMedia {
+                let rows = PaletteSearch.mediaRows(paletteMedia, query: query, loading: mediaLoading, error: mediaError, recent: recentMediaIDs, in: category)
+                if category == paletteCategory { paletteRows = rows }
+                counts[category] = paletteMedia.isEmpty && mediaLoading ? -1 : typed ? PaletteSearch.count(rows) : PaletteSearch.mediaCount(paletteMedia, in: category)
+            }
+            tabsView?.counts = counts
         }
         listView?.reloadData()
-        if !visibleCommands.isEmpty {
-            var row = 0
-            if !resetSelection {
-                if let key = previousKey, let matched = visibleCommands.firstIndex(where: { commandIdentity($0) == key }) {
-                    row = matched
-                } else if previousRow >= 0 {
-                    row = max(0, min(visibleCommands.count - 1, previousRow))
-                }
-            }
-            listView?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        var row: Int?
+        if !resetSelection, let key = previousKey { row = paletteRows.indices.first { rowKey($0) == key } }
+        if row == nil, !resetSelection, previousRow >= 0, !paletteRows.isEmpty {
+            let from = min(previousRow, paletteRows.count - 1)
+            row = PaletteSearch.selectable(paletteRows, from: from, step: 1) ?? PaletteSearch.selectable(paletteRows, from: from, step: -1)
         }
+        if row == nil { row = PaletteSearch.selectable(paletteRows, from: 0, step: 1) }
+        if let row {
+            listView?.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            listView?.scrollRowToVisible(row == PaletteSearch.selectable(paletteRows, from: 0, step: 1) ? 0 : row)
+        } else {
+            listView?.deselectAll(nil)
+        }
+        updatePaletteChrome()
+    }
+
+    private func updatePaletteChrome() {
+        guard !inApplyMenu else { return }
+        tabsView?.title = nil
+        tabsView?.active = paletteCategory
+        setPlaceholder(Self.palettePlaceholder(paletteCategory))
+        paletteFooter?.stringValue = paletteCategory == .commands
+            ? "↑↓ choose  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  Tab media  ·  esc close"
+            : "↑↓ choose  ·  ↵ place at playhead  ·  ⇧↵ place, keep open  ·  Tab next  ·  esc close"
+    }
+
+    private static func palettePlaceholder(_ category: PaletteCategory) -> String {
+        switch category {
+        case .commands: return "Search effects, transitions, presets and functions…"
+        case .media: return "Search the project’s media by name…"
+        case .video: return "Search the project’s video…"
+        case .sfx: return "Search sound effects, under 45 seconds…"
+        case .bgm: return "Search ambience and music, 45 seconds or longer…"
+        }
+    }
+
+    private func setPlaceholder(_ text: String) {
+        searchField?.placeholderAttributedString = NSAttributedString(string: text, attributes: [.foregroundColor: PaletteStyle.faint, .font: NSFont.systemFont(ofSize: 15)])
+    }
+
+    /// Tab goes to the next tab, Shift+Tab (`back`) to the one before; a click goes straight `to` one.
+    private func switchPaletteCategory(back: Bool = false, to target: PaletteCategory? = nil) {
+        guard !inApplyMenu else { return }
+        paletteCategory = target ?? (back ? paletteCategory.previous() : paletteCategory.next())
+        if paletteCategory.isMedia { refreshMediaIfStale() }
+        filterCommands(resetSelection: true)
+    }
+
+    // MARK: Media
+
+    private var mediaLoading: Bool {
+        guard let asked = mediaAskedAt else { return false }
+        return mediaLoadedAt.map { $0 < asked } ?? true
+    }
+
+    // Asks Premiere for the project's media (the next CEP poll runs prfx.listProjectMedia() and POSTs /media),
+    // unless a list came in the last 10 seconds. The old list stays shown while a new one is read.
+    private func refreshMediaIfStale() {
+        let now = Date()
+        if mediaLoading, let asked = mediaAskedAt, now.timeIntervalSince(asked) < 6 { return }
+        if !mediaLoading, let loaded = mediaLoadedAt, now.timeIntervalSince(loaded) < 10 { return }
+        mediaAskedAt = now
+        commandBridge?.requestMedia()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self, self.mediaAskedAt == now, self.mediaLoading else { return }
+            self.mediaAskedAt = nil
+            // An old list isn't kept as if it were the project's: it may be from another project, or stale.
+            self.paletteMedia = []
+            self.mediaLoadedAt = nil
+            self.mediaError = "Premiere hasn’t answered. Open Window ▸ Extensions ▸ Edie, then Tab here again."
+            listenerLog("Palette media: no answer from Premiere after 6s")
+            self.filterCommands()
+        }
+    }
+
+    private func receiveMedia(_ list: PaletteMediaList?) {
+        mediaLoadedAt = Date()
+        if mediaAskedAt == nil { mediaAskedAt = Date.distantPast }
+        if let list, (list.error ?? "").isEmpty {
+            paletteMedia = list.items
+            mediaError = nil
+            listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project")")
+        } else {
+            var error = list?.error ?? "Premiere sent a media list Edie couldn’t read."
+            if error.hasPrefix("ERROR: ") { error = String(error.dropFirst(7)) }
+            paletteMedia = []
+            mediaError = error
+            listenerLog("Palette media failed: \(error)")
+        }
+        filterCommands()
+    }
+
+    private func placeMedia(_ media: PaletteMedia, keepPaletteOpen: Bool) {
+        remember(media: media.id)
+        submit(Command(type: "custom", name: "Place “\(media.name)”", transitionFrames: nil, id: "place-project-item", mediaId: media.id), keepPaletteOpen: keepPaletteOpen)
+    }
+
+    // MARK: Recent
+
+    private struct PaletteRecent: Codable { var commands: [String]; var media: [String] }
+    private var paletteRecentURL: URL { settingsURL.deletingLastPathComponent().appendingPathComponent("palette-recent.json") }
+
+    private func loadPaletteRecent() {
+        guard let data = try? Data(contentsOf: paletteRecentURL), let recent = try? JSONDecoder().decode(PaletteRecent.self, from: data) else { return }
+        recentCommandKeys = recent.commands
+        recentMediaIDs = recent.media
+    }
+
+    // Not inout: saving reads both lists, which Swift forbids while one is being changed through inout.
+    private func remember(command key: String? = nil, media id: String? = nil) {
+        func bump(_ list: [String], _ key: String?) -> [String] {
+            guard let key else { return list }
+            return Array(([key] + list.filter { $0 != key }).prefix(5))
+        }
+        recentCommandKeys = bump(recentCommandKeys, key)
+        recentMediaIDs = bump(recentMediaIDs, id)
+        if let data = try? JSONEncoder().encode(PaletteRecent(commands: recentCommandKeys, media: recentMediaIDs)) {
+            try? data.write(to: paletteRecentURL, options: .atomic)
+        }
+    }
+
+    private func shortcutKey(_ command: Command) -> String { [command.type, command.id ?? "", command.name].joined(separator: "|") }
+
+    private func compactDisplay(_ key: Shortcut) -> String {
+        var text = (key.ctrl ? "⌃" : "") + (key.alt ? "⌥" : "") + (key.shift ? "⇧" : "") + (key.meta ? "⌘" : "")
+        if key.code.hasPrefix("Key") { text += key.code.dropFirst(3) }
+        else if key.code.hasPrefix("Digit") { text += key.code.dropFirst(5) }
+        else if key.code.hasPrefix("Numpad") { text += "Num " + key.code.dropFirst(6) }
+        else { text += key.code }
+        return text
     }
 
     @objc private func applySelection(_ sender: Any?) {
@@ -1817,8 +2027,14 @@ final class ShortcutListener: NSObject {
         // is handing focus back to the panel. A palette selection is one action.
         guard !isSubmittingPaletteCommand else { return }
         let row = listView?.selectedRow ?? -1
-        guard visibleCommands.indices.contains(row) else { return }
-        let command = visibleCommands[row]
+        guard paletteRows.indices.contains(row) else { return }
+        if case let .media(index, _) = paletteRows[row], paletteMedia.indices.contains(index) {
+            placeMedia(paletteMedia[index], keepPaletteOpen: keepPaletteOpen)
+            return
+        }
+        guard case let .command(index, _) = paletteRows[row], visibleCommands.indices.contains(index) else { return }
+        let command = visibleCommands[index]
+        if !inApplyMenu { remember(command: commandIdentity(command)) }
         if let transition = pendingTransitionCommand {
             let frames = transitionFramesFromPaletteField()
             let placementCommand = Command(type: transition.type, name: transition.name, transitionFrames: frames, id: transition.id, transitionPlacement: command.id ?? "both")
@@ -1864,7 +2080,7 @@ final class ShortcutListener: NSObject {
         if command.type == "ai-function" { workingAISeq = seq; highlight.startWorking(command.name) }
         keyStats.fired += 1
         journal.record("fired", seq: seq, key: "palette", command: command.name, detail: "native palette")
-        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "palette", presetUid: command.presetUid)
+        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "palette", presetUid: command.presetUid, mediaId: command.mediaId)
         commandBridge.enqueue(effectiveCommand)
         if keepPaletteOpen {
             listenerLog("Keeping palette open after queued command: \(command.name)")
@@ -1881,11 +2097,10 @@ final class ShortcutListener: NSObject {
     private func showTransitionApplyMenu(for command: Command) {
         pendingTransitionCommand = command
         catalogQuery = searchField?.stringValue ?? ""
-        paletteTitle?.stringValue = command.name.uppercased()
-        paletteHotkey?.stringValue = "TRANSITION"
+        tabsView?.title = (command.name, command.type == "audio-transition" ? "Audio transition" : "Transition", PaletteStyle.colour(command.type))
         searchField?.stringValue = ""
-        searchField?.placeholderString = "Length in frames • CEP default \(settings.transitionFrames)"
-        paletteFooter?.stringValue = "↑ ↓  choose placement     ↵  apply + close     ⇧↵  apply + keep open     esc  back"
+        setPlaceholder("Length in frames · default \(settings.transitionFrames)")
+        paletteFooter?.stringValue = "↑↓ choose where it goes  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  esc back"
         filterCommands(resetSelection: true)
         if let search = searchField { panel?.makeFirstResponder(search) }
     }
@@ -1893,22 +2108,21 @@ final class ShortcutListener: NSObject {
     private func showMoveApplyMenu(for command: Command) {
         pendingMoveCommand = command
         catalogQuery = searchField?.stringValue ?? ""
-        paletteTitle?.stringValue = command.name.uppercased()
-        paletteHotkey?.stringValue = "FUNCTION"
+        tabsView?.title = (command.name, "Function", PaletteStyle.accent)
         searchField?.stringValue = ""
-        searchField?.placeholderString = "Choose move behavior"
-        paletteFooter?.stringValue = "↑ ↓  choose behavior     ↵  move + close     ⇧↵  move + keep open     esc  back"
+        setPlaceholder("Choose how they move")
+        paletteFooter?.stringValue = "↑↓ choose  ·  ↵ move  ·  ⇧↵ move, keep open  ·  esc back"
         filterCommands(resetSelection: true)
         if let search = searchField { panel?.makeFirstResponder(search) }
     }
 
     private func showStaggerApplyMenu(for command: Command) {
         pendingStaggerCommand = command
+        catalogQuery = searchField?.stringValue ?? ""
         searchField?.stringValue = ""
-        paletteTitle?.stringValue = command.name.uppercased()
-        paletteHotkey?.stringValue = "FUNCTION"
-        searchField?.placeholderString = "Frames per step • default \(settings.staggerFrames ?? 5)"
-        paletteFooter?.stringValue = "↑ ↓  choose step     ↵  stagger + close     ⇧↵  stagger + keep open     esc  back"
+        tabsView?.title = (command.name, "Function", PaletteStyle.accent)
+        setPlaceholder("Frames per step · default \(settings.staggerFrames ?? 5)")
+        paletteFooter?.stringValue = "↑↓ choose a step  ·  ↵ stagger  ·  ⇧↵ stagger, keep open  ·  esc back"
         filterCommands(resetSelection: true)
     }
 
@@ -1930,11 +2144,8 @@ final class ShortcutListener: NSObject {
         pendingTransitionCommand = nil
         pendingMoveCommand = nil
         pendingStaggerCommand = nil
-        paletteTitle?.stringValue = "EDIE"
-        paletteHotkey?.stringValue = display(settings.shortcut).uppercased()
+        tabsView?.title = nil
         searchField?.stringValue = catalogQuery
-        searchField?.placeholderString = "Search effects, transitions, presets…"
-        paletteFooter?.stringValue = "↑ ↓  navigate     ↵  apply + close     ⇧↵  apply + keep open     esc  close"
         filterCommands(resetSelection: true)
     }
 
@@ -1962,12 +2173,12 @@ final class ShortcutListener: NSObject {
     }
 
     private func moveSelection(_ delta: Int) {
-        guard let table = listView, !visibleCommands.isEmpty else { return }
+        guard let table = listView else { return }
         (table as? CommandTableView)?.suppressHoverBriefly()
-        let current = table.selectedRow < 0 ? 0 : table.selectedRow
-        let next = max(0, min(visibleCommands.count - 1, current + delta))
+        guard let next = PaletteSearch.move(paletteRows, from: table.selectedRow, by: delta) else { return }
         table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
-        table.scrollRowToVisible(next)
+        // The first choice also shows its section name above it.
+        table.scrollRowToVisible(next == PaletteSearch.selectable(paletteRows, from: 0, step: 1) ? 0 : next)
     }
 
     private func keyCode(for code: String) -> UInt32 {
@@ -2426,24 +2637,54 @@ final class ShortcutListener: NSObject {
 }
 
 extension ShortcutListener: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int { visibleCommands.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { paletteRows.count }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard paletteRows.indices.contains(row) else { return 30 }
+        switch paletteRows[row] {
+        case .section: return row == 0 ? 26 : 32
+        case .command: return 30
+        case .media: return 42
+        case .note: return 64
+        }
+    }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        paletteRows.indices.contains(row) && paletteRows[row].selectable
+    }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = PaletteSelectionRowView()
+        if paletteRows.indices.contains(row), case .media = paletteRows[row] { view.tint = PaletteStyle.pink } else { view.tint = PaletteStyle.accent }
+        return view
+    }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let id = NSUserInterfaceItemIdentifier("command-row")
-        let cell = tableView.makeView(withIdentifier: id, owner: self) as? CommandRowView ?? CommandRowView()
+        let id = NSUserInterfaceItemIdentifier("palette-row")
+        let cell = tableView.makeView(withIdentifier: id, owner: self) as? PaletteRowView ?? PaletteRowView()
         cell.identifier = id
-        cell.configure(visibleCommands[row])
+        guard paletteRows.indices.contains(row) else { return cell }
+        switch paletteRows[row] {
+        case let .section(title, count, colour):
+            cell.show(.section(title: title, count: count, colour: colour == "recent" ? PaletteStyle.muted : colour == "media" ? PaletteStyle.pink : PaletteStyle.colour(colour)))
+        case let .command(index, at):
+            let command = visibleCommands[index]
+            cell.show(.item(name: command.name, at: at, symbol: PaletteStyle.symbol(command.type), colour: PaletteStyle.colour(command.type), detail: nil,
+                            tag: inApplyMenu ? nil : shortcutLabels[shortcutKey(command)], tagIsKey: true))
+        case let .media(index, at):
+            let media = paletteMedia[index]
+            cell.show(.item(name: media.name, at: at, symbol: PaletteStyle.mediaSymbol(media), colour: PaletteStyle.pink, detail: PaletteSearch.whereText(media),
+                            tag: media.ext.isEmpty ? nil : media.ext.lowercased(), tagIsKey: false))
+        case let .note(text):
+            cell.show(.note(text))
+        }
         return cell
     }
 }
 
-extension ShortcutListener: NSSearchFieldDelegate {
+extension ShortcutListener: NSTextFieldDelegate {
     func controlTextDidBeginEditing(_ notification: Notification) {
         (searchField?.currentEditor() as? NSTextView)?.allowsUndo = true
     }
 
     func controlTextDidChange(_ notification: Notification) {
-        let isOptionPane = pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil
-        filterCommands(resetSelection: !isOptionPane)
+        filterCommands(resetSelection: !inApplyMenu)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
@@ -2451,10 +2692,16 @@ extension ShortcutListener: NSSearchFieldDelegate {
             applyCurrentSelection(keepPaletteOpen: keepPaletteOpen)
             return true
         }
+        if commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
+            switchPaletteCategory(back: commandSelector == #selector(NSResponder.insertBacktab(_:)))
+            return true
+        }
         if commandSelector == #selector(NSResponder.moveDown(_:)) { moveSelection(1); return true }
         if commandSelector == #selector(NSResponder.moveUp(_:)) { moveSelection(-1); return true }
+        if commandSelector == #selector(NSResponder.pageDown(_:)) || commandSelector == #selector(NSResponder.scrollPageDown(_:)) { moveSelection(8); return true }
+        if commandSelector == #selector(NSResponder.pageUp(_:)) || commandSelector == #selector(NSResponder.scrollPageUp(_:)) { moveSelection(-8); return true }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            if self.pendingTransitionCommand != nil || self.pendingMoveCommand != nil || self.pendingStaggerCommand != nil { resetApplyMenu() }
+            if inApplyMenu { resetApplyMenu() }
             else { hidePalette(returnToPremiere: true) }
             return true
         }
@@ -2500,66 +2747,224 @@ private final class CommandTableView: NSTableView {
         guard Date() >= suppressHoverUntil else { return }
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-        guard row >= 0 && row < numberOfRows && selectedRow != row else { return }
+        guard row >= 0 && row < numberOfRows && selectedRow != row,
+              delegate?.tableView?(self, shouldSelectRow: row) ?? true else { return }
         selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 }
 
-private final class CommandRowView: NSTableCellView {
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let typeLabel = NSTextField(labelWithString: "")
-    private let selectionBackground = CALayer()
+// One palette row, drawn rather than built from labels so section names, items and notes share one view:
+// a section name in its colour with a count capsule, an item (icon, name with the typed part picked out,
+// a muted "where" line for media, a shortcut or file type on the right), or a note in place of results.
+private final class PaletteRowView: NSView {
+    enum Content {
+        case section(title: String, count: Int, colour: NSColor)
+        case item(name: String, at: Range<Int>?, symbol: String, colour: NSColor, detail: String?, tag: String?, tagIsKey: Bool)
+        case note(String)
+    }
+    private var content: Content = .note("")
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.backgroundColor = NSColor.clear.cgColor
-        selectionBackground.cornerRadius = 6
-        selectionBackground.backgroundColor = NSColor.clear.cgColor
-        layer?.insertSublayer(selectionBackground, at: 0)
-        layer?.borderWidth = 0
-        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        nameLabel.textColor = PaletteStyle.text
-        typeLabel.font = .systemFont(ofSize: 8, weight: .bold)
-        typeLabel.alignment = .right
-        addSubview(nameLabel)
-        addSubview(typeLabel)
+    func show(_ content: Content) {
+        self.content = content
+        needsDisplay = true
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layout() {
-        super.layout()
-        selectionBackground.frame = bounds.insetBy(dx: 2, dy: 2)
-        nameLabel.frame = NSRect(x: 12, y: 6, width: bounds.width - 98, height: 15)
-        typeLabel.frame = NSRect(x: bounds.width - 78, y: 8, width: 66, height: 12)
+
+    override var isFlipped: Bool { true }
+
+    private static func text(_ string: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor, align: NSTextAlignment = .left, wrap: Bool = false) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = wrap ? .byWordWrapping : .byTruncatingTail
+        paragraph.alignment = align
+        return NSAttributedString(string: string, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: colour, .paragraphStyle: paragraph])
     }
-    override var backgroundStyle: NSView.BackgroundStyle {
-        didSet {
-            selectionBackground.backgroundColor = backgroundStyle == .emphasized
-                ? PaletteStyle.accentSoft.cgColor
-                : NSColor.clear.cgColor
-            needsDisplay = true
+
+    private static func picked(_ name: String, at: Range<Int>?, colour: NSColor) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: text(name, size: 13.5, weight: .regular, colour: PaletteStyle.text))
+        guard let at, at.lowerBound >= 0, at.upperBound <= name.count,
+              let start = name.index(name.startIndex, offsetBy: at.lowerBound, limitedBy: name.endIndex),
+              let end = name.index(name.startIndex, offsetBy: at.upperBound, limitedBy: name.endIndex) else { return result }
+        result.addAttributes([.font: NSFont.systemFont(ofSize: 13.5, weight: .semibold), .foregroundColor: colour], range: NSRange(start..<end, in: name))
+        return result
+    }
+
+    private func drawCapsule(_ string: String, right: CGFloat, midY: CGFloat, fill: NSColor, colour: NSColor, mono: Bool) -> CGFloat {
+        let font = mono ? NSFont.monospacedSystemFont(ofSize: 10.5, weight: .medium) : NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+        let label = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: colour])
+        let size = label.size()
+        let box = NSRect(x: right - size.width - 12, y: midY - 9, width: size.width + 12, height: 18)
+        fill.setFill()
+        NSBezierPath(roundedRect: box, xRadius: mono ? 5 : 9, yRadius: mono ? 5 : 9).fill()
+        label.draw(at: NSPoint(x: box.minX + 6, y: midY - size.height / 2))
+        return box.minX
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let w = bounds.width, h = bounds.height
+        switch content {
+        case let .section(title, count, colour):
+            // Sentence case, 11.5 semibold in the group's colour, its count beside it, low in the row.
+            let label = Self.text(title, size: 11.5, weight: .semibold, colour: colour)
+            let size = label.size()
+            let midY = h - 11
+            label.draw(at: NSPoint(x: 18, y: midY - size.height / 2))
+            let countText = NSAttributedString(string: "\(count)", attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: colour])
+            let countSize = countText.size()
+            let box = NSRect(x: 18 + size.width + 7, y: midY - 8, width: countSize.width + 10, height: 16)
+            colour.withAlphaComponent(0.16).setFill()
+            NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
+            countText.draw(at: NSPoint(x: box.minX + 5, y: midY - countSize.height / 2))
+        case let .item(name, at, symbol, colour, detail, tag, tagIsKey):
+            let midY = h / 2
+            if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: detail == nil ? 12 : 14, weight: .medium)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [colour]))) {
+                let size = image.size
+                image.draw(in: NSRect(x: 18 + (18 - size.width) / 2, y: midY - size.height / 2, width: size.width, height: size.height))
+            }
+            var right = w - 16
+            if let tag, !tag.isEmpty {
+                right = drawCapsule(tag, right: right, midY: midY,
+                                    fill: tagIsKey ? PaletteStyle.line.withAlphaComponent(0.7) : PaletteStyle.pink.withAlphaComponent(0.14),
+                                    colour: tagIsKey ? PaletteStyle.muted : PaletteStyle.pink, mono: tagIsKey) - 10
+            }
+            let left: CGFloat = 46
+            let nameText = Self.picked(name, at: at, colour: colour)
+            let nameHeight = nameText.size().height
+            if let detail {
+                nameText.draw(with: NSRect(x: left, y: midY - nameHeight - 0.5, width: right - left, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                let whereText = Self.text(detail, size: 11, weight: .regular, colour: PaletteStyle.muted)
+                whereText.draw(with: NSRect(x: left, y: midY + 1.5, width: right - left, height: 15), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            } else {
+                nameText.draw(with: NSRect(x: left, y: midY - nameHeight / 2, width: right - left, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            }
+        case let .note(text):
+            let label = Self.text(text, size: 12.5, weight: .regular, colour: PaletteStyle.muted, align: .center, wrap: true)
+            let rect = NSRect(x: 32, y: 0, width: w - 64, height: h)
+            let height = label.boundingRect(with: rect.size, options: [.usesLineFragmentOrigin]).height
+            label.draw(with: NSRect(x: rect.minX, y: (h - height) / 2, width: rect.width, height: height + 2), options: [.usesLineFragmentOrigin])
         }
     }
+}
+
+// The chosen row: a soft rounded fill in the category's colour, like Sage's.
+private final class PaletteSelectionRowView: NSTableRowView {
+    var tint = PaletteStyle.accent
+    override var isEmphasized: Bool { get { true } set {} }
+    override func drawSelection(in dirtyRect: NSRect) {
+        tint.withAlphaComponent(0.16).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 1), xRadius: 7, yRadius: 7).fill()
+    }
+    override func drawBackground(in dirtyRect: NSRect) {}
+}
+
+// Commands · Media, each with an icon, its name and its count; the active one sits on a soft pill in its colour
+// with its count filled in that colour, an empty one fades. In an apply menu the row names the command instead.
+private final class PaletteTabsView: NSView {
+    var active: PaletteCategory = .commands { didSet { needsDisplay = true } }
+    /// -1 while it's still being read.
+    var counts: [PaletteCategory: Int] = [:] { didSet { needsDisplay = true } }
+    var title: (name: String, kind: String, colour: NSColor)? { didSet { needsDisplay = true } }
+    var onSelect: ((PaletteCategory) -> Void)?
+    private var tabRects: [PaletteCategory: NSRect] = [:]
+
+    override var isFlipped: Bool { true }
+
+    private func colour(_ category: PaletteCategory) -> NSColor { category == .commands ? PaletteStyle.accent : PaletteStyle.pink }
+    private func symbol(_ category: PaletteCategory) -> String {
+        switch category {
+        case .commands: return "command"
+        case .media: return "photo.on.rectangle.angled"
+        case .video: return "film"
+        case .sfx: return "waveform"
+        case .bgm: return "music.note"
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        PaletteStyle.line.withAlphaComponent(0.5).setStroke()
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: 12, y: 0.5))
-        path.line(to: NSPoint(x: bounds.width - 12, y: 0.5))
+        let w = bounds.width, h = bounds.height
+        PaletteStyle.line.setFill()
+        NSRect(x: 0, y: h - 1, width: w, height: 1).fill()
+        tabRects = [:]
+        let midY = (h - 1) / 2
+        if let title {
+            let kind = NSAttributedString(string: title.kind, attributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: title.colour])
+            let kindSize = kind.size()
+            kind.draw(at: NSPoint(x: 18, y: midY - kindSize.height / 2))
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let name = NSAttributedString(string: title.name, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .foregroundColor: PaletteStyle.text, .paragraphStyle: paragraph])
+            let nameHeight = name.size().height
+            name.draw(with: NSRect(x: 18 + kindSize.width + 8, y: midY - nameHeight / 2, width: w - kindSize.width - 44, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            return
+        }
+        var x: CGFloat = 10
+        for category in PaletteCategory.allCases {
+            let isActive = category == active
+            let tint = colour(category)
+            let count = counts[category]
+            let labelText = NSAttributedString(string: category.label, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: isActive ? .semibold : .medium), .foregroundColor: isActive ? PaletteStyle.text : PaletteStyle.muted])
+            let countString = count.map { $0 < 0 ? "…" : "\($0)" } ?? ""
+            let countText = NSAttributedString(string: countString, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: isActive ? PaletteStyle.canvas : PaletteStyle.muted])
+            let labelSize = labelText.size(), countSize = countText.size()
+            // At least three digits wide, so the tabs don't shift as counts change while typing.
+            let capsuleWidth = countString.isEmpty ? 0 : max(countSize.width + 10, 30)
+            let width = 10 + 14 + 6 + labelSize.width + (capsuleWidth > 0 ? 7 + capsuleWidth : 0) + 10
+            let rect = NSRect(x: x, y: midY - 13, width: width, height: 26)
+            tabRects[category] = rect
+            NSGraphicsContext.saveGraphicsState()
+            let faded = count == 0 && !isActive
+            if isActive {
+                tint.withAlphaComponent(0.15).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+            }
+            var cx = rect.minX + 10
+            if let image = NSImage(systemSymbolName: symbol(category), accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [(isActive ? tint : PaletteStyle.muted).withAlphaComponent(faded ? 0.45 : 1)]))) {
+                image.draw(in: NSRect(x: cx + (14 - image.size.width) / 2, y: midY - image.size.height / 2, width: image.size.width, height: image.size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+            cx += 14 + 6
+            labelText.draw(at: NSPoint(x: cx, y: midY - labelSize.height / 2))
+            cx += labelSize.width + 7
+            if capsuleWidth > 0 {
+                let box = NSRect(x: cx, y: midY - 8, width: capsuleWidth, height: 16)
+                (isActive ? tint : PaletteStyle.line).setFill()
+                NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
+                countText.draw(at: NSPoint(x: box.midX - countSize.width / 2, y: midY - countSize.height / 2))
+            }
+            if faded {
+                PaletteStyle.canvas.withAlphaComponent(0.55).setFill()
+                rect.fill(using: .sourceAtop)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            x = rect.maxX + 4
+        }
+        let hint = NSAttributedString(string: "Tab to switch", attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .regular), .foregroundColor: PaletteStyle.faint])
+        let hintSize = hint.size()
+        if x + hintSize.width + 16 < w { hint.draw(at: NSPoint(x: w - hintSize.width - 16, y: midY - hintSize.height / 2)) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if title == nil, let hit = tabRects.first(where: { $0.value.contains(point) }) { onSelect?(hit.key) }
+        else { super.mouseDown(with: event) }
+    }
+}
+
+// A small key cap, like the "Esc" at the end of Sage's search row.
+private final class PaletteKeyCapView: NSView {
+    var text = "" { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        let box = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5)
+        PaletteStyle.card.setFill()
+        path.fill()
+        PaletteStyle.line.setStroke()
         path.lineWidth = 1
         path.stroke()
-    }
-    func configure(_ command: Command) {
-        nameLabel.stringValue = command.name
-        typeLabel.stringValue = command.type == "custom" || command.type == "move-mode" || command.type == "stagger-frames" ? "FUNCTION" : command.type == "transition-placement" ? "TRANSITION" : command.type.replacingOccurrences(of: "-", with: " ").uppercased()
-        switch command.type {
-        case "transition", "transition-placement": typeLabel.textColor = PaletteStyle.blue
-        case "audio-transition": typeLabel.textColor = PaletteStyle.cyan
-        case "custom", "move-mode", "stagger-frames": typeLabel.textColor = PaletteStyle.accent
-        case "preset", "ai-function": typeLabel.textColor = PaletteStyle.purple
-        default: typeLabel.textColor = PaletteStyle.orange
-        }
+        let label = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium), .foregroundColor: PaletteStyle.muted])
+        let size = label.size()
+        label.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
     }
 }
 
@@ -2589,6 +2994,16 @@ private final class CommandBridge {
     private var lastPollAt: [String: Date] = [:]
     private var uxpSupportedIDs: Set<String> = []
     private let uxpFreshFor: TimeInterval = 2.5
+    // The palette's Media search: when set, the next CEP poll with no real command waiting gets
+    // {type:"media-list"} and answers with POST /media (prfx.listProjectMedia()). Never queued or journaled.
+    private var mediaWanted = false
+    var mediaHandler: ((Data) -> Void)?
+
+    func requestMedia() {
+        lock.lock()
+        mediaWanted = true
+        lock.unlock()
+    }
 
     init(catalogHandler: @escaping ([Command], String) -> Void, healthHandler: @escaping () -> String, settingsReloadHandler: @escaping () -> Void, stateHandler: @escaping (NWListener.State) -> Void, outcomeHandler: @escaping (BridgeOutcome) -> Void, controlToken: String, controlHandler: @escaping (String, Data) -> Void, catalogPayloadHandler: @escaping () -> String, settingsPayloadHandler: @escaping () -> String, settingsWriteHandler: @escaping (Data) -> String) throws {
         self.controlToken = controlToken
@@ -2717,9 +3132,18 @@ private final class CommandBridge {
                 } else {
                     command = self.pendingCommands.take(at: now)
                 }
+                var askForMedia = false
+                if command == nil, client != "uxp", self.mediaWanted {
+                    self.mediaWanted = false
+                    askForMedia = true
+                }
                 let discarded = self.pendingCommands.drainDiscarded()
                 self.lock.unlock()
                 self.report(discarded)
+                if askForMedia {
+                    self.respond(connection, status: "200 OK", body: "{\"type\":\"media-list\",\"name\":\"List project media\"}")
+                    return
+                }
                 if let command {
                     listenerLog("Runtime (\(client)) collected palette command: \(command.name) [placement: \(command.transitionPlacement ?? "default"), move: \(command.moveMode ?? "default")]")
                     self.outcomeHandler(.delivered(command, client: client))
@@ -2742,6 +3166,10 @@ private final class CommandBridge {
                 } else {
                     self.respond(connection, status: "400 Bad Request", body: "{\"error\":\"invalid catalog\"}")
                 }
+            } else if request.hasPrefix("POST /media ") {
+                let body = requestData.subdata(in: (headerEnd + 4)..<totalLength)
+                self.mediaHandler?(body)
+                self.respond(connection, status: "200 OK", body: "{\"ok\":true}")
             } else if request.hasPrefix("POST /runtime ") {
                 let bodyStart = headerEnd + 4
                 let body = requestData.subdata(in: bodyStart..<totalLength)
