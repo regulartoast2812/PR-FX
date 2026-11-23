@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T08:08:37.686Z",
+  "checkedAt": "2026-11-23T08:19:06.389Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -16,8 +16,8 @@
       "state": "Ready"
     },
     "agent:gemini": {
-      "tone": "wait",
-      "state": "Ready · talk only"
+      "tone": "off",
+      "state": "Checking…"
     },
     "agent:local": {
       "tone": "wait",
@@ -29,7 +29,7 @@
     },
     "tool:prfx": {
       "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "state": ""
     },
     "premiere": {
       "tone": "good",
@@ -41,7 +41,7 @@
     },
     "listener": {
       "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "state": ""
     },
     "ai": {
       "tone": "good",
