@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T10:24:40.683Z",
+  "checkedAt": "2026-11-23T10:51:59.516Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "good",
-      "state": "Timeline armed"
+      "tone": "bad",
+      "state": "Not running"
     },
     "ai": {
       "tone": "good",
