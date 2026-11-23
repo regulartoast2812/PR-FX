@@ -6,7 +6,7 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20261123-media-search-3';
+  var PRFX_HOST_BUILD = '20261123-media-search-4';
   // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
   // host and bridge protocol are shared. Keep platform branches to setup only.
   var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';
@@ -124,6 +124,7 @@
     'video': '<path fill-rule="evenodd" d="M2 2h12v12H2zM3.6 3.8v2h1.6v-2zm0 3.2v2h1.6V7zm0 3.2v2h1.6v-2zm7.2-6.4v2h1.6v-2zm0 3.2v2h1.6V7zm0 3.2v2h1.6v-2z"/>',
     'audio': '<path d="M1 7h2v2H1zM4 5h2v6H4zM7 2h2v12H7zM10 4h2v8h-2zM13 6h2v4h-2z"/>',
     'image': '<path fill-rule="evenodd" d="M1 2.5h14v11H1zm1.4 1.4v6.8l3.6-3.6 3 3 2-2 2.6 2.6V3.9zM11 5.3a1.1 1.1 0 110 2.2 1.1 1.1 0 010-2.2z"/>',
+    'speaker': '<path d="M1.5 5.5h3L8.5 2v12l-4-3.5h-3zM10.4 5.2a3.6 3.6 0 010 5.6l-.9-1.1a2.2 2.2 0 000-3.4zM12.3 3a6.4 6.4 0 010 10l-.9-1.1a5 5 0 000-7.8z"/>',
     'bgm': '<path d="M7 1.5h1.5c.3 1.6 1.6 2.6 3.5 3v1.8c-1.4-.2-2.6-.7-3.5-1.5V12a2.5 2.5 0 11-1.5-2.3z"/>',
     'other': '<path d="M8 1l7 3.5L8 8 1 4.5zM2.6 7.2L8 9.9l5.4-2.7L15 8l-7 3.5L1 8zm0 3.5L8 13.4l5.4-2.7 1.6.8L8 15l-7-3.5z"/>',
     'dot': '<circle cx="8" cy="8" r="4"/>'
@@ -1603,7 +1604,7 @@
       if (!mediaLoadedAt && !paletteMedia.length) return '';
       return String(typed ? PS.mediaHits(paletteMedia, query, category).length : PS.mediaCount(paletteMedia, category));
     }
-    var TAB_ICONS = { commands: 'custom', media: 'image', video: 'video', sfx: 'audio', bgm: 'bgm' };
+    var TAB_ICONS = { commands: 'custom', media: 'image', video: 'video', audio: 'speaker', sfx: 'audio', bgm: 'bgm' };
     function tab(category, label, icon, count) {
       var active = paletteCategory === category;
       return '<button type="button" class="palette-tab ' + category + (category !== 'commands' ? ' media' : '') + (active ? ' is-active' : '') + (count === '0' || count === 0 ? ' is-empty' : '') + '" role="tab" aria-selected="' + active + '" data-category="' + category + '">' +
@@ -1621,7 +1622,7 @@
     search.setAttribute('aria-label', search.placeholder.replace('…', ''));
   }
   function palettePlaceholder() {
-    return { commands: 'Search commands…', media: 'Search media by name…', video: 'Search video…', sfx: 'Search sound effects, under 45 s…', bgm: 'Search ambience and music, 45 s or longer…' }[paletteCategory] || 'Search commands…';
+    return { commands: 'Search commands…', media: 'Search media by name…', video: 'Search video…', audio: 'Search every sound…', sfx: 'Search sound effects, under 45 s…', bgm: 'Search ambience and music, 45 s or longer…' }[paletteCategory] || 'Search commands…';
   }
   // Tab goes to the next tab, Shift+Tab (back) to the one before; a click names the tab.
   function switchPaletteCategory(category, back) {

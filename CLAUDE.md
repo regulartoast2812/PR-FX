@@ -154,8 +154,8 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   `PaletteForm.cs`. Windows had its own cool greys and blue selection until 2026-11-23 because the old note named only the
   first two, so every restyle missed it (the user: "edie's ctrl space doesn't share the same UI with windows version").
 - **The palette is laid out like Sage's search** (Creative Assist `app/ui/search.ts`, 2026-11-23) in all three places: the Mac
-  palette, Windows `PaletteForm` and the panel's own `#palette`. 640×440 (wide enough for five tabs): a 52px search row (Edie, a borderless 15pt field,
-  an `esc` key cap), tabs with counts (Commands, Media, Video, SFX, BGM; Tab goes to the next, Shift+Tab back), each kind's commands under its coloured name
+  palette, Windows `PaletteForm` and the panel's own `#palette`. 640×440 (six tabs fit; when they don't at their roomy size they draw tighter, never off the edge): a 52px search row (Edie, a borderless 15pt field,
+  an `esc` key cap), tabs with counts (Commands, Media, Video, Audio, SFX, BGM; Tab goes to the next, Shift+Tab back), each kind's commands under its coloured name
   with a count (Recent first when nothing is typed), rows with an icon, the matched part picked out and the shortcut, and a
   footer of keys. The search itself is pure and ported three times, line for line: `native/PRFXPaletteSearch.swift` (checked by
   `tools/check-palette-search.swift`), `client/palette-search.js` (the panel's palette and its Commands list) and
@@ -165,9 +165,13 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   through the bridge: `/next` hands the engine (or the panel) a `media-list` job, which answers with `POST /media`; asked again
   only when the last list is over 10 s old; if Premiere doesn't answer (6 s native, 15 s panel) the old list is dropped,
   never shown as the project's. The panel's palette calls the host directly.
-- **Video, SFX, BGM** are parts of Media (the user, 2026-11-23: "video, sfx for audio under 45s, anything over 45s should be
+- **Video, Audio, SFX, BGM** are parts of Media (the user, 2026-11-23: "video, sfx for audio under 45s, anything over 45s should be
   ambient or bgm"): video by file type; sound by its length, which the host sends as `seconds` (out minus in point) for audio
-  only: under 45 s is SFX, 45 s or longer is ambient/BGM, unknown length shows only under Media. Sound rows show the length
+  only: under 45 s is SFX, 45 s or longer is ambient/BGM. Audio (the user: "if it doesn't report back then just make an audio
+  category") holds every sound, with a length or not. The host spots sound by extension, and also asks Premiere: a clip with an
+  audio range but no video range is sound even in an mp4 (`prfx.projectItemTypeSpan`, media type 2 vs 1, within a 2.5 s budget);
+  the length comes from the audio range, then any range, then project metadata (`prfx.projectItemSeconds`). The listener log's
+  "Palette media:" line says how many items are sound, how many have a length, the host build and the kind:extension counts. Sound rows show the length
   ("0.4 s", "44 s", "2:32") before the bins. Recents (5 commands, 5 media) live in
   `palette-recent.json` beside the settings (native) and `prfx.palette.recent.v1` in localStorage (panel).
 - The panel extends 44pt above the window so Edie still fits when the Timeline is docked at the top.

@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20261123-media-search-3';
+prfx.HOST_BUILD = '20261123-media-search-4';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -5415,11 +5415,12 @@ prfx.listProjectMedia = function () {
     try { project = String(app.project.name || ''); } catch (nameError) { project = ''; }
     try { prfx.collectPaletteMedia(app.project.rootItem, [], out, total, 0); }
     catch (error) { return 'ERROR: Premiere could not read the project - ' + error.toString(); }
-    return JSON.stringify({ project: project, total: total.count, audio: total.audio || 0, timed: total.timed || 0, items: out });
+    return JSON.stringify({ project: project, host: prfx.HOST_BUILD, total: total.count, audio: total.audio || 0, timed: total.timed || 0, kinds: total.kinds || {}, items: out });
 };
 
 prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
-    var children, count, i, child, name, ext, kind, id, entry, seconds;
+    var children, count, i, child, name, ext, kind, id, entry, seconds, key;
+    if (!total.kinds) { total.kinds = {}; total.started = new Date().getTime(); }
     if (!bin || depth > 16) return;
     try { children = bin.children; count = Number(children.numItems || 0); } catch (error) { return; }
     for (i = 0; i < count; i++) {
@@ -5437,8 +5438,18 @@ prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
         entry = { id: id, name: name, bin: path.join(' / '), kind: kind, ext: ext };
         // Sound is sorted by length in the palette: under 45 s is SFX, longer is ambient or BGM (2026-11-23).
         if (kind === 'other') kind = entry.kind = prfx.projectItemKindFromMetadata(child) || 'other';
+        // A sound file can come in a video container (mp4, webm, mov). Premiere knows which clips have no
+        // picture: no video range but an audio range. Checked within a time budget so a huge project still
+        // answers before the palette gives up waiting.
+        seconds = NaN;
+        if ((kind === 'video' || kind === 'other') && (new Date().getTime() - total.started) < 2500) {
+            seconds = prfx.projectItemTypeSpan(child, 2);
+            if (!(prfx.projectItemTypeSpan(child, 1) > 0) && seconds > 0) kind = entry.kind = 'audio';
+        }
+        key = kind + ':' + (ext || '-');
+        total.kinds[key] = (total.kinds[key] || 0) + 1;
         if (kind === 'audio') {
-            seconds = prfx.projectItemSeconds(child);
+            if (!(seconds > 0)) seconds = prfx.projectItemSeconds(child);
             if (seconds > 0) { entry.seconds = Math.round(seconds * 100) / 100; total.timed = (total.timed || 0) + 1; }
             total.audio = (total.audio || 0) + 1;
         }
@@ -5450,6 +5461,14 @@ prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
 // clips report no video range, so getInPoint()/getOutPoint() with no media type
 // can come back empty or zero for them: ask for the audio range (2) and "any"
 // (4) first, then the plain call, then the project metadata's Media Duration.
+// One media type's range in seconds (1 video, 2 audio, 4 any), or NaN when Premiere has none.
+prfx.projectItemTypeSpan = function (item, mediaType) {
+    var a, b;
+    try { a = prfx.timeInSeconds(item.getInPoint(mediaType)); b = prfx.timeInSeconds(item.getOutPoint(mediaType)); }
+    catch (error) { return NaN; }
+    return a > -999999 && b > -999999 ? b - a : NaN;
+};
+
 prfx.projectItemSeconds = function (item) {
     var types = [2, 4, null], i, a, b, seconds, text, match;
     for (i = 0; i < types.length; i++) {

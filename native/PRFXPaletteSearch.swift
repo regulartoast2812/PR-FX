@@ -12,12 +12,13 @@ import Foundation
 // over 45s should be ambient or bgm"): Media is everything; Video, SFX (sound under 45 seconds) and BGM (sound 45 seconds
 // or longer, ambience or music) are parts of it. Sound whose length Premiere didn't give is only under Media.
 enum PaletteCategory: String, CaseIterable {
-    case commands, media, video, sfx, bgm
+    case commands, media, video, audio, sfx, bgm
     var label: String {
         switch self {
         case .commands: return "Commands"
         case .media: return "Media"
         case .video: return "Video"
+        case .audio: return "Audio"
         case .sfx: return "SFX"
         case .bgm: return "BGM"
         }
@@ -49,6 +50,9 @@ struct PaletteMediaList: Codable {
     /// How many items are sound, and how many of those came with a length (only those fill SFX and BGM).
     var audio: Int? = nil
     var timed: Int? = nil
+    /// What the host saw, for the log: "kind:extension" → count, and its build.
+    var kinds: [String: Int]? = nil
+    var host: String? = nil
     let items: [PaletteMedia]
     let error: String?
 }
@@ -162,8 +166,9 @@ enum PaletteSearch {
         }
     }
 
+    /// Audio holds every sound, with or without a length; SFX and BGM only the sounds whose length Premiere gave.
     static func media(_ m: PaletteMedia, isIn category: PaletteCategory) -> Bool {
-        category == .media || self.category(of: m) == category
+        category == .media || (category == .audio && m.kind == "audio") || self.category(of: m) == category
     }
 
     /// How many items a media tab holds.
@@ -230,6 +235,7 @@ enum PaletteSearch {
     static func sectionTitle(_ category: PaletteCategory, typed: Bool) -> String {
         switch category {
         case .video: return "Video"
+        case .audio: return "Audio"
         case .sfx: return "SFX · under 45 s"
         case .bgm: return "Ambient and BGM · 45 s or longer"
         default: return typed ? "In the project" : "All media"
@@ -239,6 +245,7 @@ enum PaletteSearch {
     static func emptyNote(_ category: PaletteCategory) -> String {
         switch category {
         case .video: return "This project has no video."
+        case .audio: return "This project has no sound."
         case .sfx: return "This project has no sound shorter than 45 seconds."
         case .bgm: return "This project has no sound 45 seconds or longer."
         default: return "This project has no media to place."

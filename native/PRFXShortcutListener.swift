@@ -1917,6 +1917,7 @@ final class ShortcutListener: NSObject {
         case .commands: return "Search effects, transitions, presets and functions…"
         case .media: return "Search the project’s media by name…"
         case .video: return "Search the project’s video…"
+        case .audio: return "Search every sound in the project…"
         case .sfx: return "Search sound effects, under 45 seconds…"
         case .bgm: return "Search ambience and music, 45 seconds or longer…"
         }
@@ -1967,7 +1968,7 @@ final class ShortcutListener: NSObject {
         if let list, (list.error ?? "").isEmpty {
             paletteMedia = list.items
             mediaError = nil
-            listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project"), \(list.audio ?? 0) sound, \(list.timed ?? 0) with a length")
+            listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project"), \(list.audio ?? 0) sound, \(list.timed ?? 0) with a length, host \(list.host ?? "older than media-search-4"); " + (list.kinds ?? [:]).sorted { $0.value > $1.value }.prefix(24).map { "\($0.key) \($0.value)" }.joined(separator: ", "))
         } else {
             var error = list?.error ?? "Premiere sent a media list Edie couldn’t read."
             if error.hasPrefix("ERROR: ") { error = String(error.dropFirst(7)) }
@@ -2875,6 +2876,7 @@ private final class PaletteTabsView: NSView {
         case .commands: return "command"
         case .media: return "photo.on.rectangle.angled"
         case .video: return "film"
+        case .audio: return "speaker.wave.2"
         case .sfx: return "waveform"
         case .bgm: return "music.note"
         }
@@ -2897,7 +2899,12 @@ private final class PaletteTabsView: NSView {
             name.draw(with: NSRect(x: 18 + kindSize.width + 8, y: midY - nameHeight / 2, width: w - kindSize.width - 44, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             return
         }
-        var x: CGFloat = 10
+        // Six tabs: when their natural size doesn't fit the palette's width, they draw tighter (less padding,
+        // narrower count capsules) rather than run off the edge.
+        let roomy = tabsWidth(compact: false) <= w - 10
+        let pad: CGFloat = roomy ? 10 : 7, iconGap: CGFloat = roomy ? 6 : 5, capGap: CGFloat = roomy ? 7 : 5
+        let capMin: CGFloat = roomy ? 30 : 22, between: CGFloat = roomy ? 4 : 2
+        var x: CGFloat = roomy ? 10 : 6
         for category in PaletteCategory.allCases {
             let isActive = category == active
             let tint = colour(category)
@@ -2907,8 +2914,8 @@ private final class PaletteTabsView: NSView {
             let countText = NSAttributedString(string: countString, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: isActive ? PaletteStyle.canvas : PaletteStyle.muted])
             let labelSize = labelText.size(), countSize = countText.size()
             // At least three digits wide, so the tabs don't shift as counts change while typing.
-            let capsuleWidth = countString.isEmpty ? 0 : max(countSize.width + 10, 30)
-            let width = 10 + 14 + 6 + labelSize.width + (capsuleWidth > 0 ? 7 + capsuleWidth : 0) + 10
+            let capsuleWidth = countString.isEmpty ? 0 : max(countSize.width + 10, capMin)
+            let width = pad + 14 + iconGap + labelSize.width + (capsuleWidth > 0 ? capGap + capsuleWidth : 0) + pad
             let rect = NSRect(x: x, y: midY - 13, width: width, height: 26)
             tabRects[category] = rect
             NSGraphicsContext.saveGraphicsState()
@@ -2917,15 +2924,15 @@ private final class PaletteTabsView: NSView {
                 tint.withAlphaComponent(0.15).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
             }
-            var cx = rect.minX + 10
+            var cx = rect.minX + pad
             if let image = NSImage(systemSymbolName: symbol(category), accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
                     .applying(NSImage.SymbolConfiguration(paletteColors: [(isActive ? tint : PaletteStyle.muted).withAlphaComponent(faded ? 0.45 : 1)]))) {
                 image.draw(in: NSRect(x: cx + (14 - image.size.width) / 2, y: midY - image.size.height / 2, width: image.size.width, height: image.size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             }
-            cx += 14 + 6
+            cx += 14 + iconGap
             labelText.draw(at: NSPoint(x: cx, y: midY - labelSize.height / 2))
-            cx += labelSize.width + 7
+            cx += labelSize.width + capGap
             if capsuleWidth > 0 {
                 let box = NSRect(x: cx, y: midY - 8, width: capsuleWidth, height: 16)
                 (isActive ? tint : PaletteStyle.line).setFill()
@@ -2937,11 +2944,26 @@ private final class PaletteTabsView: NSView {
                 rect.fill(using: .sourceAtop)
             }
             NSGraphicsContext.restoreGraphicsState()
-            x = rect.maxX + 4
+            x = rect.maxX + between
         }
         let hint = NSAttributedString(string: "Tab to switch", attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .regular), .foregroundColor: PaletteStyle.faint])
         let hintSize = hint.size()
         if x + hintSize.width + 16 < w { hint.draw(at: NSPoint(x: w - hintSize.width - 16, y: midY - hintSize.height / 2)) }
+    }
+
+    /// How wide the row of tabs is, measured the way draw lays them out (the active tab's label is semibold).
+    private func tabsWidth(compact: Bool) -> CGFloat {
+        let pad: CGFloat = compact ? 7 : 10, iconGap: CGFloat = compact ? 5 : 6, capGap: CGFloat = compact ? 5 : 7
+        let capMin: CGFloat = compact ? 22 : 30, between: CGFloat = compact ? 2 : 4
+        var total: CGFloat = compact ? 6 : 10
+        for category in PaletteCategory.allCases {
+            let label = NSAttributedString(string: category.label, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: category == active ? .semibold : .medium)])
+            let countString = counts[category].map { $0 < 0 ? "…" : "\($0)" } ?? ""
+            let countWidth = NSAttributedString(string: countString, attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold)]).size().width
+            let capsule = countString.isEmpty ? 0 : max(countWidth + 10, capMin)
+            total += pad + 14 + iconGap + label.size().width + (capsule > 0 ? capGap + capsule : 0) + pad + between
+        }
+        return total
     }
 
     override func mouseDown(with event: NSEvent) {

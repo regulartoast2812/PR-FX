@@ -268,6 +268,10 @@ footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 
 .palette-esc { flex: none; padding: 0 6px; font-size: 10.5px; color: var(--muted); background: transparent; }
 .palette-tabs { flex: none; display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .palette-tabs::-webkit-scrollbar { display: none; }
+/* Six tabs: tighter inside the palette so BGM still shows at 640 px (the manager's tabs keep the roomier size). */
+.palette-tabs { gap: 2px; padding: 0 8px; }
+.palette-tabs .palette-tab { gap: 5px; padding: 0 6px 0 7px; }
+.palette-tabs .palette-tab .count { min-width: 22px; padding: 0 5px; }
 .palette-tab { flex: none; }
 .palette-tab { display: inline-flex; align-items: center; gap: 6px; min-height: 0; height: 26px; padding: 0 8px 0 9px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; }
 .palette-tab:hover { background: var(--hover); color: var(--text); }

@@ -278,6 +278,7 @@ internal static class Check
             };
             Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Media) == 4 && PaletteSearch.CategoryOf(sounds[3]) == null, "palette media: Media holds everything; sound with no length is only there");
             Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Video) == 1, "palette media: Video holds video only");
+            Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Audio) == sounds.Count(m => m.Kind == "audio"), "palette media: the Audio tab holds every sound");
             Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Sfx) == 1 && PaletteSearch.CategoryOf(sounds[1]) == PaletteCategory.Sfx, "palette media: 44.6 s is SFX");
             Expect(PaletteSearch.MediaCount(sounds, PaletteCategory.Bgm) == 1 && PaletteSearch.CategoryOf(sounds[2]) == PaletteCategory.Bgm, "palette media: 45 s is ambient or BGM");
             Expect(PaletteSearch.MediaRows(sounds, "", false, null, null, PaletteCategory.Sfx).SequenceEqual(new[] { PaletteRow.Section("SFX · under 45 s", 1, "media"), PaletteRow.Media(1, null) }), "palette media: the SFX tab lists its sound");

@@ -15,9 +15,9 @@
     type = String(type || '');
     return type.charAt(0).toUpperCase() + type.slice(1).replace(/-/g, ' ') + 's';
   }
-  // Tabs, in Tab order. Media is everything; Video, SFX (sound under 45 s) and BGM (45 s or longer) are parts of it.
-  var CATEGORIES = ['commands', 'media', 'video', 'sfx', 'bgm'];
-  var LABELS = { commands: 'Commands', media: 'Media', video: 'Video', sfx: 'SFX', bgm: 'BGM' };
+  // Tabs, in Tab order. Media is everything; Video, Audio (every sound), SFX (sound under 45 s) and BGM (45 s or longer) are parts of it.
+  var CATEGORIES = ['commands', 'media', 'video', 'audio', 'sfx', 'bgm'];
+  var LABELS = { commands: 'Commands', media: 'Media', video: 'Video', audio: 'Audio', sfx: 'SFX', bgm: 'BGM' };
   var SHORT_SOUND = 45;
   function step(category, by) {
     var i = CATEGORIES.indexOf(category);
@@ -29,16 +29,19 @@
     if (m.kind === 'audio' && typeof m.seconds === 'number') return m.seconds < SHORT_SOUND ? 'sfx' : 'bgm';
     return null;
   }
-  function inCategory(m, category) { return !category || category === 'media' || categoryOf(m) === category; }
+  // Audio holds every sound, with or without a length; SFX and BGM only the sounds whose length Premiere gave.
+  function inCategory(m, category) { return !category || category === 'media' || (category === 'audio' && m.kind === 'audio') || categoryOf(m) === category; }
   function mediaCount(media, category) { return media.filter(function (m) { return inCategory(m, category); }).length; }
   function sectionTitle(category, typed) {
     if (category === 'video') return 'Video';
+    if (category === 'audio') return 'Audio';
     if (category === 'sfx') return 'SFX · under 45 s';
     if (category === 'bgm') return 'Ambient and BGM · 45 s or longer';
     return typed ? 'In the project' : 'All media';
   }
   function emptyNote(category) {
     if (category === 'video') return 'This project has no video.';
+    if (category === 'audio') return 'This project has no sound.';
     if (category === 'sfx') return 'This project has no sound shorter than 45 seconds.';
     if (category === 'bgm') return 'This project has no sound 45 seconds or longer.';
     return 'This project has no media to place.';

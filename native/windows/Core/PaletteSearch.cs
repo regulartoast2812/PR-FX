@@ -15,11 +15,11 @@ namespace PrFxShortcutListener
     // The media tabs (2026-11-23, the user: "we need to add more categories, like video, sfx for audio under 45s, anything
     // over 45s should be ambient or bgm"): Media is everything; Video, SFX (sound under 45 seconds) and BGM (sound 45 seconds
     // or longer, ambience or music) are parts of it. Sound whose length Premiere didn't give is only under Media.
-    internal enum PaletteCategory { Commands, Media, Video, Sfx, Bgm }
+    internal enum PaletteCategory { Commands, Media, Video, Audio, Sfx, Bgm }
 
     internal static class PaletteCategories
     {
-        public static readonly PaletteCategory[] All = { PaletteCategory.Commands, PaletteCategory.Media, PaletteCategory.Video, PaletteCategory.Sfx, PaletteCategory.Bgm };
+        public static readonly PaletteCategory[] All = { PaletteCategory.Commands, PaletteCategory.Media, PaletteCategory.Video, PaletteCategory.Audio, PaletteCategory.Sfx, PaletteCategory.Bgm };
 
         public static string Label(PaletteCategory category)
         {
@@ -28,6 +28,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Commands: return "Commands";
                 case PaletteCategory.Media: return "Media";
                 case PaletteCategory.Video: return "Video";
+                case PaletteCategory.Audio: return "Audio";
                 case PaletteCategory.Sfx: return "SFX";
                 default: return "BGM";
             }
@@ -275,8 +276,9 @@ namespace PrFxShortcutListener
             }
         }
 
+        /// Audio holds every sound, with or without a length; SFX and BGM only the sounds whose length Premiere gave.
         public static bool MediaIsIn(PaletteMedia m, PaletteCategory category) =>
-            category == PaletteCategory.Media || CategoryOf(m) == category;
+            category == PaletteCategory.Media || (category == PaletteCategory.Audio && m.Kind == "audio") || CategoryOf(m) == category;
 
         /// How many items a media tab holds.
         public static int MediaCount(IList<PaletteMedia> media, PaletteCategory category) => media.Count(m => MediaIsIn(m, category));
@@ -371,6 +373,7 @@ namespace PrFxShortcutListener
             switch (category)
             {
                 case PaletteCategory.Video: return "Video";
+                case PaletteCategory.Audio: return "Audio";
                 case PaletteCategory.Sfx: return "SFX · under 45 s";
                 case PaletteCategory.Bgm: return "Ambient and BGM · 45 s or longer";
                 default: return typed ? "In the project" : "All media";
@@ -382,6 +385,7 @@ namespace PrFxShortcutListener
             switch (category)
             {
                 case PaletteCategory.Video: return "This project has no video.";
+                case PaletteCategory.Audio: return "This project has no sound.";
                 case PaletteCategory.Sfx: return "This project has no sound shorter than 45 seconds.";
                 case PaletteCategory.Bgm: return "This project has no sound 45 seconds or longer.";
                 default: return "This project has no media to place.";

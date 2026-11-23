@@ -550,6 +550,7 @@ namespace PrFxShortcutListener
             {
                 case PaletteCategory.Commands: return "Search effects, transitions, presets and functions…";
                 case PaletteCategory.Video: return "Search the project’s video…";
+                case PaletteCategory.Audio: return "Search every sound in the project…";
                 case PaletteCategory.Sfx: return "Search sound effects, under 45 seconds…";
                 case PaletteCategory.Bgm: return "Search ambience and music, 45 seconds or longer…";
                 default: return "Search the project’s media by name…";
@@ -674,7 +675,11 @@ namespace PrFxShortcutListener
                 Draw(g, titleName, titleFont, new Rectangle(P(18) + kindSize.Width + P(8), midY - nameHeight / 2, Math.Max(0, w - kindSize.Width - P(44)), nameHeight), PaletteStyle.Text, TextFormatFlags.EndEllipsis);
                 return;
             }
-            var x = P(10);
+            // Six tabs: when their natural size doesn't fit the palette's width they draw tighter (less padding,
+            // narrower count capsules) rather than run off the edge. Same as the Mac palette.
+            var roomy = TabsWidth(counts, false) <= w - P(10);
+            int pad = P(roomy ? 10 : 7), iconGap = P(roomy ? 6 : 5), capGap = P(roomy ? 7 : 5), capMin = P(roomy ? 30 : 22), between = P(roomy ? 4 : 2);
+            var x = P(roomy ? 10 : 6);
             for (var i = 0; i < PaletteCategories.All.Length; i++)
             {
                 var cat = PaletteCategories.All[i];
@@ -687,17 +692,17 @@ namespace PrFxShortcutListener
                 var countString = count < 0 ? "…" : count.ToString(CultureInfo.InvariantCulture);
                 var countSize = Measure(countString, countFont);
                 // At least three digits wide, so the tabs don't shift as counts change while typing.
-                var capsuleWidth = Math.Max(countSize.Width + P(10), P(30));
-                var width = P(10) + P(14) + P(6) + labelSize.Width + P(7) + capsuleWidth + P(10);
+                var capsuleWidth = Math.Max(countSize.Width + P(10), capMin);
+                var width = pad + P(14) + iconGap + labelSize.Width + capGap + capsuleWidth + pad;
                 var rect = new Rectangle(x, midY - P(13), width, P(26));
                 tabRects[i] = rect;
                 var faded = count == 0 && !active;
                 if (active) FillRounded(g, rect, P(8), PaletteStyle.Over(tint, 0.15));
-                var cx = rect.X + P(10);
+                var cx = rect.X + pad;
                 Draw(g, TabSymbol(cat), tabIconFont, new Rectangle(cx, rect.Y, P(14), rect.Height), active ? tint : PaletteStyle.Muted, TextFormatFlags.HorizontalCenter);
-                cx += P(14) + P(6);
+                cx += P(14) + iconGap;
                 Draw(g, label, labelFont, new Rectangle(cx, midY - labelSize.Height / 2, labelSize.Width + P(2), labelSize.Height), active ? PaletteStyle.Text : PaletteStyle.Muted);
-                cx += labelSize.Width + P(7);
+                cx += labelSize.Width + capGap;
                 var box = new Rectangle(cx, midY - P(8), capsuleWidth, P(16));
                 FillRounded(g, box, P(8), active ? tint : PaletteStyle.Line);
                 Draw(g, countString, countFont, box, active ? PaletteStyle.Canvas : PaletteStyle.Muted, TextFormatFlags.HorizontalCenter);
@@ -705,7 +710,7 @@ namespace PrFxShortcutListener
                 {
                     using (var veil = new SolidBrush(Color.FromArgb(140, PaletteStyle.Canvas))) g.FillRectangle(veil, rect);
                 }
-                x = rect.Right + P(4);
+                x = rect.Right + between;
             }
             const string hint = "Tab to switch";
             var hintSize = Measure(hint, hintFont);
@@ -713,6 +718,21 @@ namespace PrFxShortcutListener
         }
 
         // command, photo, film, waveform, music note: the Mac's SF Symbols, as Segoe UI Symbol characters.
+        /// How wide the row of tabs is, measured the way the tabs are drawn (the active tab's label is bold).
+        private int TabsWidth(int[] counts, bool compact)
+        {
+            int pad = P(compact ? 7 : 10), iconGap = P(compact ? 5 : 6), capGap = P(compact ? 5 : 7), capMin = P(compact ? 22 : 30), between = P(compact ? 2 : 4);
+            var total = P(compact ? 6 : 10);
+            for (var i = 0; i < PaletteCategories.All.Length; i++)
+            {
+                var cat = PaletteCategories.All[i];
+                var labelSize = Measure(PaletteCategories.Label(cat), cat == category ? tabActiveFont : tabFont);
+                var countString = counts[i] < 0 ? "…" : counts[i].ToString(CultureInfo.InvariantCulture);
+                total += pad + P(14) + iconGap + labelSize.Width + capGap + Math.Max(Measure(countString, countFont).Width + P(10), capMin) + pad + between;
+            }
+            return total;
+        }
+
         private static string TabSymbol(PaletteCategory tab)
         {
             switch (tab)
@@ -720,6 +740,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Commands: return "⌘";
                 case PaletteCategory.Media: return "▣";
                 case PaletteCategory.Video: return "▶";
+                case PaletteCategory.Audio: return "♪";
                 case PaletteCategory.Sfx: return "∿";
                 default: return "♫";
             }

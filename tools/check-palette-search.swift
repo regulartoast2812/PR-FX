@@ -80,6 +80,8 @@ static func main() {
     ]
     check(PaletteSearch.mediaCount(sounds, in: .media) == 5, "Media holds everything")
     check(PaletteSearch.mediaCount(sounds, in: .video) == 1, "Video holds video only")
+    check(PaletteSearch.mediaCount(sounds, in: .audio) == 3, "the Audio tab holds every sound, with a length or not")
+    check(PaletteSearch.mediaRows([sounds[0]], query: "", loading: false, error: nil, in: .audio) == [.note("This project has no sound.")], "an empty Audio tab says so")
     check(PaletteSearch.mediaCount(sounds, in: .sfx) == 1 && PaletteSearch.category(of: sounds[1]) == .sfx, "44.6 s is SFX")
     check(PaletteSearch.mediaCount(sounds, in: .bgm) == 1 && PaletteSearch.category(of: sounds[2]) == .bgm, "45 s is ambient or BGM")
     check(PaletteSearch.category(of: sounds[3]) == nil, "sound of unknown length is only under Media")
