@@ -160,6 +160,11 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   footer of keys. The search itself is pure and ported three times, line for line: `native/PRFXPaletteSearch.swift` (checked by
   `tools/check-palette-search.swift`), `client/palette-search.js` (the panel's palette and its Commands list) and
   `native/windows/Core/PaletteSearch.cs`.
+- **Media wears Premiere's default label colours** (Preferences ▸ Labels, 2026-11-23), the same in all three palettes:
+  Video tab and video items Violet #a690e0; Audio, SFX and BGM tabs and sound items Caribbean #29d698; stills Lavender
+  #e385e3; the mixed Media tab and anything else (graphics, mattes, adjustment layers) Iris #729acc. Commands keeps the
+  orange accent. Each item's icon, picked-out match, selection fill and extension tag take its own kind's colour; the
+  section heading takes the tab's. Mac `PaletteStyle.label`, Windows `PaletteStyle.Label`, panel `--label-*` tokens.
 - **Media** lists every placeable project item by name with the bins it sits in (`prfx.listProjectMedia()`); Enter places it at
   the playhead (`place-project-item` with `mediaId`), Shift+Enter keeps the palette open. The native palettes ask for the list
   through the bridge: `/next` hands the engine (or the panel) a `media-list` job, which answers with `POST /media`; asked again

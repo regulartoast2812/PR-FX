@@ -23,8 +23,23 @@ namespace PrFxShortcutListener
         public static readonly Color Faint = Hex(0x6f6c64);
         public static readonly Color Accent = Hex(0xff9a3d);
         public static readonly Color Orange = Hex(0xd4a26a), Blue = Hex(0x86a6d0), Cyan = Hex(0x7db5ae), Purple = Hex(0xa99cd4);
-        // Media, Sage's own colour for pictures, video and sound in Creative Assist's search.
-        public static readonly Color Pink = Hex(0xe793bd);
+        // Media wears Premiere's default label colours (Preferences ▸ Labels): Violet video, Caribbean audio,
+        // Lavender stills, Iris the rest. Each tab takes its type's colour, each item its own kind's.
+        public static readonly Color LabelVideo = Hex(0xa690e0), LabelAudio = Hex(0x29d698), LabelStill = Hex(0xe385e3), LabelOther = Hex(0x729acc);
+        public static Color Label(PaletteCategory category) => category switch
+        {
+            PaletteCategory.Commands => Accent,
+            PaletteCategory.Video => LabelVideo,
+            PaletteCategory.Audio or PaletteCategory.Sfx or PaletteCategory.Bgm => LabelAudio,
+            _ => LabelOther,
+        };
+        public static Color Label(PaletteMedia m) => m.Kind switch
+        {
+            "video" => LabelVideo,
+            "audio" => LabelAudio,
+            "image" => LabelStill,
+            _ => LabelOther,
+        };
 
         // `colour` at `alpha` over the canvas, as one solid colour (the Mac fills with alpha over the same canvas).
         public static Color Over(Color colour, double alpha, Color? under = null)
@@ -684,7 +699,7 @@ namespace PrFxShortcutListener
             {
                 var cat = PaletteCategories.All[i];
                 var active = cat == category;
-                var tint = cat == PaletteCategory.Commands ? PaletteStyle.Accent : PaletteStyle.Pink;
+                var tint = PaletteStyle.Label(cat);
                 var count = counts[i];
                 var label = PaletteCategories.Label(cat);
                 var labelFont = active ? tabActiveFont : tabFont;
@@ -779,7 +794,7 @@ namespace PrFxShortcutListener
             {
                 case PaletteRowKind.Section:
                 {
-                    var colour = row.Colour == "recent" ? PaletteStyle.Muted : row.Colour == "media" ? PaletteStyle.Pink : PaletteStyle.Colour(row.Colour);
+                    var colour = row.Colour == "recent" ? PaletteStyle.Muted : row.Colour == "media" ? PaletteStyle.Label(category) : PaletteStyle.Colour(row.Colour);
                     var midY = b.Bottom - P(11);
                     var size = Measure(row.Title, sectionFont);
                     Draw(g, row.Title, sectionFont, new Rectangle(b.X + P(18), midY - size.Height / 2, size.Width + P(2), size.Height), colour);
@@ -810,7 +825,7 @@ namespace PrFxShortcutListener
                 var m = media[row.Index];
                 name = m.Name;
                 symbol = PaletteStyle.MediaSymbol(m);
-                colour2 = PaletteStyle.Pink;
+                colour2 = PaletteStyle.Label(m);
                 detail = PaletteSearch.WhereText(m);
                 tag = m.Ext.Length == 0 ? null : m.Ext.ToLowerInvariant();
                 tagIsKey = false;
@@ -831,7 +846,7 @@ namespace PrFxShortcutListener
             var back = PaletteStyle.Canvas;
             if (selected)
             {
-                back = PaletteStyle.Over(row.Kind == PaletteRowKind.Media ? PaletteStyle.Pink : PaletteStyle.Accent, 0.16);
+                back = PaletteStyle.Over(row.Kind == PaletteRowKind.Media ? colour2 : PaletteStyle.Accent, 0.16);
                 FillRounded(g, new RectangleF(b.X + P(8), b.Y + P(1), b.Width - P(16), b.Height - P(2)), P(7), back);
             }
 
@@ -844,8 +859,8 @@ namespace PrFxShortcutListener
                 var font = tagIsKey ? keyFont : tagFont;
                 var tagSize = Measure(tag!, font);
                 var box = new Rectangle(right - tagSize.Width - P(12), mid - P(9), tagSize.Width + P(12), P(18));
-                FillRounded(g, box, tagIsKey ? P(5) : P(9), tagIsKey ? PaletteStyle.Over(PaletteStyle.Line, 0.7, back) : PaletteStyle.Over(PaletteStyle.Pink, 0.14, back));
-                Draw(g, tag!, font, box, tagIsKey ? PaletteStyle.Muted : PaletteStyle.Pink, TextFormatFlags.HorizontalCenter);
+                FillRounded(g, box, tagIsKey ? P(5) : P(9), tagIsKey ? PaletteStyle.Over(PaletteStyle.Line, 0.7, back) : PaletteStyle.Over(colour2, 0.14, back));
+                Draw(g, tag!, font, box, tagIsKey ? PaletteStyle.Muted : colour2, TextFormatFlags.HorizontalCenter);
                 right = box.X - P(10);
             }
             var left = b.X + P(46);

@@ -252,8 +252,25 @@ private enum PaletteStyle {
     static let accent = hex(0xff9a3d)
     static let accentSoft = hex(0xff9a3d, 0.22)
     static let orange = hex(0xd4a26a), blue = hex(0x86a6d0), cyan = hex(0x7db5ae), purple = hex(0xa99cd4)
-    // Media, Sage's own colour for pictures, video and sound in Creative Assist's search.
-    static let pink = hex(0xe793bd)
+    // Media wears Premiere's default label colours (Preferences ▸ Labels): Violet video, Caribbean audio,
+    // Lavender stills, Iris the rest. Each tab takes its type's colour, each item its own kind's.
+    static let labelVideo = hex(0xa690e0), labelAudio = hex(0x29d698), labelStill = hex(0xe385e3), labelOther = hex(0x729acc)
+    static func label(_ category: PaletteCategory) -> NSColor {
+        switch category {
+        case .commands: return accent
+        case .video: return labelVideo
+        case .audio, .sfx, .bgm: return labelAudio
+        case .media: return labelOther
+        }
+    }
+    static func label(_ m: PaletteMedia) -> NSColor {
+        switch m.kind {
+        case "video": return labelVideo
+        case "audio": return labelAudio
+        case "image": return labelStill
+        default: return labelOther
+        }
+    }
 
     static func colour(_ type: String) -> NSColor {
         switch type {
@@ -2653,7 +2670,7 @@ extension ShortcutListener: NSTableViewDataSource, NSTableViewDelegate {
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let view = PaletteSelectionRowView()
-        if paletteRows.indices.contains(row), case .media = paletteRows[row] { view.tint = PaletteStyle.pink } else { view.tint = PaletteStyle.accent }
+        if paletteRows.indices.contains(row), case let .media(index, _) = paletteRows[row], paletteMedia.indices.contains(index) { view.tint = PaletteStyle.label(paletteMedia[index]) } else { view.tint = PaletteStyle.accent }
         return view
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -2663,14 +2680,14 @@ extension ShortcutListener: NSTableViewDataSource, NSTableViewDelegate {
         guard paletteRows.indices.contains(row) else { return cell }
         switch paletteRows[row] {
         case let .section(title, count, colour):
-            cell.show(.section(title: title, count: count, colour: colour == "recent" ? PaletteStyle.muted : colour == "media" ? PaletteStyle.pink : PaletteStyle.colour(colour)))
+            cell.show(.section(title: title, count: count, colour: colour == "recent" ? PaletteStyle.muted : colour == "media" ? PaletteStyle.label(paletteCategory) : PaletteStyle.colour(colour)))
         case let .command(index, at):
             let command = visibleCommands[index]
             cell.show(.item(name: command.name, at: at, symbol: PaletteStyle.symbol(command.type), colour: PaletteStyle.colour(command.type), detail: nil,
                             tag: inApplyMenu ? nil : shortcutLabels[shortcutKey(command)], tagIsKey: true))
         case let .media(index, at):
             let media = paletteMedia[index]
-            cell.show(.item(name: media.name, at: at, symbol: PaletteStyle.mediaSymbol(media), colour: PaletteStyle.pink, detail: PaletteSearch.whereText(media),
+            cell.show(.item(name: media.name, at: at, symbol: PaletteStyle.mediaSymbol(media), colour: PaletteStyle.label(media), detail: PaletteSearch.whereText(media),
                             tag: media.ext.isEmpty ? nil : media.ext.lowercased(), tagIsKey: false))
         case let .note(text):
             cell.show(.note(text))
@@ -2825,8 +2842,8 @@ private final class PaletteRowView: NSView {
             var right = w - 16
             if let tag, !tag.isEmpty {
                 right = drawCapsule(tag, right: right, midY: midY,
-                                    fill: tagIsKey ? PaletteStyle.line.withAlphaComponent(0.7) : PaletteStyle.pink.withAlphaComponent(0.14),
-                                    colour: tagIsKey ? PaletteStyle.muted : PaletteStyle.pink, mono: tagIsKey) - 10
+                                    fill: tagIsKey ? PaletteStyle.line.withAlphaComponent(0.7) : colour.withAlphaComponent(0.14),
+                                    colour: tagIsKey ? PaletteStyle.muted : colour, mono: tagIsKey) - 10
             }
             let left: CGFloat = 46
             let nameText = Self.picked(name, at: at, colour: colour)
@@ -2870,7 +2887,7 @@ private final class PaletteTabsView: NSView {
 
     override var isFlipped: Bool { true }
 
-    private func colour(_ category: PaletteCategory) -> NSColor { category == .commands ? PaletteStyle.accent : PaletteStyle.pink }
+    private func colour(_ category: PaletteCategory) -> NSColor { PaletteStyle.label(category) }
     private func symbol(_ category: PaletteCategory) -> String {
         switch category {
         case .commands: return "command"

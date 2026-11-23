@@ -1495,9 +1495,16 @@
     if (type === 'custom' || type === 'move-mode' || type === 'stagger-frames') return 'var(--accent)';
     if (type === 'preset' || type === 'ai-function') return 'var(--hue-purple)';
     if (type === 'recent') return 'var(--muted)';
-    if (type === 'media') return 'var(--hue-pink)';
+    if (type === 'media') return paletteCategoryColour(paletteCategory);
     return 'var(--hue-orange)';
   }
+  // Media wears Premiere's default label colours: each tab its type's, each item its own kind's.
+  function paletteCategoryColour(category) {
+    if (category === 'video') return 'var(--label-video)';
+    if (category === 'audio' || category === 'sfx' || category === 'bgm') return 'var(--label-audio)';
+    return 'var(--label-other)';
+  }
+  function paletteMediaLabel(m) { return m.kind === 'video' ? 'video' : m.kind === 'audio' ? 'audio' : m.kind === 'image' ? 'still' : 'other'; }
   function paletteIcon(name) { return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' + (PALETTE_ICONS[name] || PALETTE_ICONS.dot) + '</svg>'; }
   function highlightName(name, at, colour) {
     name = String(name || '');
@@ -1554,8 +1561,10 @@
       var head = '<button type="button" class="palette-row' + (row.kind === 'media' ? ' media' : '') + (active ? ' is-active' : '') + '" role="option" id="palette-row-' + i + '" aria-selected="' + active + '" data-row="' + i + '">';
       if (row.kind === 'media') {
         var m = paletteMedia[row.index];
-        return head + '<span class="icon" style="color:var(--hue-pink)">' + paletteIcon(PS.categoryOf(m) === 'bgm' ? 'bgm' : m.kind === 'video' || m.kind === 'audio' || m.kind === 'image' ? m.kind : 'other') + '</span>' +
-          '<span class="text"><span class="name" title="' + escapeHtml(m.name) + '">' + highlightName(m.name, row.at, 'var(--hue-pink)') + '</span><span class="where">' + escapeHtml(PS.whereText(m)) + '</span></span>' +
+        var label = paletteMediaLabel(m), mc = 'var(--label-' + label + ')';
+        head = head.replace('data-row=', 'style="--kind-rgb:var(--label-' + label + '-rgb)" data-row=');
+        return head + '<span class="icon" style="color:' + mc + '">' + paletteIcon(PS.categoryOf(m) === 'bgm' ? 'bgm' : m.kind === 'video' || m.kind === 'audio' || m.kind === 'image' ? m.kind : 'other') + '</span>' +
+          '<span class="text"><span class="name" title="' + escapeHtml(m.name) + '">' + highlightName(m.name, row.at, mc) + '</span><span class="where">' + escapeHtml(PS.whereText(m)) + '</span></span>' +
           (m.ext ? '<span class="tag ext">' + escapeHtml(String(m.ext).toLowerCase()) + '</span>' : '') + '</button>';
       }
       var command = paletteVisible[row.index];
