@@ -1,10 +1,10 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T10:14:38.051Z",
+  "checkedAt": "2026-11-23T10:24:40.683Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
-    "commit": "0aa96f3"
+    "commit": "6736f30"
   },
   "parts": {
     "agent:claude": {
@@ -28,8 +28,8 @@
       "state": "Thinks with Claude"
     },
     "tool:prfx": {
-      "tone": "wait",
-      "state": "Listener offline · Accessibility: not granted"
+      "tone": "good",
+      "state": "Timeline armed"
     },
     "premiere": {
       "tone": "good",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "bad",
-      "state": "Not running"
+      "tone": "good",
+      "state": "Timeline armed"
     },
     "ai": {
       "tone": "good",
