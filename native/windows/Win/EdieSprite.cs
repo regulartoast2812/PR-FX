@@ -192,23 +192,33 @@ namespace PrFxShortcutListener
         private static IEnumerable<Edit> Arms(Mood mood) =>
             mood == Mood.Talk || mood == Mood.TalkPause ? Hand(25, 21) : Hand(23, 0).Concat(Hand(25, 21));
 
-        // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look down on a laptop"): its
-        // lid's back, grey with a light mark, the light front edge of its keyboard, and his hands on the keys at its
-        // ends, one lifted a whole pixel for a tap. `left` is the keyboard's first fine column. Creative Assist draws the
-        // same (sprite.ts edieLaptop).
-        private static IEnumerable<Edit> Laptop(int left, Mood mood)
+        // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look down on a laptop"; twice
+        // as big, 2026-11-23, the user: "make the laptop x2 bigger"): its lid's back, grey with a light mark (4 by 4), 20
+        // fine pixels wide and 12 tall from just under his eyes, the light front edge of its keyboard (24 by 2) under it,
+        // below his feet or seat, and his hands on the keys at its ends, one lifted a whole pixel for a tap. One fine
+        // column of him shows between it and his clapperboard. Frames he types in are 36 fine rows, taller for its
+        // keyboard (4 standing, 2 sitting). The port of the Swift EdieSprite.laptop; Creative Assist draws the same
+        // (sprite.ts edieLaptop).
+        public const int TypingRows = 36;
+
+        private static IEnumerable<Edit> Laptop(Mood mood)
         {
+            const int top = 22;
             IEnumerable<Edit> KeyHand(int x, bool lifted)
             {
-                var top = lifted ? 25 : 27;
-                return At('D', new[] { top, top + 2 }, new[] { x + 1, x + 2 }).Concat(At('D', new[] { top + 1 }, Span(x, x + 3)));
+                var y = top + (lifted ? 8 : 10);
+                return At('D', new[] { y, y + 2 }, new[] { x + 1, x + 2 }).Concat(At('D', new[] { y + 1 }, Span(x, x + 3)));
             }
-            return At('B', Span(23, 28), Span(left + 1, left + 10))
-                .Concat(At('W', new[] { 25, 26 }, new[] { left + 5, left + 6 }))
-                .Concat(At('W', new[] { 29 }, Span(left, left + 11)))
-                .Concat(KeyHand(left - 2, mood == Mood.TypeLeft))
-                .Concat(KeyHand(left + 10, mood == Mood.TypeRight));
+            return At('B', Span(top, top + 11), Span(1, 20))
+                .Concat(At('W', Span(top + 4, top + 7), Span(9, 12)))
+                .Concat(At('W', new[] { top + 12, top + 13 }, Span(0, 23)))
+                .Concat(KeyHand(0, mood == Mood.TypeLeft))
+                .Concat(KeyHand(18, mood == Mood.TypeRight));
         }
+
+        // A frame with empty rows added under it, to its keyboard's bottom.
+        private static string[] Roomy(string[] rows) =>
+            rows.Concat(Enumerable.Repeat(new string('.', rows.Length > 0 ? rows[0].Length : Columns * 2), Math.Max(0, TypingRows - rows.Length))).ToArray();
 
         // Standing: his legs are stubs under him. `right`: all of him mirrored, facing screen right. Either way his
         // clapperboard is ahead of him, on the side he faces (2026-11-22, the user: "have the clapper in front of him in
@@ -216,7 +226,8 @@ namespace PrFxShortcutListener
         public static string[] Face(Mood mood, bool right = false)
         {
             var rows = Crowned(Put(Fine(Art(mood), mood), At('D', new[] { 22, 23 }, LeftLeg.Concat(RightLeg))));
-            var toRight = Put(Ahead(rows.Select(r => new string(r.Reverse().ToArray())).ToArray()), IsTyping(mood) ? Laptop(8, mood) : Arms(mood));
+            var mirrored = Ahead(rows.Select(r => new string(r.Reverse().ToArray())).ToArray());
+            var toRight = IsTyping(mood) ? Put(Roomy(mirrored), Laptop(mood)) : Put(mirrored, Arms(mood));
             return right ? toRight : toRight.Select(r => new string(r.Reverse().ToArray())).ToArray();
         }
 
@@ -245,7 +256,8 @@ namespace PrFxShortcutListener
                 .Concat(At('D', new[] { 22 }, RightLeg)).Concat(At('D', new[] { 23 }, shin))
                 .Concat(At('D', new[] { 24, 25 }, Span(13, 17).Select(x => x + 2 * s)));
             var body = Art(mood).Take(SeatRow).Concat(Enumerable.Repeat(new string('.', Columns), 2)).ToArray();
-            return Put(Crowned(Put(Fine(body, mood), legs)), IsTyping(mood) ? Laptop(4, mood) : Arms(mood));
+            var rows = Crowned(Put(Fine(body, mood), legs));
+            return IsTyping(mood) ? Put(Roomy(rows), Laptop(mood)) : Put(rows, Arms(mood));
         }
 
         // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.

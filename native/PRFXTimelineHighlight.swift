@@ -721,19 +721,28 @@ enum EdieSprite {
     }
 
     // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look
-    // down on a laptop"): its lid's back, grey with a light mark, the light front edge of its
-    // keyboard, and his hands on the keys at its ends, one lifted a whole pixel for a tap.
-    // `left` is the keyboard's first fine column. Creative Assist draws the same (sprite.ts edieLaptop).
-    static func laptop(_ left: Int, _ mood: Mood) -> [Edit] {
+    // down on a laptop"; twice as big, 2026-11-23, the user: "make the laptop x2 bigger"): its
+    // lid's back, grey with a light mark (4 by 4), 20 fine pixels wide and 12 tall from just
+    // under his eyes, the light front edge of its keyboard (24 by 2) under it, below his feet
+    // or seat, and his hands on the keys at its ends, one lifted a whole pixel for a tap. One
+    // fine column of him shows between it and his clapperboard. Frames he types in are 36
+    // fine rows, taller for its keyboard (4 standing, 2 sitting). Creative Assist draws the
+    // same (sprite.ts edieLaptop; there he sits 4 rows higher in his box instead).
+    static func laptop(_ mood: Mood) -> [Edit] {
+        let top = 22
         func keyHand(_ x: Int, _ lifted: Bool) -> [Edit] {
-            let top = lifted ? 25 : 27
-            return at("D", [top, top + 2], [x + 1, x + 2]) + at("D", [top + 1], Array(x...(x + 3)))
+            let y = top + (lifted ? 8 : 10)
+            return at("D", [y, y + 2], [x + 1, x + 2]) + at("D", [y + 1], Array(x...(x + 3)))
         }
-        return at("B", Array(23...28), Array((left + 1)...(left + 10)))
-            + at("W", [25, 26], [left + 5, left + 6])
-            + at("W", [29], Array(left...(left + 11)))
-            + keyHand(left - 2, mood == .typeLeft)
-            + keyHand(left + 10, mood == .typeRight)
+        return at("B", Array(top...(top + 11)), Array(1...20))
+            + at("W", Array((top + 4)...(top + 7)), [9, 10, 11, 12])
+            + at("W", [top + 12, top + 13], Array(0...23))
+            + keyHand(0, mood == .typeLeft)
+            + keyHand(18, mood == .typeRight)
+    }
+    // A frame with empty rows added under it, to its keyboard's bottom (row 35).
+    static func roomy(_ rows: [String]) -> [String] {
+        rows + Array(repeating: String(repeating: ".", count: rows.first?.count ?? 0), count: max(0, 36 - rows.count))
     }
 
     // Standing: his legs are stubs under him.
@@ -744,7 +753,8 @@ enum EdieSprite {
     // the Timeline he keeps it behind him.
     static func face(_ mood: Mood, right: Bool = false) -> [String] {
         let rows = crowned(put(fine(art(mood), mood), at("D", [22, 23], leftLeg + rightLeg)))
-        let toRight = put(ahead(rows.map { String($0.reversed()) }), isTyping(mood) ? laptop(8, mood) : arms(mood))
+        let mirrored = ahead(rows.map { String($0.reversed()) })
+        let toRight = isTyping(mood) ? put(roomy(mirrored), laptop(mood)) : put(mirrored, arms(mood))
         return right ? toRight : toRight.map { String($0.reversed()) }
     }
 
@@ -772,7 +782,8 @@ enum EdieSprite {
         let legs = at("D", [22, 23, 24, 25], leftLeg) + at("D", [24, 25], [4, 5])
             + at("D", [22], rightLeg) + at("D", [23], shin)
             + at("D", [24, 25], (13...17).map { $0 + 2 * s })
-        return put(crowned(put(fine(Array(art(mood).prefix(seatRow)) + Array(repeating: "................", count: 2), mood), legs)), isTyping(mood) ? laptop(4, mood) : arms(mood))
+        let rows = crowned(put(fine(Array(art(mood).prefix(seatRow)) + Array(repeating: "................", count: 2), mood), legs))
+        return isTyping(mood) ? put(roomy(rows), laptop(mood)) : put(rows, arms(mood))
     }
 
     // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.

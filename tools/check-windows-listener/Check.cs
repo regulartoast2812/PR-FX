@@ -52,8 +52,9 @@ internal static class Check
         "......DDD......DDD..............",
     };
 
-    // EdieSprite.face(.typeDown, right: true): at his laptop, looking down at it, his clapperboard aside (2026-11-22), as
-    // Creative Assist's sprite.ts draws working frame 5.
+    // EdieSprite.face(.typeDown, right: true): at his laptop, looking down at it, his clapperboard aside (2026-11-22), the
+    // laptop twice as big (2026-11-23), the frame 36 rows for its keyboard: Creative Assist's working frame 5 with the 4
+    // empty rows it moves from above his leaf to under his feet put back on top.
     private static readonly string[] TypingRight =
     {
         "................................",
@@ -78,16 +79,20 @@ internal static class Check
         "..OOOOOOOOOOOOOOOOOOOOWWBB......",
         "..OOOOOOOKKKOOOOKKKOOOBBBBBBBBBB",
         "..OOPOPOPKKKOOOOKKKPOPBBBBBBBBBB",
-        "..OOPOPOPOOOOOOOOPOPOPBBWWWWWWBB",
-        "..OOPOPOPBBBBBBBBBBPOPBBWWWWWWBB",
-        "..OOOOOOOBBBBBBBBBBOOOBBBBBBBBBB",
-        "..OOOOOOOBBBBWWBBBBOOOBBBBBBBBBB",
-        "..OOOOOOOBBBBWWBBBBOOOBBWWWWBBBB",
-        "....OOODDBBBBBBBBBBDD.BBWWWWBBBB",
-        "....OODDDDBBBBBBBBDDDDBBBBBBBBBB",
-        "......ODDWWWWWWWWWWDD.BBBBBBBBBB",
-        "......DDD......DDD..............",
-        "......DDD......DDD..............",
+        ".BBBBBBBBBBBBBBBBBBBBPBBWWWWWWBB",
+        ".BBBBBBBBBBBBBBBBBBBBPBBWWWWWWBB",
+        ".BBBBBBBBBBBBBBBBBBBBOBBBBBBBBBB",
+        ".BBBBBBBBBBBBBBBBBBBBOBBBBBBBBBB",
+        ".BBBBBBBBWWWWBBBBBBBBOBBWWWWBBBB",
+        ".BBBBBBBBWWWWBBBBBBBB.BBWWWWBBBB",
+        ".BBBBBBBBWWWWBBBBBBBB.BBBBBBBBBB",
+        ".BBBBBBBBWWWWBBBBBBBB.BBBBBBBBBB",
+        ".BBBBBBBBBBBBBBBBBBBB...........",
+        ".BBBBBBBBBBBBBBBBBBBB...........",
+        ".DDBBBBBBBBBBBBBBBBDD...........",
+        "DDDDBBBBBBBBBBBBBBDDDD..........",
+        "WDDWWWWWWWWWWWWWWWWDDWWW........",
+        "WWWWWWWWWWWWWWWWWWWWWWWW........",
     };
 
     [STAThread]
@@ -113,7 +118,8 @@ internal static class Check
         Expect(typingSit.Any(r => r.Contains("WWWWWWWWWW")) && typingSit.Skip(EdieSprite.Crown + 12).Take(10).All(r => r.Substring(22).IndexOfAny(new[] { 'B', 'W' }) >= 0), "edie: typing on the Timeline, a laptop on his lap, the clapperboard still behind him");
         Expect(typingSit.All(r => r.Substring(22).IndexOf('O') < 0 && r.Substring(22).IndexOf('D') < 0 || r == typingSit[typingSit.Length - 1]), "edie: typing, no hand on the clapperboard");
         foreach (EdieSprite.Mood mood in Enum.GetValues(typeof(EdieSprite.Mood)))
-            Expect(EdieSprite.Sitting(mood).Length == 34, "edie: " + mood + " draws");
+            Expect(EdieSprite.Sitting(mood).Length == (mood.ToString().StartsWith("Type") ? EdieSprite.TypingRows : 34), "edie: " + mood + " draws");
+        Expect(typingSit.Count(r => r.Substring(1, 20).All(c => c == 'B' || c == 'W' || c == 'D') && r.Substring(1, 20).Contains('B')) == 12 && typingSit.Skip(34).All(r => r.Substring(0, 24).Replace('D', 'W') == new string('W', 24)), "edie: typing, the laptop twice as big (lid 20 by 12, keyboard 24 by 2 under his seat)");
         Expect(!EdieSprite.Sitting(EdieSprite.Mood.Grin).SequenceEqual(sitting) && !EdieSprite.Sitting(EdieSprite.Mood.Sleepy).SequenceEqual(sitting), "edie: grin and sleepy differ from rest");
 
         // ---- the playhead detector, on drawn panels (BGRA)
