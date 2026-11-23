@@ -6,7 +6,7 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20261123-media-search-2';
+  var PRFX_HOST_BUILD = '20261123-media-search-3';
   // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
   // host and bridge protocol are shared. Keep platform branches to setup only.
   var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';

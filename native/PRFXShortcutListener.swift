@@ -1967,7 +1967,7 @@ final class ShortcutListener: NSObject {
         if let list, (list.error ?? "").isEmpty {
             paletteMedia = list.items
             mediaError = nil
-            listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project")")
+            listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project"), \(list.audio ?? 0) sound, \(list.timed ?? 0) with a length")
         } else {
             var error = list?.error ?? "Premiere sent a media list Edie couldn’t read."
             if error.hasPrefix("ERROR: ") { error = String(error.dropFirst(7)) }

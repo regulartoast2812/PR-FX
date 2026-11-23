@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20261123-media-search-2';
+prfx.HOST_BUILD = '20261123-media-search-3';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -5415,7 +5415,7 @@ prfx.listProjectMedia = function () {
     try { project = String(app.project.name || ''); } catch (nameError) { project = ''; }
     try { prfx.collectPaletteMedia(app.project.rootItem, [], out, total, 0); }
     catch (error) { return 'ERROR: Premiere could not read the project - ' + error.toString(); }
-    return JSON.stringify({ project: project, total: total.count, items: out });
+    return JSON.stringify({ project: project, total: total.count, audio: total.audio || 0, timed: total.timed || 0, items: out });
 };
 
 prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
@@ -5436,12 +5436,48 @@ prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
         kind = prfx.mediaCategoryOf(ext) || 'other';
         entry = { id: id, name: name, bin: path.join(' / '), kind: kind, ext: ext };
         // Sound is sorted by length in the palette: under 45 s is SFX, longer is ambient or BGM (2026-11-23).
+        if (kind === 'other') kind = entry.kind = prfx.projectItemKindFromMetadata(child) || 'other';
         if (kind === 'audio') {
-            try { seconds = prfx.timeInSeconds(child.getOutPoint()) - prfx.timeInSeconds(child.getInPoint()); } catch (lengthError) { seconds = NaN; }
-            if (seconds > 0) entry.seconds = Math.round(seconds * 100) / 100;
+            seconds = prfx.projectItemSeconds(child);
+            if (seconds > 0) { entry.seconds = Math.round(seconds * 100) / 100; total.timed = (total.timed || 0) + 1; }
+            total.audio = (total.audio || 0) + 1;
         }
         out.push(entry);
     }
+};
+
+// How long a project item's media runs, in seconds, or NaN. Audio-only master
+// clips report no video range, so getInPoint()/getOutPoint() with no media type
+// can come back empty or zero for them: ask for the audio range (2) and "any"
+// (4) first, then the plain call, then the project metadata's Media Duration.
+prfx.projectItemSeconds = function (item) {
+    var types = [2, 4, null], i, a, b, seconds, text, match;
+    for (i = 0; i < types.length; i++) {
+        try {
+            a = types[i] === null ? item.getInPoint() : item.getInPoint(types[i]);
+            b = types[i] === null ? item.getOutPoint() : item.getOutPoint(types[i]);
+            a = prfx.timeInSeconds(a); b = prfx.timeInSeconds(b);
+            if (a > -999999 && b > -999999) { seconds = b - a; if (seconds > 0.01) return seconds; }
+        } catch (rangeError) {}
+    }
+    try { text = String(item.getProjectMetadata ? item.getProjectMetadata() : ''); } catch (metaError) { text = ''; }
+    match = text.match(/Column\.Intrinsic\.MediaDuration>\s*([0-9]+)[:;]([0-9]{2})[:;]([0-9]{2})(?:[:;.]([0-9]+))?/);
+    if (!match) return NaN;
+    // The last field is frames or samples depending on the media; it is under a
+    // second either way, so it is left out: SFX vs BGM only needs whole seconds.
+    return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+};
+
+// For media whose file extension says nothing (no extension, or one PR FX does
+// not list): sound with no picture is audio, a picture with a duration is video.
+prfx.projectItemKindFromMetadata = function (item) {
+    var text = '', video, audio;
+    try { text = String(item.getProjectMetadata ? item.getProjectMetadata() : ''); } catch (error) { return ''; }
+    video = /Column\.Intrinsic\.VideoInfo>\s*[^\x3c\s]/.test(text);
+    audio = /Column\.Intrinsic\.AudioInfo>\s*[^\x3c\s]/.test(text);
+    if (audio && !video) return 'audio';
+    if (video && /Column\.Intrinsic\.MediaDuration>\s*[^\x3c\s]/.test(text)) return 'video';
+    return '';
 };
 
 prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere) {
@@ -6991,7 +7027,9 @@ prfx.EXTENSION_CATEGORY = {
     'png': 'image', 'jpg': 'image', 'jpeg': 'image', 'tif': 'image', 'tiff': 'image',
     'psd': 'image', 'exr': 'image', 'tga': 'image', 'gif': 'image', 'bmp': 'image',
     'webp': 'image', 'dpx': 'image', 'ai': 'image', 'svg': 'image',
-    'wav': 'audio', 'mp3': 'audio', 'aac': 'audio', 'aif': 'audio', 'aiff': 'audio', 'm4a': 'audio'
+    'wav': 'audio', 'mp3': 'audio', 'aac': 'audio', 'aif': 'audio', 'aiff': 'audio', 'm4a': 'audio',
+    'aifc': 'audio', 'flac': 'audio', 'ogg': 'audio', 'oga': 'audio', 'opus': 'audio', 'wma': 'audio',
+    'caf': 'audio', 'bwf': 'audio', 'ac3': 'audio', 'mp2': 'audio', 'm4b': 'audio'
 };
 
 prfx.fileExtensionOf = function (value) {

@@ -46,6 +46,9 @@ struct PaletteMedia: Codable, Equatable {
 struct PaletteMediaList: Codable {
     let project: String?
     let total: Int?
+    /// How many items are sound, and how many of those came with a length (only those fill SFX and BGM).
+    var audio: Int? = nil
+    var timed: Int? = nil
     let items: [PaletteMedia]
     let error: String?
 }
