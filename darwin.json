@@ -1,0 +1,59 @@
+{
+  "os": "darwin",
+  "checkedAt": "2026-11-23T01:59:23.548Z",
+  "app": "0.1.0",
+  "tool": {
+    "version": "0.5.0",
+    "commit": "801d7af"
+  },
+  "parts": {
+    "agent:claude": {
+      "tone": "good",
+      "state": "In use · Sonnet"
+    },
+    "agent:codex": {
+      "tone": "wait",
+      "state": "Ready"
+    },
+    "agent:gemini": {
+      "tone": "off",
+      "state": "Checking…"
+    },
+    "agent:local": {
+      "tone": "wait",
+      "state": "Ready"
+    },
+    "edie": {
+      "tone": "good",
+      "state": "Thinks with Claude"
+    },
+    "tool:prfx": {
+      "tone": "good",
+      "state": "Timeline armed"
+    },
+    "premiere": {
+      "tone": "good",
+      "state": "Installed"
+    },
+    "panel": {
+      "tone": "good",
+      "state": "Installed"
+    },
+    "listener": {
+      "tone": "good",
+      "state": "Timeline armed"
+    },
+    "ai": {
+      "tone": "good",
+      "state": "Ready"
+    },
+    "whisper": {
+      "tone": "good",
+      "state": "Ready"
+    },
+    "ffmpeg": {
+      "tone": "good",
+      "state": "Ready"
+    }
+  }
+}
