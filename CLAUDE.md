@@ -154,15 +154,19 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   `PaletteForm.cs`. Windows had its own cool greys and blue selection until 2026-11-23 because the old note named only the
   first two, so every restyle missed it (the user: "edie's ctrl space doesn't share the same UI with windows version").
 - **The palette is laid out like Sage's search** (Creative Assist `app/ui/search.ts`, 2026-11-23) in all three places: the Mac
-  palette, Windows `PaletteForm` and the panel's own `#palette`. 640×440 (six tabs fit; when they don't at their roomy size they draw tighter, never off the edge): a 52px search row (Edie, a borderless 15pt field,
-  an `esc` key cap), tabs with counts (Commands, Media, Video, Audio, SFX, BGM; Tab goes to the next, Shift+Tab back), each kind's commands under its coloured name
+  palette, Windows `PaletteForm` and the panel's own `#palette`. 640×440 (seven tabs; when they don't fit at their roomy size they draw tighter, then without their icons, never off the edge): a 52px search row (Edie, a borderless 15pt field,
+  an `esc` key cap), tabs with counts (Commands, Media, Video, Audio, SFX, BGM, Sequences; Tab goes to the next, Shift+Tab back), each kind's commands under its coloured name
   with a count (Recent first when nothing is typed), rows with an icon, the matched part picked out and the shortcut, and a
   footer of keys. The search itself is pure and ported three times, line for line: `native/PRFXPaletteSearch.swift` (checked by
   `tools/check-palette-search.swift`), `client/palette-search.js` (the panel's palette and its Commands list) and
   `native/windows/Core/PaletteSearch.cs`.
+- **Sequences** (2026-11-23) are their own tab, not part of Media: `prfx.listProjectMedia()` sends them with
+  `kind: "sequence"`, and Enter opens one (`open-project-sequence` with `mediaId`, `prfx.openProjectSequenceById`, which
+  needs no open sequence and is non-mutating). Placing still refuses sequences (no nesting); their recents read
+  "Recently opened".
 - **Media wears Premiere's default label colours** (Preferences ▸ Labels, 2026-11-23), the same in all three palettes:
   Video tab and video items Violet #a690e0; Audio, SFX and BGM tabs and sound items Caribbean #29d698; stills Lavender
-  #e385e3; the mixed Media tab and anything else (graphics, mattes, adjustment layers) Iris #729acc. Commands keeps the
+  #e385e3; the Sequences tab and sequences Forest #51b858; the mixed Media tab and anything else (graphics, mattes, adjustment layers) Iris #729acc. Commands keeps the
   orange accent. Each item's icon, picked-out match, selection fill and extension tag take its own kind's colour; the
   section heading takes the tab's. Mac `PaletteStyle.label`, Windows `PaletteStyle.Label`, panel `--label-*` tokens.
 - **Media** lists every placeable project item by name with the bins it sits in (`prfx.listProjectMedia()`); Enter places it at

@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20261123-media-search-4';
+prfx.HOST_BUILD = '20261123-sequence-search-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -393,6 +393,10 @@ prfx.functions = {
     'place-project-item': { run: function (publicSequence, qeSequence, command) {
         return prfx.placeProjectItemById(publicSequence, qeSequence, command && command.mediaId);
     } },
+    // The palette's Sequences tab: opens the chosen sequence. Works with no sequence open.
+    'open-project-sequence': { needsSequence: false, run: function (publicSequence, qeSequence, command) {
+        return prfx.openProjectSequenceById(command && command.mediaId);
+    } },
     'queue-cuts-to-ame': { run: function (publicSequence, qeSequence, command) {
         return prfx.queueCutsToEncoder(publicSequence, qeSequence, '', command && command.exportNamePattern,
             command && command.mergeTouchingSameSource);
@@ -452,7 +456,8 @@ prfx.NON_MUTATING_COMMANDS = {
     'undo-last-arrange': true,
     'redo-last-arrange': true,
     'undo-last-palette-action': true,
-    'undo-last-prfx-action': true
+    'undo-last-prfx-action': true,
+    'open-project-sequence': true
 };
 
 prfx.commandLabel = function (command) {
@@ -5408,6 +5413,29 @@ prfx.findProjectItemByNodeId = function (bin, nodeId, depth) {
     return null;
 };
 
+prfx.projectItemIsSequence = function (item) {
+    try { return !!(item && item.isSequence && item.isSequence()); } catch (error) { return false; }
+};
+
+// The palette's Sequences tab: opens the sequence whose project item has this node id.
+prfx.openProjectSequenceById = function (nodeId) {
+    var sequences, count, i, sequence, name = '';
+    if (!nodeId) return 'ERROR: No sequence was chosen.';
+    if (!app.project) return 'ERROR: Open a project first.';
+    try { sequences = app.project.sequences; count = Number(sequences.numSequences || sequences.length || 0); }
+    catch (error) { return 'ERROR: Premiere could not read the project\'s sequences - ' + error.toString(); }
+    for (i = 0; i < count; i++) {
+        try { sequence = sequences[i]; } catch (sequenceError) { sequence = null; }
+        if (!sequence) continue;
+        try { if (String(sequence.projectItem.nodeId) !== String(nodeId)) continue; } catch (idError) { continue; }
+        try { name = String(sequence.name || ''); } catch (nameError) { name = ''; }
+        try { if (app.project.openSequence(sequence.sequenceID) === false) return 'ERROR: Premiere would not open "' + name + '".'; }
+        catch (openError) { return 'ERROR: Premiere could not open "' + name + '" - ' + openError.toString(); }
+        return 'Opened "' + name + '".';
+    }
+    return 'ERROR: That sequence is no longer in the project. Search again.';
+};
+
 // Every placeable item in the project, for the palette's Media search: name,
 // the bins it sits in, and its kind. JSON text; at most 5000 items.
 prfx.listProjectMedia = function () {
@@ -5415,7 +5443,7 @@ prfx.listProjectMedia = function () {
     try { project = String(app.project.name || ''); } catch (nameError) { project = ''; }
     try { prfx.collectPaletteMedia(app.project.rootItem, [], out, total, 0); }
     catch (error) { return 'ERROR: Premiere could not read the project - ' + error.toString(); }
-    return JSON.stringify({ project: project, host: prfx.HOST_BUILD, total: total.count, audio: total.audio || 0, timed: total.timed || 0, kinds: total.kinds || {}, items: out });
+    return JSON.stringify({ project: project, host: prfx.HOST_BUILD, total: total.count, audio: total.audio || 0, timed: total.timed || 0, sequences: total.sequences || 0, kinds: total.kinds || {}, items: out });
 };
 
 prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
@@ -5428,6 +5456,14 @@ prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
         if (!child) continue;
         try { name = String(child.name || ''); } catch (readError) { name = ''; }
         if (prfx.projectItemIsBin(child)) { prfx.collectPaletteMedia(child, path.concat([name]), out, total, depth + 1); continue; }
+        // Sequences fill the palette's Sequences tab, where Enter opens them; they are never placed.
+        if (prfx.projectItemIsSequence(child)) {
+            total.count++;
+            total.sequences = (total.sequences || 0) + 1;
+            try { id = String(child.nodeId || ''); } catch (sequenceIdError) { id = ''; }
+            if (id && out.length < 5000) out.push({ id: id, name: name, bin: path.join(' / '), kind: 'sequence', ext: '' });
+            continue;
+        }
         if (!prfx.projectItemIsPlaceable(child)) continue;
         total.count++;
         if (out.length >= 5000) continue;

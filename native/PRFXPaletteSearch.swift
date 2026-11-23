@@ -11,8 +11,10 @@ import Foundation
 // The media tabs (2026-11-23, the user: "we need to add more categories, like video, sfx for audio under 45s, anything
 // over 45s should be ambient or bgm"): Media is everything; Video, SFX (sound under 45 seconds) and BGM (sound 45 seconds
 // or longer, ambience or music) are parts of it. Sound whose length Premiere didn't give is only under Media.
+// Sequences (2026-11-23, the user: "add sequences to the search tab") are the project's sequences: Enter opens one, so
+// they are not in Media, which holds what Enter places.
 enum PaletteCategory: String, CaseIterable {
-    case commands, media, video, audio, sfx, bgm
+    case commands, media, video, audio, sfx, bgm, sequences
     var label: String {
         switch self {
         case .commands: return "Commands"
@@ -21,6 +23,7 @@ enum PaletteCategory: String, CaseIterable {
         case .audio: return "Audio"
         case .sfx: return "SFX"
         case .bgm: return "BGM"
+        case .sequences: return "Sequences"
         }
     }
     var isMedia: Bool { self != .commands }
@@ -37,7 +40,7 @@ struct PaletteMedia: Codable, Equatable {
     let id: String
     let name: String
     let bin: String
-    let kind: String   // video, audio, image or other (graphics, mattes, adjustment layers)
+    let kind: String   // video, audio, image, sequence or other (graphics, mattes, adjustment layers)
     let ext: String
     /// How long a sound is, in seconds (from its in to its out point); nil for pictures and video.
     var seconds: Double? = nil
@@ -159,6 +162,7 @@ enum PaletteSearch {
     static func category(of m: PaletteMedia) -> PaletteCategory? {
         switch m.kind {
         case "video": return .video
+        case "sequence": return .sequences
         case "audio":
             guard let s = m.seconds else { return nil }
             return s < shortSound ? .sfx : .bgm
@@ -168,7 +172,7 @@ enum PaletteSearch {
 
     /// Audio holds every sound, with or without a length; SFX and BGM only the sounds whose length Premiere gave.
     static func media(_ m: PaletteMedia, isIn category: PaletteCategory) -> Bool {
-        category == .media || (category == .audio && m.kind == "audio") || self.category(of: m) == category
+        (category == .media && m.kind != "sequence") || (category == .audio && m.kind == "audio") || self.category(of: m) == category
     }
 
     /// How many items a media tab holds.
@@ -199,7 +203,7 @@ enum PaletteSearch {
         if !typed {
             let shown = recent.compactMap { id in media.firstIndex { $0.id == id } }.filter { self.media(media[$0], isIn: category) }
             if !shown.isEmpty {
-                rows.append(.section(title: "Recently placed", count: shown.count, colour: "recent"))
+                rows.append(.section(title: category == .sequences ? "Recently opened" : "Recently placed", count: shown.count, colour: "recent"))
                 rows += shown.map { .media(index: $0, at: nil) }
             }
         }
@@ -238,6 +242,7 @@ enum PaletteSearch {
         case .audio: return "Audio"
         case .sfx: return "SFX · under 45 s"
         case .bgm: return "Ambient and BGM · 45 s or longer"
+        case .sequences: return "Sequences"
         default: return typed ? "In the project" : "All media"
         }
     }
@@ -248,6 +253,7 @@ enum PaletteSearch {
         case .audio: return "This project has no sound."
         case .sfx: return "This project has no sound shorter than 45 seconds."
         case .bgm: return "This project has no sound 45 seconds or longer."
+        case .sequences: return "This project has no sequences."
         default: return "This project has no media to place."
         }
     }

@@ -90,7 +90,11 @@ static func main() {
     check(PaletteSearch.mediaRows(sounds, query: "shot", loading: false, error: nil, in: .bgm) == [.note("Nothing in the project is called that.")], "a search stays in its tab")
     check(PaletteSearch.mediaRows([sounds[0]], query: "", loading: false, error: nil, in: .bgm) == [.note("This project has no sound 45 seconds or longer.")], "an empty tab says so")
     check(PaletteSearch.whereText(sounds[1]) == "44 s  ·  SFX" && PaletteSearch.duration(0.46) == "0.4 s" && PaletteSearch.duration(152.3) == "2:32" && PaletteSearch.duration(3725) == "1:02:05", "a sound shows its length")
-    check(PaletteCategory.commands.next() == .media && PaletteCategory.bgm.next() == .commands && PaletteCategory.commands.previous() == .bgm, "Tab goes round the tabs, Shift+Tab back")
+    check(PaletteCategory.commands.next() == .media && PaletteCategory.bgm.next() == .sequences && PaletteCategory.sequences.next() == .commands && PaletteCategory.commands.previous() == .sequences, "Tab goes round the tabs, Shift+Tab back")
+    let withSequence = sounds + [PaletteMedia(id: "q", name: "Main edit", bin: "Sequences", kind: "sequence", ext: "")]
+    check(PaletteSearch.mediaCount(withSequence, in: .media) == 5 && PaletteSearch.mediaCount(withSequence, in: .sequences) == 1 && PaletteSearch.category(of: withSequence[5]) == .sequences, "sequences have their own tab and are not in Media")
+    check(PaletteSearch.mediaRows(withSequence, query: "", loading: false, error: nil, recent: ["q", "s"], in: .sequences) == [.section(title: "Recently opened", count: 1, colour: "recent"), .media(index: 5, at: nil), .section(title: "Sequences", count: 1, colour: "media"), .media(index: 5, at: nil)], "the Sequences tab lists them, recently opened first")
+    check(PaletteSearch.mediaRows(sounds, query: "", loading: false, error: nil, in: .sequences) == [.note("This project has no sequences.")], "an empty Sequences tab says so")
     let decoded = try! JSONDecoder().decode(PaletteMediaList.self, from: Data(#"{"items":[{"id":"1","name":"a","bin":"","kind":"audio","ext":"wav","seconds":3.5},{"id":"2","name":"b","bin":"","kind":"video","ext":"mov"}]}"#.utf8))
     check(decoded.items[0].seconds == 3.5 && decoded.items[1].seconds == nil, "seconds is read when sent and optional")
 

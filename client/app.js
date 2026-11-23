@@ -6,7 +6,7 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20261123-media-search-4';
+  var PRFX_HOST_BUILD = '20261123-sequence-search-1';
   // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
   // host and bridge protocol are shared. Keep platform branches to setup only.
   var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';
@@ -126,6 +126,7 @@
     'image': '<path fill-rule="evenodd" d="M1 2.5h14v11H1zm1.4 1.4v6.8l3.6-3.6 3 3 2-2 2.6 2.6V3.9zM11 5.3a1.1 1.1 0 110 2.2 1.1 1.1 0 010-2.2z"/>',
     'speaker': '<path d="M1.5 5.5h3L8.5 2v12l-4-3.5h-3zM10.4 5.2a3.6 3.6 0 010 5.6l-.9-1.1a2.2 2.2 0 000-3.4zM12.3 3a6.4 6.4 0 010 10l-.9-1.1a5 5 0 000-7.8z"/>',
     'bgm': '<path d="M7 1.5h1.5c.3 1.6 1.6 2.6 3.5 3v1.8c-1.4-.2-2.6-.7-3.5-1.5V12a2.5 2.5 0 11-1.5-2.3z"/>',
+    'sequence': '<path d="M1 2.5h9V5H1zM4 6.75h11v2.5H4zM2 11h8v2.5H2z"/>',
     'other': '<path d="M8 1l7 3.5L8 8 1 4.5zM2.6 7.2L8 9.9l5.4-2.7L15 8l-7 3.5L1 8zm0 3.5L8 13.4l5.4-2.7 1.6.8L8 15l-7-3.5z"/>',
     'dot': '<circle cx="8" cy="8" r="4"/>'
   };
@@ -1502,9 +1503,10 @@
   function paletteCategoryColour(category) {
     if (category === 'video') return 'var(--label-video)';
     if (category === 'audio' || category === 'sfx' || category === 'bgm') return 'var(--label-audio)';
+    if (category === 'sequences') return 'var(--label-sequence)';
     return 'var(--label-other)';
   }
-  function paletteMediaLabel(m) { return m.kind === 'video' ? 'video' : m.kind === 'audio' ? 'audio' : m.kind === 'image' ? 'still' : 'other'; }
+  function paletteMediaLabel(m) { return m.kind === 'video' ? 'video' : m.kind === 'audio' ? 'audio' : m.kind === 'image' ? 'still' : m.kind === 'sequence' ? 'sequence' : 'other'; }
   function paletteIcon(name) { return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' + (PALETTE_ICONS[name] || PALETTE_ICONS.dot) + '</svg>'; }
   function highlightName(name, at, colour) {
     name = String(name || '');
@@ -1563,7 +1565,7 @@
         var m = paletteMedia[row.index];
         var label = paletteMediaLabel(m), mc = 'var(--label-' + label + ')';
         head = head.replace('data-row=', 'style="--kind-rgb:var(--label-' + label + '-rgb)" data-row=');
-        return head + '<span class="icon" style="color:' + mc + '">' + paletteIcon(PS.categoryOf(m) === 'bgm' ? 'bgm' : m.kind === 'video' || m.kind === 'audio' || m.kind === 'image' ? m.kind : 'other') + '</span>' +
+        return head + '<span class="icon" style="color:' + mc + '">' + paletteIcon(PS.categoryOf(m) === 'bgm' ? 'bgm' : m.kind === 'video' || m.kind === 'audio' || m.kind === 'image' || m.kind === 'sequence' ? m.kind : 'other') + '</span>' +
           '<span class="text"><span class="name" title="' + escapeHtml(m.name) + '">' + highlightName(m.name, row.at, mc) + '</span><span class="where">' + escapeHtml(PS.whereText(m)) + '</span></span>' +
           (m.ext ? '<span class="tag ext">' + escapeHtml(String(m.ext).toLowerCase()) + '</span>' : '') + '</button>';
       }
@@ -1613,7 +1615,7 @@
       if (!mediaLoadedAt && !paletteMedia.length) return '';
       return String(typed ? PS.mediaHits(paletteMedia, query, category).length : PS.mediaCount(paletteMedia, category));
     }
-    var TAB_ICONS = { commands: 'custom', media: 'image', video: 'video', audio: 'speaker', sfx: 'audio', bgm: 'bgm' };
+    var TAB_ICONS = { commands: 'custom', media: 'image', video: 'video', audio: 'speaker', sfx: 'audio', bgm: 'bgm', sequences: 'sequence' };
     function tab(category, label, icon, count) {
       var active = paletteCategory === category;
       return '<button type="button" class="palette-tab ' + category + (category !== 'commands' ? ' media' : '') + (active ? ' is-active' : '') + (count === '0' || count === 0 ? ' is-empty' : '') + '" role="tab" aria-selected="' + active + '" data-category="' + category + '">' +
@@ -1622,16 +1624,21 @@
     paletteTabs.innerHTML = PS.categories.map(function (category) {
       return tab(category, PS.labels[category], TAB_ICONS[category], category === 'commands' ? commandCount : mediaCount(category));
     }).join('');
+    // Seven tabs: when they don't fit the palette's width they drop their icons, like the native palettes.
+    paletteTabs.classList.remove('is-iconless');
+    if (paletteTabs.scrollWidth > paletteTabs.clientWidth) paletteTabs.classList.add('is-iconless');
     var activeTab = paletteTabs.querySelector('.palette-tab.is-active');
     if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    paletteFooter.textContent = PS.isMediaCategory(paletteCategory)
+    paletteFooter.textContent = paletteCategory === 'sequences'
+      ? '↑↓ choose · ↵ open · ⇧↵ open, keep open · Tab next · esc close'
+      : PS.isMediaCategory(paletteCategory)
       ? '↑↓ choose · ↵ place at playhead · ⇧↵ place, keep open · Tab next · esc close'
       : '↑↓ choose · ↵ apply · ⇧↵ apply, keep open · Tab media · esc close';
     search.placeholder = palettePlaceholder();
     search.setAttribute('aria-label', search.placeholder.replace('…', ''));
   }
   function palettePlaceholder() {
-    return { commands: 'Search commands…', media: 'Search media by name…', video: 'Search video…', audio: 'Search every sound…', sfx: 'Search sound effects, under 45 s…', bgm: 'Search ambience and music, 45 s or longer…' }[paletteCategory] || 'Search commands…';
+    return { commands: 'Search commands…', media: 'Search media by name…', video: 'Search video…', audio: 'Search every sound…', sfx: 'Search sound effects, under 45 s…', bgm: 'Search ambience and music, 45 s or longer…', sequences: 'Search sequences…' }[paletteCategory] || 'Search commands…';
   }
   // Tab goes to the next tab, Shift+Tab (back) to the one before; a click names the tab.
   function switchPaletteCategory(category, back) {
@@ -1680,6 +1687,7 @@
   function placeMedia(media, keepOpen) {
     if (!media) return;
     rememberPalette(null, media.id);
+    if (media.kind === 'sequence') { apply({ type: 'custom', id: 'open-project-sequence', name: 'Open “' + media.name + '”', mediaId: media.id }, keepOpen); return; }
     apply({ type: 'custom', id: 'place-project-item', name: 'Place “' + media.name + '”', mediaId: media.id }, keepOpen);
   }
   // Enter, Shift+Enter or a click on row `index`.

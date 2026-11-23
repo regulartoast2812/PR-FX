@@ -24,13 +24,14 @@ namespace PrFxShortcutListener
         public static readonly Color Accent = Hex(0xff9a3d);
         public static readonly Color Orange = Hex(0xd4a26a), Blue = Hex(0x86a6d0), Cyan = Hex(0x7db5ae), Purple = Hex(0xa99cd4);
         // Media wears Premiere's default label colours (Preferences ▸ Labels): Violet video, Caribbean audio,
-        // Lavender stills, Iris the rest. Each tab takes its type's colour, each item its own kind's.
-        public static readonly Color LabelVideo = Hex(0xa690e0), LabelAudio = Hex(0x29d698), LabelStill = Hex(0xe385e3), LabelOther = Hex(0x729acc);
+        // Lavender stills, Forest sequences, Iris the rest. Each tab takes its type's colour, each item its own kind's.
+        public static readonly Color LabelVideo = Hex(0xa690e0), LabelAudio = Hex(0x29d698), LabelStill = Hex(0xe385e3), LabelOther = Hex(0x729acc), LabelSequence = Hex(0x51b858);
         public static Color Label(PaletteCategory category) => category switch
         {
             PaletteCategory.Commands => Accent,
             PaletteCategory.Video => LabelVideo,
             PaletteCategory.Audio or PaletteCategory.Sfx or PaletteCategory.Bgm => LabelAudio,
+            PaletteCategory.Sequences => LabelSequence,
             _ => LabelOther,
         };
         public static Color Label(PaletteMedia m) => m.Kind switch
@@ -38,6 +39,7 @@ namespace PrFxShortcutListener
             "video" => LabelVideo,
             "audio" => LabelAudio,
             "image" => LabelStill,
+            "sequence" => LabelSequence,
             _ => LabelOther,
         };
 
@@ -93,6 +95,7 @@ namespace PrFxShortcutListener
                 case "video": return "▶";   // film
                 case "audio": return "∿";   // waveform
                 case "image": return "▣";   // photo
+                case "sequence": return "≡"; // tracks
                 default: return "❏";        // stack
             }
         }
@@ -101,7 +104,7 @@ namespace PrFxShortcutListener
     // The standalone palette, laid out like Sage's Ctrl+Space search in Creative Assist and the same as the macOS
     // palette (PRFXShortcutListener.swift: the search row, PaletteTabsView, PaletteRowView, filterCommands /
     // applyCurrentSelection and the three apply menus): a search row with Edie and an esc key cap, Commands · Media ·
-    // Video · SFX · BGM tabs with counts (Tab goes to the next, Shift+Tab back), grouped rows, and a footer naming the keys. The search and rows
+    // Video · Audio · SFX · BGM · Sequences tabs with counts (Tab goes to the next, Shift+Tab back), grouped rows, and a footer naming the keys. The search and rows
     // are Core/PaletteSearch.cs, the port of PRFXPaletteSearch.swift.
     internal sealed class PaletteForm : Form
     {
@@ -556,6 +559,8 @@ namespace PrFxShortcutListener
             SetPlaceholder(Placeholder(category));
             SetFooter(commands
                 ? "↑↓ choose  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  Tab media  ·  esc close"
+                : category == PaletteCategory.Sequences
+                ? "↑↓ choose  ·  ↵ open  ·  ⇧↵ open, keep open  ·  Tab next  ·  esc close"
                 : "↑↓ choose  ·  ↵ place at playhead  ·  ⇧↵ place, keep open  ·  Tab next  ·  esc close");
         }
 
@@ -568,6 +573,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Audio: return "Search every sound in the project…";
                 case PaletteCategory.Sfx: return "Search sound effects, under 45 seconds…";
                 case PaletteCategory.Bgm: return "Search ambience and music, 45 seconds or longer…";
+                case PaletteCategory.Sequences: return "Search the project’s sequences…";
                 default: return "Search the project’s media by name…";
             }
         }
@@ -690,10 +696,13 @@ namespace PrFxShortcutListener
                 Draw(g, titleName, titleFont, new Rectangle(P(18) + kindSize.Width + P(8), midY - nameHeight / 2, Math.Max(0, w - kindSize.Width - P(44)), nameHeight), PaletteStyle.Text, TextFormatFlags.EndEllipsis);
                 return;
             }
-            // Six tabs: when their natural size doesn't fit the palette's width they draw tighter (less padding,
-            // narrower count capsules) rather than run off the edge. Same as the Mac palette.
+            // Seven tabs: when their natural size doesn't fit the palette's width they draw tighter (less padding,
+            // narrower count capsules), and if that still doesn't fit, without their icons, rather than run off the edge.
+            // Same as the Mac palette.
             var roomy = TabsWidth(counts, false) <= w - P(10);
-            int pad = P(roomy ? 10 : 7), iconGap = P(roomy ? 6 : 5), capGap = P(roomy ? 7 : 5), capMin = P(roomy ? 30 : 22), between = P(roomy ? 4 : 2);
+            var iconless = !roomy && TabsWidth(counts, true) > w - P(10);
+            int icon = iconless ? 0 : P(14);
+            int pad = P(roomy ? 10 : iconless ? 6 : 7), iconGap = P(roomy ? 6 : iconless ? 0 : 5), capGap = P(roomy ? 7 : 5), capMin = P(roomy ? 30 : 22), between = P(roomy ? 4 : 2);
             var x = P(roomy ? 10 : 6);
             for (var i = 0; i < PaletteCategories.All.Length; i++)
             {
@@ -708,14 +717,14 @@ namespace PrFxShortcutListener
                 var countSize = Measure(countString, countFont);
                 // At least three digits wide, so the tabs don't shift as counts change while typing.
                 var capsuleWidth = Math.Max(countSize.Width + P(10), capMin);
-                var width = pad + P(14) + iconGap + labelSize.Width + capGap + capsuleWidth + pad;
+                var width = pad + icon + iconGap + labelSize.Width + capGap + capsuleWidth + pad;
                 var rect = new Rectangle(x, midY - P(13), width, P(26));
                 tabRects[i] = rect;
                 var faded = count == 0 && !active;
                 if (active) FillRounded(g, rect, P(8), PaletteStyle.Over(tint, 0.15));
                 var cx = rect.X + pad;
-                Draw(g, TabSymbol(cat), tabIconFont, new Rectangle(cx, rect.Y, P(14), rect.Height), active ? tint : PaletteStyle.Muted, TextFormatFlags.HorizontalCenter);
-                cx += P(14) + iconGap;
+                if (!iconless) Draw(g, TabSymbol(cat), tabIconFont, new Rectangle(cx, rect.Y, P(14), rect.Height), active ? tint : PaletteStyle.Muted, TextFormatFlags.HorizontalCenter);
+                cx += icon + iconGap;
                 Draw(g, label, labelFont, new Rectangle(cx, midY - labelSize.Height / 2, labelSize.Width + P(2), labelSize.Height), active ? PaletteStyle.Text : PaletteStyle.Muted);
                 cx += labelSize.Width + capGap;
                 var box = new Rectangle(cx, midY - P(8), capsuleWidth, P(16));
@@ -757,6 +766,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Video: return "▶";
                 case PaletteCategory.Audio: return "♪";
                 case PaletteCategory.Sfx: return "∿";
+                case PaletteCategory.Sequences: return "≡";
                 default: return "♫";
             }
         }
@@ -986,11 +996,12 @@ namespace PrFxShortcutListener
         private void PlaceMedia(PaletteMedia item, bool keepOpen)
         {
             Remember(null, item.Id);
+            var sequence = item.Kind == "sequence";
             var place = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["type"] = "custom",
-                ["name"] = "Place “" + item.Name + "”",
-                ["id"] = "place-project-item",
+                ["name"] = (sequence ? "Open “" : "Place “") + item.Name + "”",
+                ["id"] = sequence ? "open-project-sequence" : "place-project-item",
                 ["mediaId"] = item.Id
             };
             SubmitCommand(place, keepOpen);

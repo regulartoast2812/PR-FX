@@ -15,11 +15,11 @@ namespace PrFxShortcutListener
     // The media tabs (2026-11-23, the user: "we need to add more categories, like video, sfx for audio under 45s, anything
     // over 45s should be ambient or bgm"): Media is everything; Video, SFX (sound under 45 seconds) and BGM (sound 45 seconds
     // or longer, ambience or music) are parts of it. Sound whose length Premiere didn't give is only under Media.
-    internal enum PaletteCategory { Commands, Media, Video, Audio, Sfx, Bgm }
+    internal enum PaletteCategory { Commands, Media, Video, Audio, Sfx, Bgm, Sequences }
 
     internal static class PaletteCategories
     {
-        public static readonly PaletteCategory[] All = { PaletteCategory.Commands, PaletteCategory.Media, PaletteCategory.Video, PaletteCategory.Audio, PaletteCategory.Sfx, PaletteCategory.Bgm };
+        public static readonly PaletteCategory[] All = { PaletteCategory.Commands, PaletteCategory.Media, PaletteCategory.Video, PaletteCategory.Audio, PaletteCategory.Sfx, PaletteCategory.Bgm, PaletteCategory.Sequences };
 
         public static string Label(PaletteCategory category)
         {
@@ -30,6 +30,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Video: return "Video";
                 case PaletteCategory.Audio: return "Audio";
                 case PaletteCategory.Sfx: return "SFX";
+                case PaletteCategory.Sequences: return "Sequences";
                 default: return "BGM";
             }
         }
@@ -43,7 +44,7 @@ namespace PrFxShortcutListener
     /// One item from the host's prfx.listProjectMedia().
     internal sealed class PaletteMedia
     {
-        public string Id = "", Name = "", Bin = "", Kind = "", Ext = "";   // Kind: video, audio, image or other
+        public string Id = "", Name = "", Bin = "", Kind = "", Ext = "";   // Kind: video, audio, image, sequence or other
         /// How long a sound is, in seconds (from its in to its out point); null for pictures and video.
         public double? Seconds;
     }
@@ -269,6 +270,7 @@ namespace PrFxShortcutListener
             switch (m.Kind)
             {
                 case "video": return PaletteCategory.Video;
+                case "sequence": return PaletteCategory.Sequences;
                 case "audio":
                     if (!m.Seconds.HasValue) return null;
                     return m.Seconds.Value < ShortSound ? PaletteCategory.Sfx : PaletteCategory.Bgm;
@@ -278,7 +280,7 @@ namespace PrFxShortcutListener
 
         /// Audio holds every sound, with or without a length; SFX and BGM only the sounds whose length Premiere gave.
         public static bool MediaIsIn(PaletteMedia m, PaletteCategory category) =>
-            category == PaletteCategory.Media || (category == PaletteCategory.Audio && m.Kind == "audio") || CategoryOf(m) == category;
+            (category == PaletteCategory.Media && m.Kind != "sequence") || (category == PaletteCategory.Audio && m.Kind == "audio") || CategoryOf(m) == category;
 
         /// How many items a media tab holds.
         public static int MediaCount(IList<PaletteMedia> media, PaletteCategory category) => media.Count(m => MediaIsIn(m, category));
@@ -323,7 +325,7 @@ namespace PrFxShortcutListener
                 }
                 if (shown.Count > 0)
                 {
-                    rows.Add(PaletteRow.Section("Recently placed", shown.Count, "recent"));
+                    rows.Add(PaletteRow.Section(category == PaletteCategory.Sequences ? "Recently opened" : "Recently placed", shown.Count, "recent"));
                     foreach (var i in shown) rows.Add(PaletteRow.Media(i, null));
                 }
             }
@@ -376,6 +378,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Audio: return "Audio";
                 case PaletteCategory.Sfx: return "SFX · under 45 s";
                 case PaletteCategory.Bgm: return "Ambient and BGM · 45 s or longer";
+                case PaletteCategory.Sequences: return "Sequences";
                 default: return typed ? "In the project" : "All media";
             }
         }
@@ -388,6 +391,7 @@ namespace PrFxShortcutListener
                 case PaletteCategory.Audio: return "This project has no sound.";
                 case PaletteCategory.Sfx: return "This project has no sound shorter than 45 seconds.";
                 case PaletteCategory.Bgm: return "This project has no sound 45 seconds or longer.";
+                case PaletteCategory.Sequences: return "This project has no sequences.";
                 default: return "This project has no media to place.";
             }
         }

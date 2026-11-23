@@ -25,9 +25,9 @@
   --wait: #e8c547;
   --danger: #f0705c;
   --hue-orange: #d4a26a; --hue-blue: #86a6d0; --hue-green: #92b88a; --hue-cyan: #7db5ae; --hue-purple: #a99cd4; --hue-pink: #e793bd;
-  /* Premiere's default label colour for each media type (Preferences ▸ Labels): Violet video, Caribbean audio, Lavender stills, Iris the rest. */
-  --label-video-rgb: 166 144 224; --label-audio-rgb: 41 214 152; --label-still-rgb: 227 133 227; --label-other-rgb: 114 154 204;
-  --label-video: rgb(var(--label-video-rgb)); --label-audio: rgb(var(--label-audio-rgb)); --label-still: rgb(var(--label-still-rgb)); --label-other: rgb(var(--label-other-rgb));
+  /* Premiere's default label colour for each media type (Preferences ▸ Labels): Violet video, Caribbean audio, Lavender stills, Forest sequences, Iris the rest. */
+  --label-video-rgb: 166 144 224; --label-audio-rgb: 41 214 152; --label-still-rgb: 227 133 227; --label-other-rgb: 114 154 204; --label-sequence-rgb: 81 184 88;
+  --label-video: rgb(var(--label-video-rgb)); --label-audio: rgb(var(--label-audio-rgb)); --label-still: rgb(var(--label-still-rgb)); --label-other: rgb(var(--label-other-rgb)); --label-sequence: rgb(var(--label-sequence-rgb));
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   color-scheme: dark;
@@ -271,11 +271,12 @@ footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 
 .palette-esc { flex: none; padding: 0 6px; font-size: 10.5px; color: var(--muted); background: transparent; }
 .palette-tabs { flex: none; display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .palette-tabs::-webkit-scrollbar { display: none; }
-/* Six tabs: tighter inside the palette so BGM still shows at 640 px (the manager's tabs keep the roomier size). */
+/* Seven tabs: tighter inside the palette, and without icons when that still overflows, so Sequences shows at 640 px (the manager's tabs keep the roomier size). */
 .palette-tabs { gap: 2px; padding: 0 8px; }
 .palette-tabs .palette-tab { gap: 5px; padding: 0 6px 0 7px; }
 .palette-tabs .palette-tab .count { min-width: 22px; padding: 0 5px; }
 .palette-tab { flex: none; }
+.palette-tabs.is-iconless .palette-tab svg { display: none; }
 .palette-tab { display: inline-flex; align-items: center; gap: 6px; min-height: 0; height: 26px; padding: 0 8px 0 9px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; }
 .palette-tab:hover { background: var(--hover); color: var(--text); }
 .palette-tab:active:not(:disabled) { transform: none; }
@@ -287,6 +288,7 @@ footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 
 .palette-tab.media.is-active .count { background: var(--label-other); }
 .palette-tab.video.is-active .count { background: var(--label-video); }
 .palette-tab.audio.is-active .count, .palette-tab.sfx.is-active .count, .palette-tab.bgm.is-active .count { background: var(--label-audio); }
+.palette-tab.sequences.is-active .count { background: var(--label-sequence); }
 .palette-tabs-hint { flex: none; margin-left: auto; padding-left: 8px; color: var(--faint); font-size: 11px; white-space: nowrap; }
 .palette-menu-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 .palette-menu-title svg { flex: none; width: 13px; height: 13px; }

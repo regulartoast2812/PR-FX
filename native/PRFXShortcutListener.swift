@@ -253,14 +253,15 @@ private enum PaletteStyle {
     static let accentSoft = hex(0xff9a3d, 0.22)
     static let orange = hex(0xd4a26a), blue = hex(0x86a6d0), cyan = hex(0x7db5ae), purple = hex(0xa99cd4)
     // Media wears Premiere's default label colours (Preferences ▸ Labels): Violet video, Caribbean audio,
-    // Lavender stills, Iris the rest. Each tab takes its type's colour, each item its own kind's.
-    static let labelVideo = hex(0xa690e0), labelAudio = hex(0x29d698), labelStill = hex(0xe385e3), labelOther = hex(0x729acc)
+    // Lavender stills, Forest sequences, Iris the rest. Each tab takes its type's colour, each item its own kind's.
+    static let labelVideo = hex(0xa690e0), labelAudio = hex(0x29d698), labelStill = hex(0xe385e3), labelOther = hex(0x729acc), labelSequence = hex(0x51b858)
     static func label(_ category: PaletteCategory) -> NSColor {
         switch category {
         case .commands: return accent
         case .video: return labelVideo
         case .audio, .sfx, .bgm: return labelAudio
         case .media: return labelOther
+        case .sequences: return labelSequence
         }
     }
     static func label(_ m: PaletteMedia) -> NSColor {
@@ -268,6 +269,7 @@ private enum PaletteStyle {
         case "video": return labelVideo
         case "audio": return labelAudio
         case "image": return labelStill
+        case "sequence": return labelSequence
         default: return labelOther
         }
     }
@@ -304,6 +306,7 @@ private enum PaletteStyle {
         case "video": return "film"
         case "audio": return "waveform"
         case "image": return "photo"
+        case "sequence": return "film.stack"
         default: return "square.stack.3d.up"
         }
     }
@@ -1926,6 +1929,8 @@ final class ShortcutListener: NSObject {
         setPlaceholder(Self.palettePlaceholder(paletteCategory))
         paletteFooter?.stringValue = paletteCategory == .commands
             ? "↑↓ choose  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  Tab media  ·  esc close"
+            : paletteCategory == .sequences
+            ? "↑↓ choose  ·  ↵ open  ·  ⇧↵ open, keep open  ·  Tab next  ·  esc close"
             : "↑↓ choose  ·  ↵ place at playhead  ·  ⇧↵ place, keep open  ·  Tab next  ·  esc close"
     }
 
@@ -1937,6 +1942,7 @@ final class ShortcutListener: NSObject {
         case .audio: return "Search every sound in the project…"
         case .sfx: return "Search sound effects, under 45 seconds…"
         case .bgm: return "Search ambience and music, 45 seconds or longer…"
+        case .sequences: return "Search the project’s sequences…"
         }
     }
 
@@ -1998,6 +2004,10 @@ final class ShortcutListener: NSObject {
 
     private func placeMedia(_ media: PaletteMedia, keepPaletteOpen: Bool) {
         remember(media: media.id)
+        if media.kind == "sequence" {
+            submit(Command(type: "custom", name: "Open “\(media.name)”", transitionFrames: nil, id: "open-project-sequence", mediaId: media.id), keepPaletteOpen: keepPaletteOpen)
+            return
+        }
         submit(Command(type: "custom", name: "Place “\(media.name)”", transitionFrames: nil, id: "place-project-item", mediaId: media.id), keepPaletteOpen: keepPaletteOpen)
     }
 
@@ -2896,6 +2906,7 @@ private final class PaletteTabsView: NSView {
         case .audio: return "speaker.wave.2"
         case .sfx: return "waveform"
         case .bgm: return "music.note"
+        case .sequences: return "film.stack"
         }
     }
 
@@ -2916,10 +2927,12 @@ private final class PaletteTabsView: NSView {
             name.draw(with: NSRect(x: 18 + kindSize.width + 8, y: midY - nameHeight / 2, width: w - kindSize.width - 44, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             return
         }
-        // Six tabs: when their natural size doesn't fit the palette's width, they draw tighter (less padding,
-        // narrower count capsules) rather than run off the edge.
+        // Seven tabs: when their natural size doesn't fit the palette's width, they draw tighter (less padding,
+        // narrower count capsules), and if that still doesn't fit, without their icons, rather than run off the edge.
         let roomy = tabsWidth(compact: false) <= w - 10
-        let pad: CGFloat = roomy ? 10 : 7, iconGap: CGFloat = roomy ? 6 : 5, capGap: CGFloat = roomy ? 7 : 5
+        let iconless = !roomy && tabsWidth(compact: true) > w - 10
+        let icon: CGFloat = iconless ? 0 : 14
+        let pad: CGFloat = roomy ? 10 : iconless ? 6 : 7, iconGap: CGFloat = roomy ? 6 : iconless ? 0 : 5, capGap: CGFloat = roomy ? 7 : 5
         let capMin: CGFloat = roomy ? 30 : 22, between: CGFloat = roomy ? 4 : 2
         var x: CGFloat = roomy ? 10 : 6
         for category in PaletteCategory.allCases {
@@ -2932,7 +2945,7 @@ private final class PaletteTabsView: NSView {
             let labelSize = labelText.size(), countSize = countText.size()
             // At least three digits wide, so the tabs don't shift as counts change while typing.
             let capsuleWidth = countString.isEmpty ? 0 : max(countSize.width + 10, capMin)
-            let width = pad + 14 + iconGap + labelSize.width + (capsuleWidth > 0 ? capGap + capsuleWidth : 0) + pad
+            let width = pad + icon + iconGap + labelSize.width + (capsuleWidth > 0 ? capGap + capsuleWidth : 0) + pad
             let rect = NSRect(x: x, y: midY - 13, width: width, height: 26)
             tabRects[category] = rect
             NSGraphicsContext.saveGraphicsState()
@@ -2942,12 +2955,12 @@ private final class PaletteTabsView: NSView {
                 NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
             }
             var cx = rect.minX + pad
-            if let image = NSImage(systemSymbolName: symbol(category), accessibilityDescription: nil)?
+            if !iconless, let image = NSImage(systemSymbolName: symbol(category), accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
                     .applying(NSImage.SymbolConfiguration(paletteColors: [(isActive ? tint : PaletteStyle.muted).withAlphaComponent(faded ? 0.45 : 1)]))) {
                 image.draw(in: NSRect(x: cx + (14 - image.size.width) / 2, y: midY - image.size.height / 2, width: image.size.width, height: image.size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             }
-            cx += 14 + iconGap
+            cx += icon + iconGap
             labelText.draw(at: NSPoint(x: cx, y: midY - labelSize.height / 2))
             cx += labelSize.width + capGap
             if capsuleWidth > 0 {
