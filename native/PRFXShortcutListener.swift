@@ -1598,8 +1598,8 @@ final class ShortcutListener: NSObject {
         restorePaletteFrame()
         panel?.makeKeyAndOrderFront(nil)
         startPaletteFrameTracking()
-        NSApp.activate(ignoringOtherApps: true)
-        searchField?.becomeFirstResponder()
+        // No NSApp.activate: the palette is non-activating (see makePalette).
+        if let search = searchField { panel?.makeFirstResponder(search) }
     }
 
     @objc private func listenerWillResignActive(_ notification: Notification) {
@@ -1640,7 +1640,14 @@ final class ShortcutListener: NSObject {
 
     private func makePalette() {
         let size = paletteSize
-        let panel = PalettePanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView], backing: .buffered, defer: false)
+        let panel = PalettePanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .utilityWindow, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+        // Non-activating: the palette takes the keyboard while Premiere stays the
+        // active app. Activating this listener made Premiere take activation back
+        // while it settled from an app switch, and hidesOnDeactivate then closed
+        // the palette a blink after it opened (it only stayed once Premiere had
+        // been in front for 2-3s). It now closes when it loses key to another
+        // app instead (windowDidResignKey).
+        panel.becomesKeyOnlyIfNeeded = false
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
@@ -1649,7 +1656,7 @@ final class ShortcutListener: NSObject {
         // Above the Timeline highlight (screen-saver level), which stays drawn
         // while the palette is open: its stroke and Edie never cross the palette.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-        panel.hidesOnDeactivate = true
+        panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.acceptsMouseMovedEvents = true
         panel.delegate = self
@@ -2751,6 +2758,21 @@ extension ShortcutListener: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel else { return }
         savePaletteFrame(reason: "delegate close")
+    }
+
+    // Clicking into Premiere (or any app) takes the key from the palette: close
+    // it, as hidesOnDeactivate did when the listener used to activate. One of
+    // our own windows taking the key (an alert) leaves it open.
+    func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === panel else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, let panel = self.panel, panel.isVisible, !panel.isKeyWindow else { return }
+            guard NSApp.keyWindow == nil, NSApp.modalWindow == nil else { return }
+            listenerLog("Palette lost the keyboard to \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "another app"); closing")
+            self.savePaletteFrame(reason: "lost key")
+            self.hidePalette(returnToPremiere: false)
+            self.scheduleHotKeyRefresh(after: 0.20)
+        }
     }
 }
 
