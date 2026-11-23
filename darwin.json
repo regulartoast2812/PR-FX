@@ -1,10 +1,10 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T18:03:27.489Z",
+  "checkedAt": "2026-11-23T19:11:11.203Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
-    "commit": "94a51bf"
+    "commit": "dcb1910"
   },
   "parts": {
     "agent:claude": {
@@ -29,7 +29,7 @@
     },
     "tool:prfx": {
       "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "state": "Chords only — Timeline panel could not be located"
     },
     "premiere": {
       "tone": "good",
@@ -41,7 +41,7 @@
     },
     "listener": {
       "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "state": "Chords only — Timeline panel could not be located"
     },
     "ai": {
       "tone": "good",
