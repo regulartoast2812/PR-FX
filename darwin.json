@@ -1,10 +1,10 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T01:59:23.548Z",
+  "checkedAt": "2026-11-23T08:02:38.153Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
-    "commit": "801d7af"
+    "commit": "247d32d"
   },
   "parts": {
     "agent:claude": {
@@ -28,8 +28,8 @@
       "state": "Thinks with Claude"
     },
     "tool:prfx": {
-      "tone": "good",
-      "state": "Timeline armed"
+      "tone": "wait",
+      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
     },
     "premiere": {
       "tone": "good",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "good",
-      "state": "Timeline armed"
+      "tone": "wait",
+      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
     },
     "ai": {
       "tone": "good",
