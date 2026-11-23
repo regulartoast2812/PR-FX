@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T12:32:39.689Z",
+  "checkedAt": "2026-11-23T13:22:51.843Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "bad",
-      "state": "Not running"
+      "tone": "wait",
+      "state": "Chords only — Timeline panel could not be located"
     },
     "ai": {
       "tone": "good",
