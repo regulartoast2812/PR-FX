@@ -323,6 +323,14 @@ footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 
 .palette-row .tag { flex: none; padding: 1px 6px; border-radius: 9px; font-size: 10.5px; font-weight: 600; }
 .palette-row .tag.key { border-radius: 5px; background: rgb(62 62 56 / .7); color: var(--muted); font: 500 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .palette-row .tag.ext { background: rgb(var(--kind-rgb) / .14); color: rgb(var(--kind-rgb)); }
+/* Hairlines between results (2026-11-24, the user: "a line dividing the items cuz currently it's pretty difficult to see"):
+   a 1px --line over the first pixel of a row that follows another row, so heights don't change; none over the first row
+   under a heading or under the last; hidden by the chosen or hovered row and the one after it so its tint isn't cut.
+   The Mac palette (PRFXShortcutListener.swift) and Windows PaletteForm.cs draw the same. */
+.palette-row, .manager-row { position: relative; }
+.palette-row + .palette-row::before, .manager-row + .manager-row::before { content: ""; position: absolute; top: 0; left: 8px; right: 8px; height: 1px; background: var(--line); pointer-events: none; }
+.palette-row:is(:hover, .is-active)::before, .palette-row:is(:hover, .is-active) + .palette-row::before,
+.manager-row:is(:hover, .is-active)::before, .manager-row:is(:hover, .is-active) + .manager-row::before { opacity: 0; }
 .palette-note { margin: 0; padding: 22px 16px; color: var(--muted); font-size: 12.5px; text-align: center; }
 .palette-footer { flex: none; display: block; margin: 0; padding: 0 14px; height: 30px; line-height: 29px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 

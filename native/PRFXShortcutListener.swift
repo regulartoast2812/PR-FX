@@ -2688,6 +2688,7 @@ extension ShortcutListener: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let view = PaletteSelectionRowView()
         if paletteRows.indices.contains(row), case let .media(index, _) = paletteRows[row], paletteMedia.indices.contains(index) { view.tint = PaletteStyle.label(paletteMedia[index]) } else { view.tint = PaletteStyle.accent }
+        view.dividerAbove = row > 0 && paletteRows.indices.contains(row) && paletteRows[row].selectable && paletteRows[row - 1].selectable
         return view
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -2904,7 +2905,15 @@ private final class PaletteSelectionRowView: NSTableRowView {
         tint.withAlphaComponent(0.16).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 1), xRadius: 7, yRadius: 7).fill()
     }
-    override func drawBackground(in dirtyRect: NSRect) {}
+    /// A hairline above this result when the row above is a result too, so results are easy to tell apart.
+    /// Hidden next to the chosen (or hovered) row, whose fill already marks it.
+    var dividerAbove = false
+    override var isFlipped: Bool { true }
+    override func drawBackground(in dirtyRect: NSRect) {
+        guard dividerAbove, !isSelected, !isPreviousRowSelected else { return }
+        PaletteStyle.line.setFill()
+        NSRect(x: 16, y: 0, width: max(0, bounds.width - 32), height: 1).fill()
+    }
 }
 
 // Commands · Media, each with an icon, its name and its count; the active one sits on a soft pill in its colour

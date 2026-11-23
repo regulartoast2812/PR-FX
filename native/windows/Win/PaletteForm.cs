@@ -160,6 +160,8 @@ namespace PrFxShortcutListener
         private bool selecting;
         private int lastSelectable = -1;
         private DateTime keyMovedAt = DateTime.MinValue;
+        // The row whose hairline below it is hidden (the last chosen one), so a new choice repaints both rows under them.
+        private int hairlineHiddenUnder = -1;
         private Point lastMouse = new Point(-1, -1);
 
         // Sizes are the Mac's points times the screen's scale (the listener is per-monitor DPI aware).
@@ -218,6 +220,7 @@ namespace PrFxShortcutListener
             list.MeasureItem += MeasureRow;
             list.DrawItem += DrawRow;
             list.SelectedIndexChanged += (_, __) => KeepSelectionOnChoosable();
+            list.SelectedIndexChanged += (_, __) => RepaintBelowChoice();
             list.DoubleClick += (_, __) => ApplyCurrentSelection(false);
             list.MouseMove += HoverRow;
             // The search field keeps the keys: a click in the list chooses, then hands the focus straight back.
@@ -585,6 +588,17 @@ namespace PrFxShortcutListener
             footer.Invalidate();
         }
 
+        // The row under the chosen one hides its hairline; ListBox repaints only the old and new choice, so repaint the
+        // rows under them too.
+        private void RepaintBelowChoice()
+        {
+            var now = list.SelectedIndex;
+            if (now == hairlineHiddenUnder) return;
+            foreach (var row in new[] { hairlineHiddenUnder + 1, now + 1 })
+                if (row > 0 && row < list.Items.Count) list.Invalidate(list.GetItemRectangle(row));
+            hairlineHiddenUnder = now;
+        }
+
         private void KeepSelectionOnChoosable()
         {
             if (selecting) return;
@@ -858,6 +872,14 @@ namespace PrFxShortcutListener
             {
                 back = PaletteStyle.Over(row.Kind == PaletteRowKind.Media ? colour2 : PaletteStyle.Accent, 0.16);
                 FillRounded(g, new RectangleF(b.X + P(8), b.Y + P(1), b.Width - P(16), b.Height - P(2)), P(7), back);
+            }
+            // Hairlines between results (2026-11-24, the user: "a line dividing the items cuz currently it's pretty
+            // difficult to see"): 1pt of Line over the first pixels of a result that follows another result, so no row
+            // changes height; none under a group's name or under the last; hidden by the chosen row and the one under it.
+            // The panel (client/styles.css) and the Mac palette draw the same.
+            else if (e.Index > 0 && rows[e.Index - 1].Selectable && list.SelectedIndex != e.Index - 1)
+            {
+                using (var line = new SolidBrush(PaletteStyle.Line)) g.FillRectangle(line, b.X + P(16), b.Y, Math.Max(0, b.Width - P(32)), Math.Max(1, P(1)));
             }
 
             var mid = b.Y + b.Height / 2;
