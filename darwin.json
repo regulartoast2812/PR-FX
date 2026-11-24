@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-23T19:11:11.203Z",
+  "checkedAt": "2026-11-24T06:00:25.477Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -16,8 +16,8 @@
       "state": "Ready"
     },
     "agent:gemini": {
-      "tone": "wait",
-      "state": "Ready · talk only"
+      "tone": "off",
+      "state": "Checking…"
     },
     "agent:local": {
       "tone": "wait",
@@ -29,7 +29,7 @@
     },
     "tool:prfx": {
       "tone": "wait",
-      "state": "Chords only — Timeline panel could not be located"
+      "state": "Chords only — No click recorded yet; click the Timeline once"
     },
     "premiere": {
       "tone": "good",
@@ -41,7 +41,7 @@
     },
     "listener": {
       "tone": "wait",
-      "state": "Chords only — Timeline panel could not be located"
+      "state": "Chords only — No click recorded yet; click the Timeline once"
     },
     "ai": {
       "tone": "good",
