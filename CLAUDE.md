@@ -263,6 +263,15 @@ Setting `timelineHighlight: "on"|"off"`. On macOS the PR FX page's overlay switc
 writes it. Windows' listener draws its own too (`Win/TimelineHighlight.cs`), so Creative Assist's
 Electron overlay is used only where connectors.json says `"overlay": "host"` (no OS today).
 
+**Edie in After Effects (2026-11-25, macOS only).** While AE is in front and `timelineHighlight` is on, the listener
+draws Edie (awake, no stroke, no click to arm) on the top-right corner of AE's Timeline panel. It takes no keys:
+AE FX's own helper holds those. `native/PRFXAETimeline.swift` captures AE's main window at most once a second, off the
+main thread, at one pixel per point (needs Screen Recording). It cuts the window into panels with `PanelPixels.panelRects`
+and takes the panel whose top-left holds the blue current-time readout. The scan starts 3 pt in, because AE outlines the
+panel you're in with a 1 pt blue line. With no composition open there is no readout, so Edie hides. The log says
+"After Effects Timeline at …" or "…not found". Windows doesn't draw this yet.
+  Check: `swiftc -module-cache-path /tmp/prfx-swift-module-cache native/PRFXPanelPixels.swift native/PRFXAETimeline.swift tools/check-ae-timeline.swift -o /tmp/prfx-check-ae-timeline && /tmp/prfx-check-ae-timeline`
+
 ### CEP vs host vs listener changes
 - `host.jsx` / `app.js` → reload the settings panel, **no rebuild**
 - `*.swift` → `./native/run-macos.sh`

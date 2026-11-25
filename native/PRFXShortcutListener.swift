@@ -429,6 +429,8 @@ final class ShortcutListener: NSObject {
     private var dockedTimelineRegion: CGRect?
     private var lastInferredLog = Date.distantPast
     private var lastHighlightWindow: CGRect?
+    // Edie on After Effects' Timeline (PRFXAETimeline.swift).
+    private let aeTimeline = AETimelineWatcher()
     private var lastScanElements = 0
     private var attemptedTimelineRegionLogRestore = false
     private var registeredScopeRank = -1
@@ -1251,6 +1253,11 @@ final class ShortcutListener: NSObject {
         // "visible" with nobody looking at it, and the freeze then left the
         // rectangle over Chrome and VS Code (2026-11-20, "it's lingering outside").
         if paletteInFront, (settings.timelineHighlight ?? "off") == "on" { return }
+        if (settings.timelineHighlight ?? "off") == "on", let front = NSWorkspace.shared.frontmostApplication,
+           AETimeline.isAfterEffects(front) {
+            refreshAfterEffectsEdie(front)
+            return
+        }
         guard (settings.timelineHighlight ?? "off") == "on",
               isPremiere(NSWorkspace.shared.frontmostApplication),
               let windows = premiereWindows() else {
@@ -1276,6 +1283,24 @@ final class ShortcutListener: NSObject {
         highlight.update(TimelineHighlightState(window: window, live: timelineRegionCache.liveRegion,
                                                 saved: timelineRegionCache.lastKnownRegion, click: lastClickPoint,
                                                 armed: armed, reason: scope.reason, covers: windows.covers))
+    }
+
+    // After Effects in front: Edie sits on its Timeline, always awake. AE FX's helper holds its keys whenever AE is in
+    // front, so there is no click to arm and no stroke; he hides while AE has no Timeline showing (no composition
+    // open) and is cleared wherever another window covers AE, as in Premiere.
+    private func refreshAfterEffectsEdie(_ application: NSRunningApplication) {
+        guard let windows = AETimelineWatcher.windows(pid: application.processIdentifier) else {
+            aeTimeline.reset()
+            highlight.hide()
+            return
+        }
+        aeTimeline.tick(pid: application.processIdentifier, window: windows.main) { [weak self] in self?.refreshHighlight() }
+        guard let timeline = aeTimeline.timeline else {
+            highlight.hide()
+            return
+        }
+        highlight.update(TimelineHighlightState(window: windows.main, live: timeline, saved: nil, click: nil, armed: true,
+                                                reason: "After Effects", covers: windows.covers, stroke: false))
     }
 
     private func scopeKindName(_ scope: ShortcutScope) -> String {

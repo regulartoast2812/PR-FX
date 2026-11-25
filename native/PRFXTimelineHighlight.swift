@@ -26,6 +26,9 @@ struct TimelineHighlightState: Equatable {
     var reason: String
     // Other apps' windows in front of Premiere: nothing is drawn over them.
     var covers: [CGRect] = []
+    // The orange stroke round the region. Off in After Effects (PRFXAETimeline.swift), where nothing is armed by
+    // the Timeline: Edie only sits on its corner.
+    var stroke: Bool = true
 }
 
 // Edie's pacing on the Timeline highlight (2026-11-22, the user: "edie clapper animation is
@@ -426,11 +429,13 @@ final class TimelineHighlightView: NSView {
             let target: NSColor = flashFired ? NSColor(srgbRed: 1, green: 0.82, blue: 0.45, alpha: 1) : .systemRed
             color = color.blended(withFraction: pulse, of: target) ?? color
         }
-        let border = NSBezierPath(rect: rect)
-        border.lineWidth = 2 + 2 * pulse
-        if state.live == nil { border.setLineDash([8, 5], count: 2, phase: 0) }
-        color.setStroke()
-        border.stroke()
+        if state.stroke {
+            let border = NSBezierPath(rect: rect)
+            border.lineWidth = 2 + 2 * pulse
+            if state.live == nil { border.setLineDash([8, 5], count: 2, phase: 0) }
+            color.setStroke()
+            border.stroke()
+        }
 
         // Edie sits on the top edge, near the right corner, legs over the line, clapperboard in hand.
         let mood: EdieSprite.Mood
