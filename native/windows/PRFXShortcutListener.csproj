@@ -25,4 +25,13 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The palette's In/Out picker plays media with WPF's MediaPlayer, shown through an ElementHost
+         (Win/RangePicker.cs). All four ship with .NET Framework 4.8. -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="WindowsFormsIntegration" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
 </Project>

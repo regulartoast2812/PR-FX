@@ -6,7 +6,7 @@
   var PANEL_ERROR_STORAGE_KEY = 'prfx.palette.panel-errors.v1';
   var AUTO_FOLDER_SYNC_INTERVAL_MS = 30000;
   var MINIMUM_COMPLETE_CATALOG = 25;
-  var PRFX_HOST_BUILD = '20261123-sequence-search-1';
+  var PRFX_HOST_BUILD = '20261125-range-pick-1';
   // The listener differs per OS (Swift app vs .NET exe); the panel, engine,
   // host and bridge protocol are shared. Keep platform branches to setup only.
   var IS_WINDOWS = typeof process !== 'undefined' && process && process.platform === 'win32';
@@ -136,6 +136,8 @@
   var paletteVisible = [];
   var paletteMedia = [];
   var mediaLoading = false, mediaError = '', mediaLoadedAt = 0, mediaRequestId = 0;
+  // The open sequence's frame rate from the last media list (0 when none is open): the In/Out picker's fallback rate.
+  var paletteFps = 0;
   var pendingTransitionCommand = null;
   var pendingMoveCommand = null;
   var pendingStaggerCommand = null;
@@ -346,6 +348,12 @@
     renderFolderSyncs();
   }
   function commandKey(command) { return [command.type, command.id || '', command.moveMode || '', command.name].join('|'); }
+  // The palette's In/Out picker sends seconds from the file's start; anything else is left out (null).
+  function rangeNumber(value) {
+    var number = Number(value);
+    return value === undefined || value === null || value === '' || !isFinite(number) ? null : number;
+  }
+
   function commandNumber(commandValue, settingValue, fallback, minimum, maximum) {
     var value = commandValue;
     if (value === undefined || value === null || value === '') value = settingValue;
@@ -1141,7 +1149,7 @@
             setStatus(late, true);
             postCommandResult(command, false, late, startedAt);
           }, (LONG_RUNNING_COMMANDS[command && command.id] || (command && (command.type === 'preset' || command.type === 'ai-function'))) ? 600000 : 12000);
-          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
+          var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', inSeconds: rangeNumber(command.inSeconds), outSeconds: rangeNumber(command.outSeconds), transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
           dispatchCommand(command, payload, function (result) {
             if (completed) return;
             completed = true;
@@ -1672,6 +1680,7 @@
       if (text && text !== 'EvalScript error.' && text.indexOf('ERROR:') !== 0) { try { data = JSON.parse(text); } catch (_) { data = null; } }
       if (data && Array.isArray(data.items)) {
         paletteMedia = data.items;
+        paletteFps = Number(data.fps) || 0;
         mediaError = data.error ? String(data.error).replace(/^ERROR:\s*/, '') : '';
         mediaLoadedAt = Date.now();
       } else {
@@ -1684,17 +1693,328 @@
       if (!palette.classList.contains('is-hidden')) renderCommands();
     });
   }
-  function placeMedia(media, keepOpen) {
+  // range: { inSeconds, outSeconds } from the In/Out picker, or nothing for the whole clip (as before the picker).
+  function placeMedia(media, keepOpen, range, note) {
     if (!media) return;
     rememberPalette(null, media.id);
     if (media.kind === 'sequence') { apply({ type: 'custom', id: 'open-project-sequence', name: 'Open “' + media.name + '”', mediaId: media.id }, keepOpen); return; }
-    apply({ type: 'custom', id: 'place-project-item', name: 'Place “' + media.name + '”', mediaId: media.id }, keepOpen);
+    var command = { type: 'custom', id: 'place-project-item', name: 'Place “' + media.name + '”', mediaId: media.id };
+    if (note) command.note = note;
+    if (range) { command.inSeconds = range.inSeconds; command.outSeconds = range.outSeconds; }
+    apply(command, keepOpen);
   }
-  // Enter, Shift+Enter or a click on row `index`.
-  function choosePaletteRow(index, keepOpen) {
+
+  // MARK: The In/Out picker (2026-11-25). Enter on a video or a sound opens it in place of the list; the editor scrubs,
+  // marks In and Out, and Enter places only that part. The model is palette-range.js (a port of
+  // native/PRFXRangePick.swift); this is only the player and the drawing. One <video> plays both kinds (it plays sound
+  // files too); sound shows a waveform decoded once with WebAudio, or a plain bar when the file is too big or won't decode.
+  var RP = window.PRFXRangePick;
+  var pickerRoot = document.getElementById('palette-picker');
+  var pickerVideo = document.getElementById('picker-video');
+  var pickerWave = document.getElementById('picker-wave');
+  var pickerMessage = document.getElementById('picker-message');
+  var pickerScrub = document.getElementById('picker-scrub');
+  var pickerFill = document.getElementById('picker-fill');
+  var pickerInTick = document.getElementById('picker-in');
+  var pickerOutTick = document.getElementById('picker-out');
+  var pickerHead = document.getElementById('picker-playhead');
+  var pickerTitle = document.getElementById('palette-picker-title');
+  var pickerReadout = document.getElementById('picker-readout');
+  var PICKER_WAVE_MAX_BYTES = 60 * 1024 * 1024;
+  var picker = null; // { media, pick: RangePick|null, failed: bool, frame: rAF id, last: ms, clock: backward seconds, loadTimer }
+  var pickerMemory = {}; // media id -> { markIn, markOut, playhead }, this session only
+  var pickerWaves = {}; // media id -> peaks (Float32Array of 0..1), or 'none'
+
+  function isPicking() { return !!picker; }
+  function canPick(media) { return !!(media && (media.kind === 'video' || media.kind === 'audio') && media.path && RP && pickerRoot && pickerVideo); }
+  function fileUrl(filePath) {
+    var p = String(filePath || '').replace(/\\/g, '/');
+    if (/^[A-Za-z]:\//.test(p)) p = '/' + p; // C:/… on Windows
+    return 'file://' + encodeURI(p).replace(/#/g, '%23').replace(/\?/g, '%3F');
+  }
+  function openPicker(media) {
+    if (picker) closePicker();
+    picker = { media: media, pick: null, failed: false, frame: 0, last: 0, clock: 0, loadTimer: 0 };
+    var label = paletteMediaLabel(media);
+    palette.classList.add('is-picking');
+    pickerRoot.hidden = false;
+    palette.style.setProperty('--kind-rgb', 'var(--label-' + label + '-rgb)');
+    pickerRoot.classList.toggle('is-audio', media.kind === 'audio');
+    pickerRoot.classList.remove('is-failed');
+    pickerTitle.innerHTML = '<i class="picker-dot"></i><span class="picker-name" title="' + escapeHtml(media.name) + '">' + escapeHtml(media.name) + '</span>' +
+      '<span class="picker-bin">' + escapeHtml(media.bin ? media.bin : 'Top of the project') + '</span>';
+    paletteFooter.textContent = 'I / O mark · J K L play · ↵ place range · ' + (IS_WINDOWS ? 'Ctrl' : '⌘') + '↵ whole clip · esc back';
+    pickerMessage.textContent = 'Loading…';
+    pickerMessage.hidden = false;
+    pickerWave.hidden = true;
+    renderPickerState();
+    pickerVideo.src = fileUrl(media.path);
+    pickerVideo.load();
+    // Some files never answer at all; after 8 s the picker says so and Enter places the whole clip.
+    picker.loadTimer = window.setTimeout(function () { if (picker && !picker.pick) pickerFailed(); }, 8000);
+    if (media.kind === 'audio') drawWave(media);
+    window.setTimeout(function () { if (picker) pickerRoot.focus(); }, 0);
+  }
+  // Esc, Backspace, a place, or the palette closing. Playback always stops; the marks are kept for this session.
+  function closePicker() {
+    if (!picker) return;
+    rememberPick();
+    if (picker.frame) window.cancelAnimationFrame(picker.frame);
+    window.clearTimeout(picker.loadTimer);
+    picker = null;
+    try { pickerVideo.pause(); } catch (_) {}
+    pickerVideo.removeAttribute('src');
+    try { pickerVideo.load(); } catch (_) {}
+    pickerRoot.hidden = true;
+    palette.classList.remove('is-picking');
+  }
+  function backToList() {
+    closePicker();
+    renderPaletteChrome();
+    scrollActiveRowIntoView();
+    search.focus();
+  }
+  function rememberPick() {
+    if (picker && picker.pick) pickerMemory[picker.media.id] = { markIn: picker.pick.markIn, markOut: picker.pick.markOut, playhead: picker.pick.playhead };
+  }
+  function pickerFailed() {
+    if (!picker || picker.failed) return;
+    picker.failed = true;
+    picker.pick = null;
+    window.clearTimeout(picker.loadTimer);
+    if (picker.frame) { window.cancelAnimationFrame(picker.frame); picker.frame = 0; }
+    try { pickerVideo.pause(); } catch (_) {}
+    pickerWave.hidden = true;
+    pickerMessage.textContent = 'Can’t play this file here. ↵ places the whole clip.';
+    pickerMessage.hidden = false;
+    pickerRoot.classList.add('is-failed');
+    paletteFooter.textContent = '↵ place whole clip · ⇧↵ place, keep open · esc back';
+    renderPickerState();
+  }
+  pickerVideo && pickerVideo.addEventListener('loadedmetadata', function () {
+    if (!picker || picker.failed) return;
+    var duration = pickerVideo.duration;
+    if (!isFinite(duration) || !(duration > 0)) duration = picker.media.kind === 'audio' && typeof picker.media.seconds === 'number' ? picker.media.seconds : NaN;
+    // A video whose picture the player can't decode (ProRes, DNxHR…) can still load its sound: that's not a picker.
+    if (!(duration > 0) || (picker.media.kind === 'video' && !pickerVideo.videoWidth)) { pickerFailed(); return; }
+    window.clearTimeout(picker.loadTimer);
+    // The player doesn't tell the file's own frame rate, so the picker steps at the open sequence's.
+    picker.pick = new RP(duration, RP.pickFps(null, paletteFps));
+    var saved = pickerMemory[picker.media.id];
+    if (saved) picker.pick.restore(saved.markIn, saved.markOut, saved.playhead);
+    pickerRoot.classList.remove('is-failed');
+    if (picker.media.kind === 'video') pickerMessage.hidden = true;
+    else if (pickerWaves[picker.media.id] && pickerWaves[picker.media.id] !== 'none') pickerMessage.hidden = true;
+    syncPickerPlayback();
+    renderPickerState();
+  });
+  pickerVideo && pickerVideo.addEventListener('error', function () { if (picker && pickerVideo.getAttribute('src')) pickerFailed(); });
+  pickerVideo && pickerVideo.addEventListener('ended', function () { if (picker && picker.pick && picker.pick.rate > 0) { picker.pick.goToEnd(); syncPickerPlayback(); renderPickerState(); } });
+
+  // Puts the player where the model says: still on the playhead's frame, playing forward at the shuttle rate, or
+  // stepping backward by hand (the player can't play in reverse).
+  function syncPickerPlayback() {
+    if (!picker || !picker.pick) return;
+    var pick = picker.pick;
+    if (picker.frame) { window.cancelAnimationFrame(picker.frame); picker.frame = 0; }
+    if (pick.rate > 0) {
+      pickerVideo.playbackRate = pick.rate;
+      var playing = pickerVideo.play();
+      if (playing && playing.catch) playing.catch(function () {});
+    } else {
+      try { pickerVideo.pause(); } catch (_) {}
+      if (pick.rate === 0) { seekPlayer(pick.playhead); return; }
+    }
+    picker.last = 0;
+    // Backward runs on its own unsnapped clock: snapping every tick would lose a frame per screen refresh.
+    picker.clock = pick.playhead + pick.frame() / 2;
+    picker.frame = window.requestAnimationFrame(pickerTick);
+  }
+  // Middle of the frame, so the player shows that frame and not the one before it.
+  function seekPlayer(seconds) { try { pickerVideo.currentTime = Math.min(seconds + picker.pick.frame() / 2, picker.pick.duration); } catch (_) {} }
+  function pickerTick(now) {
+    if (!picker || !picker.pick) return;
+    var pick = picker.pick;
+    picker.frame = 0;
+    if (pick.rate > 0) pick.seek(pickerVideo.currentTime);
+    else if (pick.rate < 0) {
+      var dt = picker.last ? (now - picker.last) / 1000 : 0;
+      picker.clock = Math.max(0, picker.clock + dt * pick.rate);
+      pick.seek(picker.clock);
+      if (!pickerVideo.seeking) seekPlayer(pick.playhead);
+    }
+    picker.last = now;
+    if (pick.atBoundary() || pick.rate === 0) { pick.stop(); syncPickerPlayback(); renderPickerState(); return; }
+    renderPickerPlayhead();
+    picker.frame = window.requestAnimationFrame(pickerTick);
+  }
+
+  // Sound: peaks decoded once per file and kept for the session; the canvas is drawn once per open.
+  function drawWave(media) {
+    var cached = pickerWaves[media.id];
+    if (cached) { paintWave(cached); return; }
+    var nodeFs = null;
+    try { nodeFs = typeof require === 'function' ? require('fs') : null; } catch (_) { nodeFs = null; }
+    var AudioContextType = window.AudioContext || window.webkitAudioContext;
+    function give(peaks) { pickerWaves[media.id] = peaks; if (picker && picker.media.id === media.id) paintWave(peaks); }
+    if (!nodeFs || !AudioContextType) { give('none'); return; }
+    nodeFs.stat(media.path, function (statError, stat) {
+      if (statError || !stat || stat.size > PICKER_WAVE_MAX_BYTES) { give('none'); return; }
+      nodeFs.readFile(media.path, function (readError, buffer) {
+        if (readError) { give('none'); return; }
+        var context;
+        try { context = new AudioContextType(); } catch (_) { give('none'); return; }
+        var bytes = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        function done(peaks) { try { context.close(); } catch (_) {} give(peaks); }
+        try {
+          context.decodeAudioData(bytes, function (audio) { done(wavePeaks(audio, 600)); }, function () { done('none'); });
+        } catch (_) { done('none'); }
+      });
+    });
+  }
+  function wavePeaks(audio, buckets) {
+    var peaks = new Float32Array(buckets), channels = audio.numberOfChannels, length = audio.length, top = 0;
+    var per = Math.max(1, Math.floor(length / buckets));
+    for (var c = 0; c < channels; c++) {
+      var data = audio.getChannelData(c);
+      for (var b = 0; b < buckets; b++) {
+        var start = b * per, end = Math.min(length, start + per), peak = peaks[b];
+        // Every 8th sample is plenty for a 600-column picture.
+        for (var s = start; s < end; s += 8) { var v = data[s] < 0 ? -data[s] : data[s]; if (v > peak) peak = v; }
+        peaks[b] = peak;
+      }
+    }
+    for (var i = 0; i < buckets; i++) if (peaks[i] > top) top = peaks[i];
+    if (top > 0) for (var j = 0; j < buckets; j++) peaks[j] /= top;
+    return peaks;
+  }
+  function paintWave(peaks) {
+    if (!picker || picker.failed) return;
+    var rect = pickerWave.parentNode.getBoundingClientRect();
+    var scale = window.devicePixelRatio || 1, width = Math.max(1, Math.round(rect.width)), height = Math.max(1, Math.round(rect.height));
+    pickerWave.width = width * scale; pickerWave.height = height * scale;
+    var g = pickerWave.getContext('2d');
+    g.setTransform(scale, 0, 0, scale, 0, 0);
+    g.clearRect(0, 0, width, height);
+    var colour = getComputedStyle(pickerRoot).getPropertyValue('--label-audio').trim() || '#29d698';
+    g.fillStyle = colour;
+    var middle = height / 2, reach = height * 0.42;
+    if (peaks === 'none') {
+      // No waveform: a plain bar the length of the sound, so the picker still reads as sound.
+      g.globalAlpha = 0.35;
+      g.fillRect(12, middle - 6, width - 24, 12);
+    } else {
+      g.globalAlpha = 0.8;
+      var columns = width - 24, step = peaks.length / columns;
+      for (var x = 0; x < columns; x++) {
+        var h = Math.max(1, peaks[Math.min(peaks.length - 1, Math.floor(x * step))] * reach);
+        g.fillRect(12 + x, middle - h, 1, h * 2);
+      }
+    }
+    pickerWave.hidden = false;
+    if (picker.pick) pickerMessage.hidden = true;
+  }
+
+  // Marks and readout: on every key or click. The playhead alone: every frame while playing.
+  function pickerTime(seconds) { return picker.media.kind === 'audio' ? RP.clock(seconds) : RP.timecode(seconds, picker.pick.fps); }
+  function renderPickerState() {
+    if (!picker) return;
+    var pick = picker.pick;
+    if (!pick) {
+      pickerFill.style.display = pickerInTick.style.display = pickerOutTick.style.display = pickerHead.style.display = 'none';
+      pickerReadout.innerHTML = picker.failed ? '' : '<span class="picker-now">—</span>';
+      return;
+    }
+    var range = pick.placeRange();
+    pickerFill.style.display = range ? '' : 'none';
+    if (range) { pickerFill.style.left = (pick.fraction(range.inSeconds) * 100) + '%'; pickerFill.style.width = ((pick.fraction(range.outSeconds) - pick.fraction(range.inSeconds)) * 100) + '%'; }
+    pickerInTick.style.display = pick.markIn !== null ? '' : 'none';
+    if (pick.markIn !== null) pickerInTick.style.left = (pick.fraction(pick.markIn) * 100) + '%';
+    pickerOutTick.style.display = pick.markOut !== null ? '' : 'none';
+    // The Out tick sits at the end of the Out frame, where the range ends.
+    if (pick.markOut !== null) pickerOutTick.style.left = (pick.fraction(Math.min(pick.markOut + pick.frame(), pick.duration)) * 100) + '%';
+    pickerHead.style.display = '';
+    function mark(label, value) { return '<span class="picker-mark"><span class="picker-label">' + label + '</span>' + value + '</span>'; }
+    pickerReadout.innerHTML = '<span class="picker-now" id="picker-now"></span>' +
+      mark('In', pick.markIn !== null ? pickerTime(pick.markIn) : '—') +
+      mark('Out', pick.markOut !== null ? pickerTime(pick.markOut) : '—') +
+      mark(range ? 'Marked' : 'Whole', RP.length(pick.markedSeconds()));
+    renderPickerPlayhead();
+  }
+  function renderPickerPlayhead() {
+    if (!picker || !picker.pick) return;
+    pickerHead.style.left = (picker.pick.fraction(picker.pick.playhead) * 100) + '%';
+    var now = document.getElementById('picker-now');
+    if (now) now.textContent = pickerTime(picker.pick.playhead);
+  }
+
+  // Enter places the marked part (no marks: the whole clip); whole: Cmd/Ctrl+Enter, or a file the player can't open.
+  function placeFromPicker(keepOpen, whole) {
+    if (!picker) return;
+    var media = picker.media;
+    var range = !whole && picker.pick ? picker.pick.placeRange() : null;
+    if (keepOpen) backToList(); else closePicker();
+    placeMedia(media, keepOpen, range);
+  }
+  function pickerKey(event) {
+    var mod = IS_WINDOWS ? event.ctrlKey : event.metaKey;
+    if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); backToList(); return; }
+    if (event.key === 'Enter') { event.preventDefault(); placeFromPicker(event.shiftKey, mod); return; }
+    if (event.key === 'Tab') { event.preventDefault(); return; }
+    var pick = picker.pick;
+    if (!pick || event.metaKey || event.ctrlKey) return;
+    var code = event.code, done = true;
+    if (code === 'KeyI') { if (event.altKey) pick.clearIn(); else if (event.shiftKey) pick.goToIn(); else pick.markInHere(); }
+    else if (code === 'KeyO') { if (event.altKey) pick.clearOut(); else if (event.shiftKey) pick.goToOut(); else pick.markOutHere(); }
+    else if (code === 'KeyJ') pick.shuttleBackward();
+    else if (code === 'KeyK') pick.stop();
+    else if (code === 'KeyL') pick.shuttleForward();
+    else if (code === 'Space') pick.togglePlay();
+    else if (event.key === 'ArrowLeft') pick.step(event.shiftKey ? -10 : -1);
+    else if (event.key === 'ArrowRight') pick.step(event.shiftKey ? 10 : 1);
+    else if (event.key === 'Home') pick.goToStart();
+    else if (event.key === 'End') pick.goToEnd();
+    else done = false;
+    if (!done) return;
+    event.preventDefault();
+    syncPickerPlayback();
+    renderPickerState();
+  }
+  // Click or drag on the scrub bar seeks (and stops a shuttle); the keys stay with the picker.
+  if (pickerScrub) pickerScrub.addEventListener('mousedown', function (event) {
+    event.preventDefault();
+    pickerRoot.focus();
+    if (!picker || !picker.pick) return;
+    function seekTo(clientX) {
+      if (!picker || !picker.pick) return;
+      var rect = pickerScrub.getBoundingClientRect();
+      picker.pick.stop();
+      picker.pick.seek(picker.pick.secondsAtFraction(rect.width ? (clientX - rect.left) / rect.width : 0));
+      syncPickerPlayback();
+      renderPickerPlayhead();
+    }
+    seekTo(event.clientX);
+    function move(e) { seekTo(e.clientX); }
+    function up() { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); renderPickerState(); }
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && picker && picker.pick && picker.pick.rate !== 0) { picker.pick.stop(); syncPickerPlayback(); renderPickerState(); }
+  });
+
+  // Enter, Shift+Enter or a click on row `index`. A video or a sound opens the In/Out picker; whole (Cmd/Ctrl+Enter)
+  // places it at once, as Enter did before the picker. One with no file path places at once too.
+  function choosePaletteRow(index, keepOpen, whole) {
     var row = paletteRows[index];
     if (!PS.selectable(row)) return;
-    if (row.kind === 'media') { placeMedia(paletteMedia[row.index], keepOpen); return; }
+    if (row.kind === 'media') {
+      var media = paletteMedia[row.index];
+      if (!whole && canPick(media)) { openPicker(media); return; }
+      var whyWhole = !whole && media && (media.kind === 'video' || media.kind === 'audio') && !media.path ? 'Premiere gave no file for it, so the whole clip went in.' : '';
+      placeMedia(media, keepOpen, null, whyWhole);
+      return;
+    }
     var chosen = paletteVisible[row.index];
     if (pendingTransitionCommand) apply(Object.assign({}, pendingTransitionCommand, { transitionPlacement: chosen.id || 'both', transitionFrames: transitionFramesValue() }), keepOpen);
     else if (pendingMoveCommand) apply(Object.assign({}, pendingMoveCommand, { moveMode: chosen.id || 'group' }), keepOpen);
@@ -1705,8 +2025,8 @@
     value = value === undefined || value === null ? '' : String(value);
     return value.replace(/[&<>'"]/g, function (char) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]; });
   }
-  function openPalette() { palette.classList.remove('is-hidden'); hideApplyMenu(); paletteCategory = 'commands'; search.value = ''; activeIndex = -1; renderCommands(true); window.setTimeout(function () { search.focus(); }, 0); }
-  function closePalette() { hideApplyMenu(); palette.classList.add('is-hidden'); }
+  function openPalette() { closePicker(); palette.classList.remove('is-hidden'); hideApplyMenu(); paletteCategory = 'commands'; search.value = ''; activeIndex = -1; renderCommands(true); window.setTimeout(function () { search.focus(); }, 0); }
+  function closePalette() { closePicker(); hideApplyMenu(); palette.classList.add('is-hidden'); }
   function isTransition(command) { return command && (command.type === 'transition' || command.type === 'audio-transition'); }
   function isMoveCommand(command) { return command && command.type === 'custom' && (command.id === 'move-selected-clips-up' || command.id === 'move-selected-clips-down'); }
   function isStaggerCommand(command) { return command && command.type === 'custom' && (command.id === 'stagger-ascending' || command.id === 'stagger-descending'); }
@@ -1761,14 +2081,14 @@
       if (watchdog) window.clearTimeout(watchdog);
       if (result === 'EvalScript error.') { setStatus('Premiere host script did not respond. Reopen the Edie panel to reload it.', true); return; }
       if (result && result.indexOf('ERROR:') === 0) { setStatus(result.replace('ERROR: ', ''), true); refreshFailureLogStatus(); return; }
-      setStatus(result || 'Applied ' + command.name + '.');
+      setStatus((result || 'Applied ' + command.name + '.') + (command.note ? ' ' + command.note : ''));
       if (keepPaletteOpen) {
         if (inApplyMenu()) { hideApplyMenu(); renderCommands(true); }
         window.setTimeout(function () { search.focus(); }, 0);
       } else closePalette();
     }
     setStatus('Applying ' + command.name + '…');
-    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
+    var payload = JSON.stringify({ type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '', inSeconds: rangeNumber(command.inSeconds), outSeconds: rangeNumber(command.outSeconds), transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30, transitionPlacement: command.transitionPlacement || 'both', moveMode: command.moveMode || 'group', staggerFrames: commandNumber(command.staggerFrames, settings.staggerFrames, 5, 0, 9999), staggerGroup: commandNumber(command.staggerGroup, settings.staggerGroup, 1, 1, 999), exportNamePattern: settings.exportNamePattern || '{sequence} - {index}', mergeTouchingSameSource: settings.mergeTouchingSameSource === true, nameTolerance: settings.nameTolerance || 'normalized', failurePolicy: settings.failurePolicy || 'rollback', syntheticSeconds: settings.syntheticSeconds || 5 });
     // Bulk replace and the place functions work clip by clip and legitimately
     // run for minutes. Timing them out at 12s reports failure for work that is
     // still running and will complete.
@@ -1903,17 +2223,18 @@
   list.addEventListener('mousemove', function (event) { var row = event.target.closest('[data-row]'); if (row) setActivePaletteRow(Number(row.dataset.row)); });
   list.addEventListener('click', function (event) {
     var target = event.target.closest('[data-row]'); if (!target) return;
-    choosePaletteRow(Number(target.dataset.row), event.shiftKey);
+    choosePaletteRow(Number(target.dataset.row), event.shiftKey, IS_WINDOWS ? event.ctrlKey : event.metaKey);
   });
   document.addEventListener('click', function (event) { if (event.target.hasAttribute('data-close-palette')) closePalette(); });
   document.addEventListener('keydown', function (event) {
     if (matchesShortcut(event) && document.activeElement !== shortcutInput) { event.preventDefault(); openPalette(); return; }
     if (palette.classList.contains('is-hidden')) return;
+    if (isPicking()) { pickerKey(event); return; }
     if (event.key === 'Escape') { event.preventDefault(); if (inApplyMenu()) { hideApplyMenu(); renderCommands(true); search.focus(); } else closePalette(); return; }
     if (event.key === 'Tab') { event.preventDefault(); switchPaletteCategory(null, event.shiftKey); return; }
     var step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : event.key === 'PageDown' ? 8 : event.key === 'PageUp' ? -8 : 0;
     if (step) { event.preventDefault(); var next = PS.move(paletteRows, activeIndex, step); if (next >= 0) { setActivePaletteRow(next); scrollActiveRowIntoView(); } return; }
-    if (event.key === 'Enter' && document.activeElement === search) { event.preventDefault(); choosePaletteRow(activeIndex, event.shiftKey); }
+    if (event.key === 'Enter' && document.activeElement === search) { event.preventDefault(); choosePaletteRow(activeIndex, event.shiftKey, IS_WINDOWS ? event.ctrlKey : event.metaKey); }
   });
 
   safeRun('initial UI render', updateShortcutUI);

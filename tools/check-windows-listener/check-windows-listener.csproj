@@ -17,10 +17,19 @@
     <Compile Include="../../native/windows/Win/EdieSprite.cs" />
     <Compile Include="../../native/windows/Win/TimelinePanel.cs" />
     <Compile Include="../../native/windows/Win/PaletteForm.cs" />
+    <Compile Include="../../native/windows/Win/RangePicker.cs" />
     <Compile Include="../../native/windows/Win/Toast.cs" />
     <Compile Include="LiveFocus.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- PaletteForm's In/Out picker (RangePicker.cs) plays media through WPF in an ElementHost. -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="WindowsFormsIntegration" />
+    <Reference Include="System.Xaml" />
   </ItemGroup>
 </Project>

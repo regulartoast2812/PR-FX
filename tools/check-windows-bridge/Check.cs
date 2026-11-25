@@ -293,6 +293,134 @@ internal static class Check
             Expect(PaletteSearch.MediaRows(sounds, "", false, null, null, PaletteCategory.Sequences).SequenceEqual(new[] { PaletteRow.Note("This project has no sequences.") }), "palette media: an empty Sequences tab says so");
             var decoded = PaletteMediaList.Parse("{\"items\":[{\"id\":\"1\",\"name\":\"a\",\"bin\":\"\",\"kind\":\"audio\",\"ext\":\"wav\",\"seconds\":3.5},{\"id\":\"2\",\"name\":\"b\",\"bin\":\"\",\"kind\":\"video\",\"ext\":\"mov\"}]}");
             Expect(decoded != null && decoded.Items[0].Seconds == 3.5 && decoded.Items[1].Seconds == null, "palette media: seconds is read when sent and optional");
+            var decodedPick = PaletteMediaList.Parse("{\"fps\":23.976,\"items\":[{\"id\":\"1\",\"name\":\"a\",\"bin\":\"\",\"kind\":\"video\",\"ext\":\"mov\",\"path\":\"C:\\\\Footage\\\\a.mov\"},{\"id\":\"2\",\"name\":\"b\",\"bin\":\"\",\"kind\":\"video\",\"ext\":\"mov\"}]}");
+            Expect(decodedPick != null && decodedPick.Fps == 23.976 && decodedPick.Items[0].Path == "C:\\Footage\\a.mov" && decodedPick.Items[1].Path == null && decoded!.Fps == null, "palette media: path and fps are read when sent and optional");
+            Expect(PaletteMediaList.Parse("{\"items\":[{\"id\":\"1\",\"name\":\"a\",\"bin\":\"\",\"kind\":\"video\",\"ext\":\"mov\",\"path\":5}]}") == null && PaletteMediaList.Parse("{\"fps\":\"x\",\"items\":[]}") == null, "palette media: a path or fps of the wrong type fails the list, as Swift's decoder does");
+        }
+
+        // ---- the palette's In/Out picker (RangePick.cs, the port of PRFXRangePick.swift; the same checks as
+        // tools/check-range-pick.swift, in the same order)
+        {
+            bool Near(double? a, double b) => a.HasValue && Math.Abs(a.Value - b) < 1e-6;
+
+            // Frame rate
+            Expect(RangePick.PickFps(25, 30) == 25, "range pick: the media's own rate wins");
+            Expect(RangePick.PickFps(null, 23.976) == 23.976, "range pick: then the sequence's");
+            Expect(RangePick.PickFps(0, null) == 30, "range pick: else 30");
+            Expect(new RangePick(10, double.NaN).Fps == 30, "range pick: a rate that isn't a number becomes 30");
+
+            // Frames
+            var pick = new RangePick(10, 25);
+            Expect(pick.FrameCount == 250, "range pick: 10 s at 25 fps is 250 frames");
+            Expect(Near(pick.LastFrame, 9.96), "range pick: the last frame starts one frame before the end");
+            Expect(Near(pick.Snapped(1.019), 1.0), "range pick: a time inside a frame snaps to its start");
+            Expect(Near(pick.Snapped(99), 9.96), "range pick: past the end snaps to the last frame");
+            Expect(Near(pick.Snapped(-3), 0), "range pick: before the start snaps to 0");
+            Expect(new RangePick(0.01, 25).FrameCount == 1, "range pick: a sliver of media still has one frame");
+
+            // Stepping
+            pick.Step(1);
+            Expect(Near(pick.Playhead, 0.04), "range pick: → steps one frame");
+            pick.Step(10);
+            Expect(Near(pick.Playhead, 0.44), "range pick: ⇧→ steps ten");
+            pick.Step(-100);
+            Expect(Near(pick.Playhead, 0), "range pick: stepping back stops at the start");
+            pick.GoToEnd();
+            Expect(Near(pick.Playhead, 9.96), "range pick: End goes to the last frame");
+            pick.Step(1);
+            Expect(Near(pick.Playhead, 9.96), "range pick: stepping forward stops at the last frame");
+            var rates = new RangePick(10, 23.976);
+            for (var i = 0; i < 1000; i++) rates.Step(1);
+            Expect(rates.FrameIndex(rates.Playhead) == 239, "range pick: a thousand single steps at 23.976 land on whole frames, no drift");
+
+            // Marking
+            pick = new RangePick(10, 25);
+            Expect(pick.PlaceRange == null, "range pick: no marks places the whole clip, as before");
+            pick.Seek(2);
+            pick.MarkInHere();
+            pick.Seek(4);
+            pick.MarkOutHere();
+            Expect(Near(pick.PlaceRange?.InSeconds, 2) && Near(pick.PlaceRange?.OutSeconds, 4.04), "range pick: Out keeps its frame: the range ends one frame after it");
+            Expect(Near(pick.MarkedSeconds, 2.04), "range pick: the marked length counts the Out frame");
+            pick.Seek(5);
+            pick.MarkInHere();
+            Expect(pick.MarkOut == null && Near(pick.MarkIn, 5), "range pick: In after Out clears Out");
+            pick.Seek(3);
+            pick.MarkOutHere();
+            Expect(pick.MarkIn == null && Near(pick.MarkOut, 3), "range pick: Out before In clears In");
+            Expect(Near(pick.PlaceRange?.InSeconds, 0) && Near(pick.PlaceRange?.OutSeconds, 3.04), "range pick: only Out: from the start");
+            pick.ClearMarks();
+            pick.Seek(7);
+            pick.MarkInHere();
+            Expect(Near(pick.PlaceRange?.InSeconds, 7) && Near(pick.PlaceRange?.OutSeconds, 10), "range pick: only In: to the end of the media");
+            pick.Seek(7);
+            pick.MarkOutHere();
+            Expect(Near(pick.PlaceRange?.OutSeconds, 7.04), "range pick: In and Out on one frame places that one frame");
+            pick.ClearIn();
+            Expect(pick.MarkIn == null && pick.MarkOut != null, "range pick: Alt+I clears In alone");
+            pick.ClearOut();
+            Expect(!pick.HasMarks && pick.PlaceRange == null, "range pick: Alt+O clears Out; with neither, the whole clip");
+
+            // Uneven end: the last frame is short
+            var uneven = new RangePick(10.01, 25);
+            uneven.GoToEnd();
+            uneven.MarkOutHere();
+            Expect(Near(uneven.PlaceRange?.OutSeconds, 10.01), "range pick: Out on a short last frame ends at the media's end, never past it");
+            Expect(uneven.FrameCount == 251, "range pick: a part frame at the end counts as a frame");
+
+            // Going to marks
+            pick = new RangePick(10, 25);
+            pick.Seek(1); pick.MarkInHere(); pick.Seek(6); pick.MarkOutHere(); pick.Seek(8);
+            pick.GoToIn();
+            Expect(Near(pick.Playhead, 1), "range pick: Shift+I goes to In");
+            pick.GoToOut();
+            Expect(Near(pick.Playhead, 6), "range pick: Shift+O goes to Out");
+            var bare = new RangePick(10, 25);
+            bare.Seek(3);
+            bare.GoToIn();
+            Expect(Near(bare.Playhead, 3), "range pick: Shift+I with no In stays put");
+
+            // Shuttle
+            pick = new RangePick(10, 25);
+            pick.ShuttleForward();
+            Expect(pick.Rate == 1, "range pick: L plays");
+            pick.ShuttleForward(); pick.ShuttleForward(); pick.ShuttleForward(); pick.ShuttleForward();
+            Expect(pick.Rate == 8, "range pick: more L doubles up to 8x and stays there");
+            pick.ShuttleBackward();
+            Expect(pick.Rate == -1, "range pick: J from forward plays back at 1x");
+            pick.ShuttleBackward();
+            Expect(pick.Rate == -2, "range pick: J again doubles back");
+            pick.Stop();
+            Expect(pick.Rate == 0, "range pick: K stops");
+            pick.TogglePlay();
+            Expect(pick.Rate == 1, "range pick: Space plays");
+            pick.TogglePlay();
+            Expect(pick.Rate == 0, "range pick: Space again stops");
+            pick.ShuttleForward();
+            pick.Step(1);
+            Expect(pick.Rate == 0, "range pick: a frame step stops playback");
+            pick.GoToEnd(); pick.ShuttleForward();
+            Expect(pick.AtBoundary, "range pick: playing forward at the last frame is at its stop");
+
+            // Remembered marks
+            var remembered = new RangePick(10, 25);
+            remembered.Restore(2.01, 1, null);
+            Expect(Near(remembered.MarkIn, 2) && remembered.MarkOut == null, "range pick: restored marks snap to frames, and an Out before In is dropped");
+            Expect(Near(remembered.Playhead, 2), "range pick: a restored pick starts at its In");
+            remembered.Restore(null, 50, 3);
+            Expect(Near(remembered.MarkOut, 9.96) && Near(remembered.Playhead, 3), "range pick: a remembered Out past a shorter file sits on its last frame");
+
+            // Showing
+            Expect(RangePick.Timecode(3723.5, 25) == "01:02:03:12", "range pick: timecode HH:MM:SS:FF");
+            Expect(RangePick.Timecode(1, 29.97) == "00:00:00:29", "range pick: 29.97 counts 30 frames a second, non-drop");
+            Expect(RangePick.Timecode(0, 30) == "00:00:00:00", "range pick: timecode at the start");
+            Expect(RangePick.Clock(65.257) == "1:05.25", "range pick: sound shows M:SS.ss");
+            Expect(RangePick.Length(4.24) == "4.2s" && RangePick.Length(65) == "1m 05s", "range pick: short lengths for the footer");
+            Expect(Near(pick.Fraction(5), 0.5) && Near(pick.Seconds(0.5), 5), "range pick: scrub bar fractions both ways");
+            // Windows-only: a copy kept per media id is a value, so changing the live pick never changes the remembered one.
+            var kept = pick;
+            pick.Seek(1); pick.MarkInHere();
+            Expect(kept != pick && kept.MarkIn == null, "range pick: a remembered copy is its own value");
         }
 
         Console.WriteLine(failures == 0 ? "\nAll Windows bridge checks passed." : "\n" + failures + " check(s) FAILED.");

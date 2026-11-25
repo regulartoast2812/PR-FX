@@ -105,6 +105,12 @@
     } catch (_) { return fallback; }
   }
 
+  // The palette's In/Out picker sends seconds from the file's start; anything else is left out (null).
+  function rangeNumber(value) {
+    var number = Number(value);
+    return value === undefined || value === null || value === '' || !isFinite(number) ? null : number;
+  }
+
   function boundedNumber(value, fallback, minimum, maximum) {
     var number = Math.round(Number(value));
     if (!isFinite(number)) number = fallback;
@@ -177,6 +183,7 @@
     }, (LONG_RUNNING[command.id] || command.type === 'preset' || command.type === 'ai-function') ? 600000 : 120000);
     var payload = JSON.stringify({
       type: command.type, id: command.id, name: command.name, presetUid: command.presetUid || '', mediaId: command.mediaId || '',
+      inSeconds: rangeNumber(command.inSeconds), outSeconds: rangeNumber(command.outSeconds),
       transitionFrames: Number(command.transitionFrames) || Number(settings.transitionFrames) || 30,
       transitionPlacement: command.transitionPlacement || 'both',
       moveMode: command.moveMode || 'group',

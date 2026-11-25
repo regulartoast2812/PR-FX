@@ -60,8 +60,12 @@ private struct Command: Codable {
     let presetUid: String?
     // The project item the palette's Media search places (host place-project-item), by its nodeId.
     let mediaId: String?
+    // The part of it to place, from the palette's In/Out picker: seconds from the file's start, Out exclusive.
+    // Both nil places the whole clip.
+    let inSeconds: Double?
+    let outSeconds: Double?
 
-    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil, seq: Int? = nil, key: String? = nil, presetUid: String? = nil, mediaId: String? = nil) {
+    init(type: String, name: String, transitionFrames: Int?, id: String?, transitionPlacement: String? = nil, moveMode: String? = nil, staggerFrames: Int? = nil, staggerGroup: Int? = nil, seq: Int? = nil, key: String? = nil, presetUid: String? = nil, mediaId: String? = nil, inSeconds: Double? = nil, outSeconds: Double? = nil) {
         self.type = type
         self.name = name
         self.transitionFrames = transitionFrames
@@ -74,6 +78,8 @@ private struct Command: Codable {
         self.key = key
         self.presetUid = presetUid
         self.mediaId = mediaId
+        self.inSeconds = inSeconds
+        self.outSeconds = outSeconds
     }
 }
 
@@ -239,7 +245,8 @@ private let paletteFallbackScopeRank = -2
 // accent. Three copies, change all of them together: client/styles.css :root,
 // native/PRFXShortcutListener.swift PaletteStyle (this one) and
 // native/windows/Win/PaletteForm.cs PaletteStyle.
-private enum PaletteStyle {
+// Not private: the In/Out picker (PRFXRangePickerView.swift) draws in the same colours.
+enum PaletteStyle {
     static func hex(_ v: Int, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(srgbRed: CGFloat((v >> 16) & 255) / 255, green: CGFloat((v >> 8) & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: alpha)
     }
@@ -366,6 +373,13 @@ final class ShortcutListener: NSObject {
     private var paletteCategory: PaletteCategory = .commands
     private var paletteRows: [PaletteRow] = []
     private var paletteMedia: [PaletteMedia] = []
+    /// The open sequence's frame rate, from the last media list (nil when none was open).
+    private var paletteSequenceFps: Double?
+    // The In/Out picker (PRFXRangePickerView.swift) while it's open, its title, and the marks set on each media
+    // item this session, so going back to one picks up where the editor left it.
+    private var rangePicker: RangePickerView?
+    private var pickerTitle: NSTextField?
+    private var pickerMarks: [String: (markIn: Double?, markOut: Double?, playhead: Double)] = [:]
     private var mediaAskedAt: Date?
     private var mediaLoadedAt: Date?
     private var mediaError: String?
@@ -1592,6 +1606,7 @@ final class ShortcutListener: NSObject {
         loadSettings()
         unregisterHotKeys()
         if pendingTransitionCommand != nil || pendingMoveCommand != nil || pendingStaggerCommand != nil { resetApplyMenu() }
+        closeRangePicker(backToList: false)
         searchField?.stringValue = ""
         paletteCategory = .commands
         filterCommands(resetSelection: true)
@@ -1848,6 +1863,7 @@ final class ShortcutListener: NSObject {
     }
 
     private func hidePalette(returnToPremiere: Bool) {
+        closeRangePicker(backToList: false)
         stopPaletteFrameTracking()
         panel?.orderOut(nil)
         if returnToPremiere {
@@ -1930,7 +1946,7 @@ final class ShortcutListener: NSObject {
     }
 
     private func updatePaletteChrome() {
-        guard !inApplyMenu else { return }
+        guard !inApplyMenu, rangePicker == nil else { return }
         tabsView?.title = nil
         tabsView?.active = paletteCategory
         setPlaceholder(Self.palettePlaceholder(paletteCategory))
@@ -1938,7 +1954,7 @@ final class ShortcutListener: NSObject {
             ? "↑↓ choose  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  Tab media  ·  esc close"
             : paletteCategory == .sequences
             ? "↑↓ choose  ·  ↵ open  ·  ⇧↵ open, keep open  ·  Tab next  ·  esc close"
-            : "↑↓ choose  ·  ↵ place at playhead  ·  ⇧↵ place, keep open  ·  Tab next  ·  esc close"
+            : "↑↓ choose  ·  ↵ set In/Out, then place  ·  ⌘↵ place whole clip  ·  Tab next  ·  esc close"
     }
 
     private static func palettePlaceholder(_ category: PaletteCategory) -> String {
@@ -1997,6 +2013,7 @@ final class ShortcutListener: NSObject {
         if mediaAskedAt == nil { mediaAskedAt = Date.distantPast }
         if let list, (list.error ?? "").isEmpty {
             paletteMedia = list.items
+            paletteSequenceFps = list.fps.flatMap { $0 > 0 ? $0 : nil }
             mediaError = nil
             listenerLog("Palette media: \(list.items.count) item(s) from \(list.project ?? "the project"), \(list.audio ?? 0) sound, \(list.timed ?? 0) with a length, host \(list.host ?? "older than media-search-4"); " + (list.kinds ?? [:]).sorted { $0.value > $1.value }.prefix(24).map { "\($0.key) \($0.value)" }.joined(separator: ", "))
         } else {
@@ -2009,13 +2026,87 @@ final class ShortcutListener: NSObject {
         filterCommands()
     }
 
-    private func placeMedia(_ media: PaletteMedia, keepPaletteOpen: Bool) {
+    /// `wholeClip`: ⌘↵, place it all without opening the In/Out picker.
+    private func placeMedia(_ media: PaletteMedia, keepPaletteOpen: Bool, wholeClip: Bool = false) {
         remember(media: media.id)
         if media.kind == "sequence" {
             submit(Command(type: "custom", name: "Open “\(media.name)”", transitionFrames: nil, id: "open-project-sequence", mediaId: media.id), keepPaletteOpen: keepPaletteOpen)
             return
         }
-        submit(Command(type: "custom", name: "Place “\(media.name)”", transitionFrames: nil, id: "place-project-item", mediaId: media.id), keepPaletteOpen: keepPaletteOpen)
+        // Video and sound open the In/Out picker first: placing a part is what the editor does most (2026-11-25).
+        // A file Premiere gave no path for, or that isn't on this disk, places whole as before.
+        if !wholeClip, media.kind == "video" || media.kind == "audio" {
+            if let path = media.path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+                openRangePicker(media, url: URL(fileURLWithPath: path))
+                return
+            }
+            listenerLog("Palette picker: no file on disk for \(media.name) (\(media.path ?? "no path")); placing the whole clip")
+        }
+        placeMediaRange(media, range: nil, keepPaletteOpen: keepPaletteOpen)
+    }
+
+    private func placeMediaRange(_ media: PaletteMedia, range: (inSeconds: Double, outSeconds: Double)?, keepPaletteOpen: Bool) {
+        let name = range == nil ? "Place “\(media.name)”" : "Place “\(media.name)” In to Out"
+        submit(Command(type: "custom", name: name, transitionFrames: nil, id: "place-project-item", mediaId: media.id, inSeconds: range?.inSeconds, outSeconds: range?.outSeconds), keepPaletteOpen: keepPaletteOpen)
+    }
+
+    // MARK: In/Out picker
+
+    private func openRangePicker(_ media: PaletteMedia, url: URL) {
+        guard let panel, let content = panel.contentView, let search = searchField else { return }
+        closeRangePicker(backToList: false)
+        let w = content.bounds.width, h = content.bounds.height
+        let picker = RangePickerView(frame: NSRect(x: 0, y: 31, width: w, height: h - 52 - 38 - 31), media: media, url: url,
+                                     sequenceFps: paletteSequenceFps, saved: pickerMarks[media.id], tint: PaletteStyle.label(media))
+        picker.onMarks = { [weak self] pick in
+            self?.pickerMarks[media.id] = (pick.markIn, pick.markOut, pick.playhead)
+        }
+        picker.onBack = { [weak self] in self?.closeRangePicker(backToList: true) }
+        picker.onFail = { [weak self] in
+            self?.paletteFooter?.stringValue = "↵ place the whole clip  ·  ⇧↵ place, keep open  ·  esc back"
+        }
+        picker.onPlace = { [weak self] range, keepOpen in
+            guard let self else { return }
+            self.closeRangePicker(backToList: keepOpen)
+            self.placeMediaRange(media, range: range, keepPaletteOpen: keepOpen)
+        }
+        content.addSubview(picker)
+        rangePicker = picker
+
+        // The search row shows the media's name; the tabs line, its kind and the bin it's in.
+        let title = NSTextField(labelWithString: media.name)
+        title.font = .systemFont(ofSize: 15, weight: .medium)
+        title.textColor = PaletteStyle.text
+        title.lineBreakMode = .byTruncatingMiddle
+        title.frame = search.frame
+        content.addSubview(title)
+        pickerTitle = title
+        search.isHidden = true
+        listView?.enclosingScrollView?.isHidden = true
+        tabsView?.titleMuted = true
+        tabsView?.title = (media.bin.isEmpty ? "Project" : media.bin, media.kind == "audio" ? "Sound" : "Video", PaletteStyle.label(media))
+        paletteFooter?.stringValue = "I / O mark  ·  J K L play  ·  ←→ frame  ·  ↵ place In to Out  ·  ⇧↵ place, keep open  ·  ⌘↵ whole clip  ·  esc back"
+        panel.makeFirstResponder(picker)
+        listenerLog("Palette picker opened: \(media.name)")
+    }
+
+    /// `backToList`: show the list again with its search kept (esc, ⇧↵). Otherwise the palette is going away.
+    private func closeRangePicker(backToList: Bool) {
+        guard let picker = rangePicker else { return }
+        picker.close()
+        picker.removeFromSuperview()
+        rangePicker = nil
+        pickerTitle?.removeFromSuperview()
+        pickerTitle = nil
+        searchField?.isHidden = false
+        listView?.enclosingScrollView?.isHidden = false
+        tabsView?.titleMuted = false
+        tabsView?.title = nil
+        updatePaletteChrome()
+        if backToList, let search = searchField {
+            panel?.makeFirstResponder(search)
+            search.currentEditor()?.selectedRange = NSRange(location: search.stringValue.count, length: 0)
+        }
     }
 
     // MARK: Recent
@@ -2057,14 +2148,14 @@ final class ShortcutListener: NSObject {
         applyCurrentSelection(keepPaletteOpen: false)
     }
 
-    private func applyCurrentSelection(keepPaletteOpen: Bool) {
+    private func applyCurrentSelection(keepPaletteOpen: Bool, wholeClip: Bool = false) {
         // AppKit can send the Return command more than once while a search field
         // is handing focus back to the panel. A palette selection is one action.
-        guard !isSubmittingPaletteCommand else { return }
+        guard !isSubmittingPaletteCommand, rangePicker == nil else { return }
         let row = listView?.selectedRow ?? -1
         guard paletteRows.indices.contains(row) else { return }
         if case let .media(index, _) = paletteRows[row], paletteMedia.indices.contains(index) {
-            placeMedia(paletteMedia[index], keepPaletteOpen: keepPaletteOpen)
+            placeMedia(paletteMedia[index], keepPaletteOpen: keepPaletteOpen, wholeClip: wholeClip)
             return
         }
         guard case let .command(index, _) = paletteRows[row], visibleCommands.indices.contains(index) else { return }
@@ -2115,7 +2206,7 @@ final class ShortcutListener: NSObject {
         if command.type == "ai-function" { workingAISeq = seq; highlight.startWorking(command.name) }
         keyStats.fired += 1
         journal.record("fired", seq: seq, key: "palette", command: command.name, detail: "native palette")
-        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "palette", presetUid: command.presetUid, mediaId: command.mediaId)
+        let effectiveCommand = Command(type: command.type, name: command.name, transitionFrames: command.transitionFrames ?? settings.transitionFrames, id: command.id, transitionPlacement: command.transitionPlacement, moveMode: command.moveMode, staggerFrames: command.staggerFrames ?? settings.staggerFrames ?? 5, staggerGroup: command.staggerGroup ?? settings.staggerGroup ?? 1, seq: seq, key: "palette", presetUid: command.presetUid, mediaId: command.mediaId, inSeconds: command.inSeconds, outSeconds: command.outSeconds)
         commandBridge.enqueue(effectiveCommand)
         if keepPaletteOpen {
             listenerLog("Keeping palette open after queued command: \(command.name)")
@@ -2724,8 +2815,8 @@ extension ShortcutListener: NSTextFieldDelegate {
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            let keepPaletteOpen = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
-            applyCurrentSelection(keepPaletteOpen: keepPaletteOpen)
+            let flags = NSApp.currentEvent?.modifierFlags ?? []
+            applyCurrentSelection(keepPaletteOpen: flags.contains(.shift), wholeClip: flags.contains(.command))
             return true
         }
         if commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
@@ -2923,6 +3014,8 @@ private final class PaletteTabsView: NSView {
     /// -1 while it's still being read.
     var counts: [PaletteCategory: Int] = [:] { didSet { needsDisplay = true } }
     var title: (name: String, kind: String, colour: NSColor)? { didSet { needsDisplay = true } }
+    /// The title's name is secondary (the In/Out picker's bin, under the media's name): muted.
+    var titleMuted = false { didSet { needsDisplay = true } }
     var onSelect: ((PaletteCategory) -> Void)?
     private var tabRects: [PaletteCategory: NSRect] = [:]
 
@@ -2953,7 +3046,7 @@ private final class PaletteTabsView: NSView {
             kind.draw(at: NSPoint(x: 18, y: midY - kindSize.height / 2))
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byTruncatingTail
-            let name = NSAttributedString(string: title.name, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .foregroundColor: PaletteStyle.text, .paragraphStyle: paragraph])
+            let name = NSAttributedString(string: title.name, attributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: titleMuted ? .regular : .medium), .foregroundColor: titleMuted ? PaletteStyle.muted : PaletteStyle.text, .paragraphStyle: paragraph])
             let nameHeight = name.size().height
             name.draw(with: NSRect(x: 18 + kindSize.width + 8, y: midY - nameHeight / 2, width: w - kindSize.width - 44, height: nameHeight), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             return

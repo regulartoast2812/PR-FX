@@ -2,7 +2,7 @@
 var prfx = prfx || {};
 // This host intentionally contains only PR FX's native palette operations.
 // Ported timeline functions are not loaded or dispatched from this extension.
-prfx.HOST_BUILD = '20261123-sequence-search-1';
+prfx.HOST_BUILD = '20261125-range-pick-1';
 // $.fileName reports the file being evaluated RIGHT NOW. Read inside a function
 // that runs later -- called from an evalScript wrapper -- it reports that
 // wrapper, not host.jsx, and the extension folder cannot be found. Capture it
@@ -391,7 +391,7 @@ prfx.functions = {
         return prfx.placeSelectedProjectItems(publicSequence, qeSequence);
     } },
     'place-project-item': { run: function (publicSequence, qeSequence, command) {
-        return prfx.placeProjectItemById(publicSequence, qeSequence, command && command.mediaId);
+        return prfx.placeProjectItemById(publicSequence, qeSequence, command && command.mediaId, command);
     } },
     // The palette's Sequences tab: opens the chosen sequence. Works with no sequence open.
     'open-project-sequence': { needsSequence: false, run: function (publicSequence, qeSequence, command) {
@@ -5389,12 +5389,37 @@ prfx.placeSelectedProjectItems = function (publicSequence, qeSequence) {
 
 // The palette's Media search (Tab, 2026-11-23): one item found by its node id,
 // placed at the playhead exactly as Place Bin Clips places a selection.
-prfx.placeProjectItemById = function (publicSequence, qeSequence, nodeId) {
-    var item;
+// With inSeconds/outSeconds (the palette's In/Out picker, 2026-11-25) only that
+// part of the media is placed: seconds from the start of the file, Out the end
+// of the last frame. The bin item's own marks are put back straight after.
+prfx.placeProjectItemById = function (publicSequence, qeSequence, nodeId, range) {
+    var item, sourceState = null;
     if (!nodeId) return 'ERROR: No media was chosen.';
     item = prfx.findProjectItemByNodeId(app.project.rootItem, String(nodeId), 0);
     if (!item) return 'ERROR: That media is no longer in the project. Search again.';
-    return prfx.placeProjectItems(publicSequence, qeSequence, [item], 'from the project');
+    sourceState = prfx.paletteSourceState(range);
+    if (sourceState && sourceState.error) return 'ERROR: ' + sourceState.error;
+    return prfx.placeProjectItems(publicSequence, qeSequence, [item], 'from the project', sourceState ? [sourceState] : null);
+};
+
+// The In/Out a palette sent, as stageOneProjectItem's sourceState (ticks), or
+// null when it sent none (the whole clip, or the bin's own marks, as before).
+prfx.paletteSourceState = function (range) {
+    var hasIn, hasOut, inSeconds, outSeconds;
+    if (!range) return null;
+    hasIn = range.inSeconds !== undefined && range.inSeconds !== null && range.inSeconds !== '';
+    hasOut = range.outSeconds !== undefined && range.outSeconds !== null && range.outSeconds !== '';
+    if (!hasIn && !hasOut) return null;
+    inSeconds = Number(range.inSeconds); outSeconds = Number(range.outSeconds);
+    if (!hasIn || !hasOut || isNaN(inSeconds) || isNaN(outSeconds) || inSeconds < 0 || outSeconds - inSeconds < 0.001) {
+        return { error: 'The In and Out points sent from the palette don\'t make a range (' + range.inSeconds + ' to ' + range.outSeconds + ').' };
+    }
+    return {
+        inTicks: String(Math.round(inSeconds * 254016000000)),
+        outTicks: String(Math.round(outSeconds * 254016000000)),
+        inSeconds: inSeconds,
+        outSeconds: outSeconds
+    };
 };
 
 prfx.findProjectItemByNodeId = function (bin, nodeId, depth) {
@@ -5443,7 +5468,15 @@ prfx.listProjectMedia = function () {
     try { project = String(app.project.name || ''); } catch (nameError) { project = ''; }
     try { prfx.collectPaletteMedia(app.project.rootItem, [], out, total, 0); }
     catch (error) { return 'ERROR: Premiere could not read the project - ' + error.toString(); }
-    return JSON.stringify({ project: project, host: prfx.HOST_BUILD, total: total.count, audio: total.audio || 0, timed: total.timed || 0, sequences: total.sequences || 0, kinds: total.kinds || {}, items: out });
+    return JSON.stringify({ project: project, host: prfx.HOST_BUILD, fps: prfx.activeSequenceFps(), total: total.count, audio: total.audio || 0, timed: total.timed || 0, sequences: total.sequences || 0, kinds: total.kinds || {}, items: out });
+};
+
+// The open sequence's frame rate, so the palette's In/Out picker can step and
+// show timecode in frames the Timeline will use; 0 with no sequence open.
+prfx.activeSequenceFps = function () {
+    var ticks;
+    try { ticks = prfx.numericTicks(app.project.activeSequence.timebase); } catch (error) { return 0; }
+    return ticks > 0 ? Math.round(254016000000 / ticks * 1000) / 1000 : 0;
 };
 
 prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
@@ -5472,6 +5505,9 @@ prfx.collectPaletteMedia = function (bin, path, out, total, depth) {
         ext = prfx.projectItemExtension(child);
         kind = prfx.mediaCategoryOf(ext) || 'other';
         entry = { id: id, name: name, bin: path.join(' / '), kind: kind, ext: ext };
+        // The palette's In/Out picker plays the file itself.
+        try { entry.path = String(child.getMediaPath ? child.getMediaPath() : ''); } catch (mediaPathError) { entry.path = ''; }
+        if (!entry.path) delete entry.path;
         // Sound is sorted by length in the palette: under 45 s is SFX, longer is ambient or BGM (2026-11-23).
         if (kind === 'other') kind = entry.kind = prfx.projectItemKindFromMetadata(child) || 'other';
         // A sound file can come in a video container (mp4, webm, mov). Premiere knows which clips have no
@@ -5535,14 +5571,17 @@ prfx.projectItemKindFromMetadata = function (item) {
     return '';
 };
 
-prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere) {
+// sourceStates (optional) gives item i the source In/Out sourceStates[i] for this
+// placement only (stageOneProjectItem applies, reads back and restores it).
+prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere, sourceStates) {
     var placeable = [], i, skipped = 0;
     var checkpoint, staging, live, playhead, cursor, clip;
     var videoTarget = null, audioTarget = null, failure = null, snapshot, created = [];
     var staged, kind, fromIndex, target, span, placedAudio, j, syntheticSaved;
+    var placeableStates = [], rangeNote = '';
 
     for (i = 0; i < items.length; i++) {
-        if (prfx.projectItemIsPlaceable(items[i])) placeable.push(items[i]);
+        if (prfx.projectItemIsPlaceable(items[i])) { placeable.push(items[i]); placeableStates.push(sourceStates ? sourceStates[i] || null : null); }
         else skipped++;
     }
     if (!placeable.length) return 'ERROR: Nothing in the Project selection can be placed — bins and sequences are the only things PR FX will not place.';
@@ -5567,7 +5606,7 @@ prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere)
             // keepRange: place what the editor marked. Widening is a Replace
             // concern, and here it produced ten-hour clips running past the media.
             syntheticSaved = prfx.applySyntheticDuration(placeable[i]);
-            try { staged = prfx.stageOneProjectItem(staging.tracks, placeable[i], cursor, true); }
+            try { staged = prfx.stageOneProjectItem(staging.tracks, placeable[i], cursor, true, placeableStates[i]); }
             finally { prfx.restoreSyntheticDuration(placeable[i], syntheticSaved); }
             kind = staged.audioOnly ? 'audio' : 'video';
             fromIndex = staged.fromTrackIndex;
@@ -5625,12 +5664,15 @@ prfx.placeProjectItems = function (publicSequence, qeSequence, items, fromWhere)
     if (videoTarget > staging.tracks.videoIndex) videoTarget--;
     if (audioTarget > staging.tracks.audioIndex) audioTarget--;
     prfx.selectClipRanges(app.project.activeSequence, created);
+    if (placeable.length === 1 && placeableStates[0]) {
+        rangeNote = ' Used the In/Out ' + placeableStates[0].inSeconds.toFixed(2) + '-' + placeableStates[0].outSeconds.toFixed(2) + 's.';
+    }
 
     return 'Placed ' + created.length + ' clip' + (created.length === 1 ? '' : 's') + ' (video plus any linked audio) ' + fromWhere + ', back to back from the playhead' +
         (videoTarget !== null && videoTarget !== undefined ? ' on V' + (videoTarget + 1) : '') +
         (audioTarget !== null && audioTarget !== undefined ? (videoTarget !== null && videoTarget !== undefined ? ' and' : ' on') + ' A' + (audioTarget + 1) : '') + '.' +
         prfx.appendedTrackNote(staging) +
-        (skipped ? ' Skipped ' + skipped + ' bin/sequence' + (skipped === 1 ? '' : 's') + '.' : '');
+        (skipped ? ' Skipped ' + skipped + ' bin/sequence' + (skipped === 1 ? '' : 's') + '.' : '') + rangeNote;
 };
 
 // overwriteClip writes the project item's CURRENT bin in/out range, not the

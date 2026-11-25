@@ -127,6 +127,11 @@ namespace PrFxShortcutListener
         private readonly ListBox list = new ListBox();
         private readonly Canvas footer = new Canvas();
         private readonly Bitmap edie = CreateEdieBitmap();
+        // The In/Out picker (Win/RangePicker.cs): Enter on a video or sound opens it in place of the search row, tabs and
+        // list; the footer stays. Esc or Backspace comes back to the list as it was.
+        private readonly RangePicker picker = new RangePicker();
+        // The open sequence's frame rate from the last media list (0 with none open), the picker's rate.
+        private double? mediaFps;
 
         // The rows shown, and what their indexes point into: the commands (the catalog, or an apply menu's options)
         // and the project's media.
@@ -232,6 +237,14 @@ namespace PrFxShortcutListener
             footer.Dock = DockStyle.Bottom;
             footer.Paint += PaintFooter;
 
+            picker.Dock = DockStyle.Fill;
+            picker.Place = (item, range, keepOpen) => { ClosePicker(); PlaceMedia(item, keepOpen, range); };
+            picker.Back = ClosePicker;
+            picker.DragRequested = e => DragWindow(picker, e);
+            picker.FooterChanged = () => { if (picker.Active) SetFooter(picker.FooterText); };
+            picker.Log = message => Log?.Invoke(message);
+            // Both fill the same space; only one is ever shown.
+            Controls.Add(picker);
             Controls.Add(listHost);
             Controls.Add(footer);
             Controls.Add(tabs);
@@ -319,7 +332,7 @@ namespace PrFxShortcutListener
                     Log?.Invoke("Palette took the front back from " + WindowName(front) + " (just opened)");
                     Native.ForceForeground(Handle);
                     Activate();
-                    search.Focus();
+                    if (picker.Active) picker.Focus(); else search.Focus();
                     deactivateCheck.Start();   // and looks once more
                     return;
                 case PaletteFocusAction.Close:
@@ -337,6 +350,7 @@ namespace PrFxShortcutListener
             // Sized for the screen Premiere is on, as the banner is.
             var dpi = premiereWindow != IntPtr.Zero ? Native.GetDpiForWindow(premiereWindow) : 0;
             ApplyScale(dpi > 0 ? dpi / 96f : DeviceDpi / 96f);
+            if (picker.Active) ClosePicker();
             if (pendingTransition != null || pendingMove != null || pendingStagger != null) ResetApplyMenu();
             // It opens on Commands, as the Mac's does.
             category = PaletteCategory.Commands;
@@ -364,6 +378,8 @@ namespace PrFxShortcutListener
         {
             deactivateCheck.Stop();
             SaveFrame();
+            // Playback stops when the palette hides; the marks are kept for this item.
+            if (picker.Active) ClosePicker();
             Hide();
             if (returnToPremiere && returnWindow != IntPtr.Zero && Native.IsWindow(returnWindow)) Native.ForceForeground(returnWindow);
         }
@@ -404,6 +420,7 @@ namespace PrFxShortcutListener
             foreach (var font in old) font?.Dispose();
 
             search.Font = searchFont;
+            picker.SetScale(scale);
             searchRow.Height = P(52);
             tabs.Height = P(38);
             footer.Height = P(30);
@@ -557,6 +574,7 @@ namespace PrFxShortcutListener
         private void UpdateChrome()
         {
             if (InApplyMenu) return;
+            if (picker.Active) { SetFooter(picker.FooterText); return; }
             titleName = null;
             var commands = category == PaletteCategory.Commands;
             SetPlaceholder(Placeholder(category));
@@ -564,7 +582,7 @@ namespace PrFxShortcutListener
                 ? "↑↓ choose  ·  ↵ apply  ·  ⇧↵ apply, keep open  ·  Tab media  ·  esc close"
                 : category == PaletteCategory.Sequences
                 ? "↑↓ choose  ·  ↵ open  ·  ⇧↵ open, keep open  ·  Tab next  ·  esc close"
-                : "↑↓ choose  ·  ↵ place at playhead  ·  ⇧↵ place, keep open  ·  Tab next  ·  esc close");
+                : "↑↓ choose  ·  ↵ set In/Out, then place  ·  Ctrl+↵ place whole clip  ·  Tab next  ·  esc close");
         }
 
         private static string Placeholder(PaletteCategory tab)
@@ -937,6 +955,8 @@ namespace PrFxShortcutListener
         // field: Tab would otherwise move it, and Enter would beep.
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            // The picker takes every key while it's up (I/O, J K L, arrows, Enter, Esc, Backspace…).
+            if (picker.Active) return picker.HandleKey(keyData) || base.ProcessCmdKey(ref msg, keyData);
             var key = keyData & Keys.KeyCode;
             var modifiers = keyData & Keys.Modifiers;
             var plain = modifiers == Keys.None;
@@ -951,6 +971,10 @@ namespace PrFxShortcutListener
                 case Keys.PageUp when plain: MoveSelection(-8); return true;
                 case Keys.Enter when modifiers == Keys.None || modifiers == Keys.Shift:
                     ApplyCurrentSelection(modifiers == Keys.Shift);
+                    return true;
+                // Ctrl+Enter: a video or sound goes in whole, straight away, as Enter did before the picker.
+                case Keys.Enter when modifiers == Keys.Control || modifiers == (Keys.Control | Keys.Shift):
+                    ApplyCurrentSelection((modifiers & Keys.Shift) != 0, whole: true);
                     return true;
                 case Keys.Escape when plain:
                     if (InApplyMenu) ResetApplyMenu();
@@ -1002,6 +1026,7 @@ namespace PrFxShortcutListener
             {
                 media = list.Items;
                 mediaError = null;
+                mediaFps = list.Fps;
                 Log?.Invoke("Palette media: " + list.Items.Count + " item(s) from " + (list.Project ?? "the project"));
             }
             else
@@ -1015,18 +1040,62 @@ namespace PrFxShortcutListener
             FilterCommands(false);
         }
 
-        private void PlaceMedia(PaletteMedia item, bool keepOpen)
+        // `range`: the picker's In and Out (seconds from the file's start, Out exclusive), sent as inSeconds/outSeconds
+        // for the host's place-project-item; null places the whole clip as before. Named as the Mac names it.
+        private void PlaceMedia(PaletteMedia item, bool keepOpen, (double InSeconds, double OutSeconds)? range = null)
         {
             Remember(null, item.Id);
             var sequence = item.Kind == "sequence";
             var place = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["type"] = "custom",
-                ["name"] = (sequence ? "Open “" : "Place “") + item.Name + "”",
+                ["name"] = (sequence ? "Open “" : "Place “") + item.Name + "”" + (!sequence && range != null ? " In to Out" : ""),
                 ["id"] = sequence ? "open-project-sequence" : "place-project-item",
                 ["mediaId"] = item.Id
             };
+            if (!sequence && range is (double, double) marked)
+            {
+                place["inSeconds"] = marked.InSeconds;
+                place["outSeconds"] = marked.OutSeconds;
+            }
+            Log?.Invoke("Palette media: " + (sequence ? "open " : "place ") + item.Name + (range is (double, double) r ? " " + r.InSeconds.ToString("0.######", CultureInfo.InvariantCulture) + "–" + r.OutSeconds.ToString("0.######", CultureInfo.InvariantCulture) + " s" : sequence ? "" : " whole"));
             SubmitCommand(place, keepOpen);
+        }
+
+        private static bool Pickable(PaletteMedia item) => item.Kind == "video" || item.Kind == "audio";
+
+        // Enter on a video or sound: the picker, unless Premiere gave no file or it isn't on this disk (then it goes in
+        // whole, as before; the log says why). As the Mac's placeMedia.
+        private void OpenPicker(PaletteMedia item, bool keepOpen)
+        {
+            if (string.IsNullOrEmpty(item.Path) || !File.Exists(item.Path))
+            {
+                Log?.Invoke("Palette picker: no file on disk for " + item.Name + " (" + (item.Path ?? "no path") + "); placing the whole clip");
+                PlaceMedia(item, keepOpen);
+                return;
+            }
+            SuspendLayout();
+            searchRow.Visible = false;
+            tabs.Visible = false;
+            listHost.Visible = false;
+            picker.Open(item, mediaFps);
+            ResumeLayout(true);
+            SetFooter(picker.FooterText);
+            picker.Focus();
+        }
+
+        // Back to the list exactly as it was: same tab, search text and choice.
+        private void ClosePicker()
+        {
+            if (!picker.Active && !picker.Visible) return;
+            SuspendLayout();
+            picker.Close();
+            searchRow.Visible = true;
+            tabs.Visible = true;
+            listHost.Visible = true;
+            ResumeLayout(true);
+            UpdateChrome();
+            if (Visible) search.Focus();
         }
 
         // ---- recent -------------------------------------------------------
@@ -1065,7 +1134,7 @@ namespace PrFxShortcutListener
 
         // ---- apply --------------------------------------------------------
 
-        private void ApplyCurrentSelection(bool keepOpen)
+        private void ApplyCurrentSelection(bool keepOpen, bool whole = false)
         {
             if (submitting) return;
             var row = list.SelectedIndex;
@@ -1073,7 +1142,10 @@ namespace PrFxShortcutListener
             var chosen = rows[row];
             if (chosen.Kind == PaletteRowKind.Media && chosen.Index < media.Count)
             {
-                PlaceMedia(media[chosen.Index], keepOpen);
+                var item = media[chosen.Index];
+                // Enter (or Shift+Enter) on a video or sound picks In and Out first; Ctrl+Enter places it whole.
+                if (!whole && Pickable(item)) OpenPicker(item, keepOpen);
+                else PlaceMedia(item, keepOpen);
                 return;
             }
             if (chosen.Kind != PaletteRowKind.Command || chosen.Index >= visible.Count) return;

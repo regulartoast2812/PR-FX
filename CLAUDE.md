@@ -183,6 +183,28 @@ same technique as Edit Assist's inspection panel. It refreshes 5×/s from
   "Palette media:" line says how many items are sound, how many have a length, the host build and the kind:extension counts. Sound rows show the length
   ("0.4 s", "44 s", "2:32") before the bins. Recents (5 commands, 5 media) live in
   `palette-recent.json` beside the settings (native) and `prfx.palette.recent.v1` in localStorage (panel).
+- **In/Out picker** (2026-11-25, the user: "build the infrastructure for in-out point selection before placing bcuz that's
+  95% of the time"; they chose to pick in the palette, not Premiere's Source monitor). In Media/Video/Audio/SFX/BGM, Enter on a
+  video or sound opens a player in place of the list: the frame (sound: a waveform), a scrub bar with the marked part filled in
+  the kind's colour, and a readout (playhead, In, Out, length; timecode for video, M:SS.ss for sound). Premiere's keys: I/O mark,
+  ⌥I/⌥O clear, ⇧I/⇧O go to a mark, J K L shuttle (1 2 4 8×), Space, ←/→ a frame (⇧ ten), Home/End. ↵ places the marked part,
+  ⇧↵ places and keeps the palette open, ⌘↵ (also in the list) places the whole clip, esc/⌫ back to the list with its search.
+  No marks places the whole clip. Stills and other items still place straight away. Marks are kept per media id for the
+  session (`pickerMarks`). The bin's own marks are never read or changed.
+  - **Model:** `native/PRFXRangePick.swift` (pure, checked by `tools/check-range-pick.swift`), ported line for line to
+    `native/windows/Core/RangePick.cs` and `client/palette-range.js`. Out is the last KEPT frame (as in Premiere), so the range
+    sent ends one frame after it, but never past the media's end (Premiere clamps there and the host would refuse the read-back).
+    fps: the file's own (AVAsset), else the open sequence's (`fps` in the media list), else 30.
+  - **Wire:** `place-project-item` takes `inSeconds`/`outSeconds` (seconds from the file's start, both or neither;
+    `prfx.paletteSourceState` turns them into ticks). `prfx.placeProjectItems(..., sourceStates)` hands each item's range to
+    `stageOneProjectItem`, which applies, reads back (0.02 s) and restores the bin range, the same path Replace-from-original
+    uses. app.js and engine.js forward them with `rangeNumber()`. The media list carries `path` per item (getMediaPath) and `fps`.
+  - **Players:** Mac `native/PRFXRangePickerView.swift` (AVPlayer: ProRes, H.264, HEVC, most sound; reverse is native when
+    `canPlayReverse`, else stepped seeks). Windows WPF MediaElement and the panel's HTML5 media play H.264/HEVC/AAC/MP3/WAV only.
+    A file with no path places whole straight away; one the player can't open shows "Can't play this file here" and ↵ places
+    it whole (never placed on its own).
+  - **Untested live:** placing a range in a real project (never run against the user's project); files whose media starts at a
+    non-zero timecode (the host takes 0 as the file's first frame, as `setInPoint` does).
 - The panel extends 44pt above the window so Edie still fits when the Timeline is docked at the top.
 - **The palette keeps it** (2026-11-20, the user asked). Opening the palette makes the listener the active app, which used to hide
   the rectangle (Premiere not frontmost). `refreshHighlight()` now leaves it exactly as it was while the palette is visible, and the

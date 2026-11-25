@@ -44,6 +44,8 @@ struct PaletteMedia: Codable, Equatable {
     let ext: String
     /// How long a sound is, in seconds (from its in to its out point); nil for pictures and video.
     var seconds: Double? = nil
+    /// The file on disk, for the palette's In/Out picker to play; nil when Premiere gave none (host before range-pick-1).
+    var path: String? = nil
 }
 
 /// What the engine POSTs to /media.
@@ -56,6 +58,8 @@ struct PaletteMediaList: Codable {
     /// What the host saw, for the log: "kind:extension" → count, and its build.
     var kinds: [String: Int]? = nil
     var host: String? = nil
+    /// The open sequence's frame rate (0 with none open): the In/Out picker's fallback when the file has none.
+    var fps: Double? = nil
     let items: [PaletteMedia]
     let error: String?
 }

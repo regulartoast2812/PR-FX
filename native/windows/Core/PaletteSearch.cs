@@ -47,6 +47,8 @@ namespace PrFxShortcutListener
         public string Id = "", Name = "", Bin = "", Kind = "", Ext = "";   // Kind: video, audio, image, sequence or other
         /// How long a sound is, in seconds (from its in to its out point); null for pictures and video.
         public double? Seconds;
+        /// The file on disk (Premiere's getMediaPath), for the In/Out picker's player; null when Premiere gives none.
+        public string? Path;
     }
 
     /// What the engine POSTs to /media.
@@ -56,6 +58,8 @@ namespace PrFxShortcutListener
         public int? Total;
         public List<PaletteMedia> Items = new List<PaletteMedia>();
         public string? Error;
+        /// The open sequence's frame rate (0 with none open), the In/Out picker's fallback rate; null from an older host.
+        public double? Fps;
 
         // Null when the body can't be read, as Swift's JSONDecoder fails: items is required, and every item needs all
         // five strings.
@@ -64,6 +68,12 @@ namespace PrFxShortcutListener
             if (!Json.TryParse(text, out var parsed) || !(parsed is Dictionary<string, object?> body)) return null;
             if (!(Json.List(body, "items") is IList<object?> items)) return null;
             var list = new PaletteMediaList { Project = Json.Str(body, "project"), Total = Json.Int(body, "total"), Error = Json.Str(body, "error") };
+            if (body.TryGetValue("fps", out var rate) && rate != null)
+            {
+                if (rate is long wholeRate) list.Fps = wholeRate;
+                else if (rate is double fractionRate) list.Fps = fractionRate;
+                else return null;   // present but not a number: Swift's decoder fails too
+            }
             foreach (var value in items)
             {
                 if (!(value is Dictionary<string, object?> item)) return null;
@@ -80,7 +90,13 @@ namespace PrFxShortcutListener
                     else if (length is double fraction) seconds = fraction;
                     else return null;   // present but not a number: Swift's decoder fails too
                 }
-                list.Items.Add(new PaletteMedia { Id = id, Name = name, Bin = bin, Kind = kind, Ext = ext, Seconds = seconds });
+                string? path = null;
+                if (item.TryGetValue("path", out var file) && file != null)
+                {
+                    if (file is string filePath) path = filePath;
+                    else return null;   // present but not a string: Swift's decoder fails too
+                }
+                list.Items.Add(new PaletteMedia { Id = id, Name = name, Bin = bin, Kind = kind, Ext = ext, Seconds = seconds, Path = path });
             }
             return list;
         }
