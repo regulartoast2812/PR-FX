@@ -1,10 +1,10 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-24T14:19:04.933Z",
+  "checkedAt": "2026-11-25T03:12:49.459Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
-    "commit": "dcb1910"
+    "commit": "8debf69"
   },
   "parts": {
     "agent:claude": {
@@ -16,8 +16,8 @@
       "state": "Ready"
     },
     "agent:gemini": {
-      "tone": "wait",
-      "state": "Ready · talk only"
+      "tone": "off",
+      "state": "Checking…"
     },
     "agent:local": {
       "tone": "wait",
@@ -28,8 +28,8 @@
       "state": "Thinks with Claude"
     },
     "tool:prfx": {
-      "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "tone": "good",
+      "state": "Timeline armed"
     },
     "premiere": {
       "tone": "good",
@@ -40,8 +40,8 @@
       "state": "Installed"
     },
     "listener": {
-      "tone": "wait",
-      "state": "Chords only — Last click was outside the Timeline panel (saved region)"
+      "tone": "good",
+      "state": "Timeline armed"
     },
     "ai": {
       "tone": "good",
