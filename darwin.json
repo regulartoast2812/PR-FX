@@ -1,6 +1,6 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-25T12:00:03.549Z",
+  "checkedAt": "2026-11-25T12:06:32.996Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
@@ -16,8 +16,8 @@
       "state": "Ready"
     },
     "agent:gemini": {
-      "tone": "off",
-      "state": "Checking…"
+      "tone": "wait",
+      "state": "Ready · talk only"
     },
     "agent:local": {
       "tone": "wait",
