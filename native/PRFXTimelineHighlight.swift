@@ -579,6 +579,7 @@ enum EdieSprite {
         "O": hex(0xfaa046), "D": hex(0xcd8339), "R": hex(0xd7373c), "r": hex(0xa0232d), "K": hex(0x19191c),
         "B": hex(0x5f5f6c), "W": hex(0xf0f0f0), "P": hex(0xe8607a), "m": hex(0x19191c), "w": hex(0xd6ecff),
         "g": hex(0xb8692c), "S": hex(0x7a4a24), "y": hex(0xef5a30), "Y": hex(0xb02a1c),
+        "L": hex(0xc3c6cd), "H": hex(0xe3e5ea), "E": hex(0x585a64), "A": hex(0x8b8e97), "k": hex(0x33343b),
     ]
 
     static let rest = [
@@ -725,25 +726,45 @@ enum EdieSprite {
         mood == .talk || mood == .talkPause ? hand(25, 21) : hand(23, 0) + hand(25, 21)
     }
 
-    // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look
-    // down on a laptop"; twice as big, 2026-11-23, the user: "make the laptop x2 bigger"): its
-    // lid's back, grey with a light mark (4 by 4), 20 fine pixels wide and 12 tall from just
-    // under his eyes, the light front edge of its keyboard (24 by 2) under it, below his feet
-    // or seat, and his hands on the keys at its ends, one lifted a whole pixel for a tap. One
-    // fine column of him shows between it and his clapperboard. Frames he types in are 36
-    // fine rows, taller for its keyboard (4 standing, 2 sitting). Creative Assist draws the
-    // same (sprite.ts edieLaptop; there he sits 4 rows higher in his box instead).
-    static func laptop(_ mood: Mood) -> [Edit] {
+    // A laptop in front of him (2026-11-22, the user: "let him type and look down on a
+    // laptop"; twice as big, 2026-11-23; seen three-quarters from behind, 2026-11-26, the
+    // user: "make edie's laptop sits infront of him. angle like this labtop i attached
+    // (flip)"). Its silver lid's back (L, a light mark H) turned toward him: its near edge
+    // tall, on the side he faces, with a thin dark side (E), the lid narrowing to its far
+    // hinge corner, a dark edge under it. Past its far edge the base sticks out as a darker
+    // wedge (A) with a sliver of keys (k) and two ports. One hand rests on those keys, the
+    // other comes round the lid's near edge, one lifted a whole pixel for a tap. `laptopArt`
+    // is drawn facing right over fine columns 0-23 from row 22 (just under his eyes);
+    // `mirrored` (sitting on the Timeline, facing left) flips it about his middle, column x
+    // to 23 - x, so it is always ahead of him. Frames he types in are 36 fine rows. Creative
+    // Assist draws the same (sprite.ts edieLaptop; there he sits 4 rows higher in his box).
+    static let laptopArt = [
+        "..................LLE...",
+        "...........LLLLLLLLLE...",
+        "........LLLLLLLLLLLLE...",
+        ".....LLLLLLLLLLLLLLLEE..",
+        ".....LLLLLLLLLLLLLLLLE..",
+        ".....LLLLLLLHHLLLLLLLE..",
+        ".....LLLLLLLHHLLLLLLLE..",
+        ".....LLLLLLLLLLLLLLLLE..",
+        ".....LLLLLLLLLLLLLLLLE..",
+        "...AALLLLLLLLLLLLLLLLE..",
+        ".AAkkLLLLLLLLLLLLLLLLE..",
+        "AkkkkLLLLLLLLLLLLLLLLE..",
+        "AAAAAEEEEEEEEEEEEEEEEE..",
+        ".AkAk...................",
+    ]
+    static func laptop(_ mood: Mood, mirrored: Bool = false) -> [Edit] {
         let top = 22
-        func keyHand(_ x: Int, _ lifted: Bool) -> [Edit] {
-            let y = top + (lifted ? 8 : 10)
-            return at("D", [y, y + 2], [x + 1, x + 2]) + at("D", [y + 1], Array(x...(x + 3)))
+        let body: [Edit] = laptopArt.enumerated().flatMap { (y: Int, row: String) -> [Edit] in
+            row.enumerated().compactMap { (x: Int, c: Character) -> Edit? in c == "." ? nil : (top + y, x, c) }
         }
-        return at("B", Array(top...(top + 11)), Array(1...20))
-            + at("W", Array((top + 4)...(top + 7)), [9, 10, 11, 12])
-            + at("W", [top + 12, top + 13], Array(0...23))
-            + keyHand(0, mood == .typeLeft)
-            + keyHand(18, mood == .typeRight)
+        func keyHand(_ x: Int, _ y: Int, _ lifted: Bool) -> [Edit] {
+            let t = top + y - (lifted ? 2 : 0)
+            return at("D", [t, t + 2], [x + 1, x + 2]) + at("D", [t + 1], Array(x...(x + 3)))
+        }
+        let edits = body + keyHand(0, 8, mood == .typeLeft) + keyHand(20, 7, mood == .typeRight)
+        return mirrored ? edits.map { ($0.0, 23 - $0.1, $0.2) } : edits
     }
     // A frame with empty rows added under it, to its keyboard's bottom (row 35).
     static func roomy(_ rows: [String]) -> [String] {
@@ -788,7 +809,7 @@ enum EdieSprite {
             + at("D", [22], rightLeg) + at("D", [23], shin)
             + at("D", [24, 25], (13...17).map { $0 + 2 * s })
         let rows = crowned(put(fine(Array(art(mood).prefix(seatRow)) + Array(repeating: "................", count: 2), mood), legs))
-        return isTyping(mood) ? put(roomy(rows), laptop(mood)) : put(rows, arms(mood))
+        return isTyping(mood) ? put(roomy(rows), laptop(mood, mirrored: true)) : put(rows, arms(mood))
     }
 
     // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.

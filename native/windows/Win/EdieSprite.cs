@@ -28,6 +28,7 @@ namespace PrFxShortcutListener
             ['O'] = Hex(0xfaa046), ['D'] = Hex(0xcd8339), ['R'] = Hex(0xd7373c), ['r'] = Hex(0xa0232d), ['K'] = Hex(0x19191c),
             ['B'] = Hex(0x5f5f6c), ['W'] = Hex(0xf0f0f0), ['P'] = Hex(0xe8607a), ['m'] = Hex(0x19191c), ['w'] = Hex(0xd6ecff),
             ['g'] = Hex(0xb8692c), ['S'] = Hex(0x7a4a24), ['y'] = Hex(0xef5a30), ['Y'] = Hex(0xb02a1c),
+            ['L'] = Hex(0xc3c6cd), ['H'] = Hex(0xe3e5ea), ['E'] = Hex(0x585a64), ['A'] = Hex(0x8b8e97), ['k'] = Hex(0x33343b),
         };
 
         private static readonly string[] RestRows =
@@ -192,28 +193,47 @@ namespace PrFxShortcutListener
         private static IEnumerable<Edit> Arms(Mood mood) =>
             mood == Mood.Talk || mood == Mood.TalkPause ? Hand(25, 21) : Hand(23, 0).Concat(Hand(25, 21));
 
-        // A laptop on his lap or in front of him (2026-11-22, the user: "let him type and look down on a laptop"; twice
-        // as big, 2026-11-23, the user: "make the laptop x2 bigger"): its lid's back, grey with a light mark (4 by 4), 20
-        // fine pixels wide and 12 tall from just under his eyes, the light front edge of its keyboard (24 by 2) under it,
-        // below his feet or seat, and his hands on the keys at its ends, one lifted a whole pixel for a tap. One fine
-        // column of him shows between it and his clapperboard. Frames he types in are 36 fine rows, taller for its
-        // keyboard (4 standing, 2 sitting). The port of the Swift EdieSprite.laptop; Creative Assist draws the same
-        // (sprite.ts edieLaptop).
+        // A laptop in front of him (2026-11-22, the user: "let him type and look down on a laptop"; twice as big,
+        // 2026-11-23; seen three-quarters from behind, 2026-11-26, the user: "make edie's laptop sits infront of him.
+        // angle like this labtop i attached (flip)"). Its silver lid's back (L, a light mark H) turned toward him: its
+        // near edge tall, on the side he faces, with a thin dark side (E), the lid narrowing to its far hinge corner, a
+        // dark edge under it. Past its far edge the base sticks out as a darker wedge (A) with a sliver of keys (k) and
+        // two ports. One hand rests on those keys, the other comes round the lid's near edge, one lifted a whole pixel
+        // for a tap. LaptopArt is drawn facing right over fine columns 0-23 from row 22 (just under his eyes);
+        // `mirrored` (sitting on the Timeline, facing left) flips it about his middle, column x to 23 - x, so it is
+        // always ahead of him. Frames he types in are 36 fine rows. The port of the Swift EdieSprite.laptop; Creative
+        // Assist draws the same (sprite.ts edieLaptop).
         public const int TypingRows = 36;
 
-        private static IEnumerable<Edit> Laptop(Mood mood)
+        private static readonly string[] LaptopArt =
+        {
+            "..................LLE...",
+            "...........LLLLLLLLLE...",
+            "........LLLLLLLLLLLLE...",
+            ".....LLLLLLLLLLLLLLLEE..",
+            ".....LLLLLLLLLLLLLLLLE..",
+            ".....LLLLLLLHHLLLLLLLE..",
+            ".....LLLLLLLHHLLLLLLLE..",
+            ".....LLLLLLLLLLLLLLLLE..",
+            ".....LLLLLLLLLLLLLLLLE..",
+            "...AALLLLLLLLLLLLLLLLE..",
+            ".AAkkLLLLLLLLLLLLLLLLE..",
+            "AkkkkLLLLLLLLLLLLLLLLE..",
+            "AAAAAEEEEEEEEEEEEEEEEE..",
+            ".AkAk...................",
+        };
+
+        private static IEnumerable<Edit> Laptop(Mood mood, bool mirrored = false)
         {
             const int top = 22;
-            IEnumerable<Edit> KeyHand(int x, bool lifted)
+            var body = LaptopArt.SelectMany((row, y) => row.Select((c, x) => new Edit(top + y, x, c)).Where(e => e.C != '.'));
+            IEnumerable<Edit> KeyHand(int x, int y, bool lifted)
             {
-                var y = top + (lifted ? 8 : 10);
-                return At('D', new[] { y, y + 2 }, new[] { x + 1, x + 2 }).Concat(At('D', new[] { y + 1 }, Span(x, x + 3)));
+                var t = top + y - (lifted ? 2 : 0);
+                return At('D', new[] { t, t + 2 }, new[] { x + 1, x + 2 }).Concat(At('D', new[] { t + 1 }, Span(x, x + 3)));
             }
-            return At('B', Span(top, top + 11), Span(1, 20))
-                .Concat(At('W', Span(top + 4, top + 7), Span(9, 12)))
-                .Concat(At('W', new[] { top + 12, top + 13 }, Span(0, 23)))
-                .Concat(KeyHand(0, mood == Mood.TypeLeft))
-                .Concat(KeyHand(18, mood == Mood.TypeRight));
+            var edits = body.Concat(KeyHand(0, 8, mood == Mood.TypeLeft)).Concat(KeyHand(20, 7, mood == Mood.TypeRight)).ToList();
+            return mirrored ? edits.Select(e => new Edit(e.Y, 23 - e.X, e.C)).ToList() : edits;
         }
 
         // A frame with empty rows added under it, to its keyboard's bottom.
@@ -257,7 +277,7 @@ namespace PrFxShortcutListener
                 .Concat(At('D', new[] { 24, 25 }, Span(13, 17).Select(x => x + 2 * s)));
             var body = Art(mood).Take(SeatRow).Concat(Enumerable.Repeat(new string('.', Columns), 2)).ToArray();
             var rows = Crowned(Put(Fine(body, mood), legs));
-            return IsTyping(mood) ? Put(Roomy(rows), Laptop(mood)) : Put(rows, Arms(mood));
+            return IsTyping(mood) ? Put(Roomy(rows), Laptop(mood, mirrored: true)) : Put(rows, Arms(mood));
         }
 
         // `pixel` is one of his whole pixels; finer rows are drawn in smaller cells.
