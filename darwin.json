@@ -1,10 +1,10 @@
 {
   "os": "darwin",
-  "checkedAt": "2026-11-25T15:04:37.726Z",
+  "checkedAt": "2026-11-26T05:56:02.416Z",
   "app": "0.1.0",
   "tool": {
     "version": "0.5.0",
-    "commit": "8debf69"
+    "commit": "458cd51"
   },
   "parts": {
     "agent:claude": {
@@ -16,8 +16,8 @@
       "state": "Ready"
     },
     "agent:gemini": {
-      "tone": "off",
-      "state": "Checking…"
+      "tone": "wait",
+      "state": "Ready · talk only"
     },
     "agent:local": {
       "tone": "wait",
@@ -54,6 +54,10 @@
     "ffmpeg": {
       "tone": "good",
       "state": "Ready"
+    },
+    "sage": {
+      "tone": "good",
+      "state": "Transcribes with the same WhisperX"
     }
   }
 }
