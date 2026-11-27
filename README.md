@@ -1,3 +1,10 @@
+# PR FX has moved
+
+PR FX now lives in the Creative Assist repo, at `app/src/tools/prfx`, with its whole history.
+Creative Assist (its helper Edie) installs it and keeps it up to date. This repo is archived and no longer changes.
+
+---
+
 # PR FX Palette
 
 A macOS-first Premiere Pro command palette that keeps its Window panel for **settings and key mappings only**. The working surface is a command palette: select clips on the Timeline, press the configured shortcut (default **Ctrl + Space**), search, and press Enter to apply an effect or transition.
